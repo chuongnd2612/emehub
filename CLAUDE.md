@@ -25,8 +25,8 @@ The three repos are siblings on disk under `claude-projects/`:
 
 | Path | App | Remote |
 |---|---|---|
-| `emehub/` | this repo | `chuongduong2810/emehub` |
-| `q-agent/` | QAgent | `chuongduong2810/q-agent` |
+| `emehub/` | this repo | `chuongnd2612/emehub` |
+| `q-agent/` | QAgent | `chuongnd2612/q-agent` |
 | `ticket-executor/` | DAgent (to be renamed `d-agent`) | `DaoLinh98/ticket-executor` |
 
 Read the other two freely — they are the source material for most of this repo's decisions.

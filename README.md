@@ -46,7 +46,7 @@ migrated. See [docs/ROADMAP.md](docs/ROADMAP.md) for the phased plan and
 
 | Agent | Discipline | Status | Repository |
 |---|---|---|---|
-| **QAgent** | QA / QC — tickets → test cases → Playwright runs → evidence → publish | Live | [`chuongduong2810/q-agent`](https://github.com/chuongduong2810/q-agent) |
+| **QAgent** | QA / QC — tickets → test cases → Playwright runs → evidence → publish | Live | [`chuongnd2612/q-agent`](https://github.com/chuongnd2612/q-agent) |
 | **DAgent** | Development — tickets → branch → code → commit → PR | In development | [`DaoLinh98/ticket-executor`](https://github.com/DaoLinh98/ticket-executor) (to be renamed `d-agent`) |
 | **BAgent** | Business analysis — requirements, user stories, acceptance criteria | Planned | — |
 
@@ -84,7 +84,7 @@ The three repositories are siblings on disk:
 ```
 claude-projects/
   emehub/            this repo — the hub
-  q-agent/           QAgent  (chuongduong2810/q-agent)
+  q-agent/           QAgent  (chuongnd2612/q-agent)
   ticket-executor/   DAgent  (DaoLinh98/ticket-executor)
 ```
 

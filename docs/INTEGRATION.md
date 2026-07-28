@@ -168,7 +168,7 @@ QAgent would split one secret across two services. See
 
 ## Open items
 
-- **Repository ownership.** `emehub` and `q-agent` are under `chuongduong2810`;
+- **Repository ownership.** `emehub` and `q-agent` are under `chuongnd2612`;
   `ticket-executor` is under `DaoLinh98`. The cross-repo delivery rule in
   [CLAUDE.md](../CLAUDE.md) assumes shared access to all three. Consolidating under one
   organisation is unresolved.
