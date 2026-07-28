@@ -134,9 +134,16 @@ export const getMembers = (): Promise<Member[]> => after(MEMBERS, READ_DELAY_MS)
 // STUB: GET /api/roles
 export const getRoles = (): Promise<Role[]> => after(ROLES, READ_DELAY_MS);
 
+/**
+ * Pending invitations are the one collection two different surfaces mutate —
+ * the global Invite modal creates, User Management revokes — so the stub keeps
+ * its own mutable copy instead of handing the fixture array around.
+ */
+const INVITATION_STORE: Invitation[] = [...INVITATIONS];
+
 // STUB: GET /api/invitations
 export const getInvitations = (): Promise<Invitation[]> =>
-  after(INVITATIONS, READ_DELAY_MS);
+  after([...INVITATION_STORE], READ_DELAY_MS);
 
 // STUB: GET /api/auth/sessions
 export const getSessions = (): Promise<Session[]> =>
@@ -258,5 +265,20 @@ export const changeRole = (email: string, role: RoleName): Promise<Member[]> =>
   );
 
 // STUB: POST /api/invitations
-export const invite = (email: string, role: RoleName): Promise<Invitation> =>
-  after({ email, role, sent: "just now", by: "Emre Kaya" }, READ_DELAY_MS);
+export const invite = (email: string, role: RoleName): Promise<Invitation> => {
+  const invitation: Invitation = {
+    email,
+    role,
+    sent: "just now",
+    by: "Emre Kaya",
+  };
+  INVITATION_STORE.unshift(invitation);
+  return after(invitation, READ_DELAY_MS);
+};
+
+// STUB: DELETE /api/invitations/{email}
+export const revokeInvitation = (email: string): Promise<void> => {
+  const at = INVITATION_STORE.findIndex((i) => i.email === email);
+  if (at >= 0) INVITATION_STORE.splice(at, 1);
+  return after(undefined, READ_DELAY_MS);
+};

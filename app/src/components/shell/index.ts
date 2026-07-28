@@ -3,7 +3,7 @@
 //     import { useHeader } from "@/components/shell";
 //     useHeader("Tickets", "Read-only mirror of Azure DevOps and Jira work items");
 
-export { BackgroundStack, CONSTELLATION_ROOT_ID } from "./BackgroundStack";
+export { BackgroundStack } from "./BackgroundStack";
 export { HeaderProvider, useHeader, useHeaderContent } from "./HeaderContext";
 export { PageHeader } from "./PageHeader";
 export { Sidebar } from "./Sidebar";

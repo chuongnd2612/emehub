@@ -2,52 +2,46 @@
 // Handoff › Interactions & Behavior › "3D constellation (background)".
 //
 // Owns nothing but lifecycle: the scene itself lives in `./scene`. Renders no
-// DOM of its own — the canvas is appended to the shell's `#constellation-root`
-// container (or, if the shell has not mounted one, to a fallback container this
-// component creates and removes).
+// React DOM — it appends its OWN fixed container to `document.body` and keeps
+// it for as long as the field is on.
+//
+// Why it owns the container rather than borrowing one from a screen: the field
+// is global (the landing view and the app shell both sit over it), so parenting
+// the canvas to a screen-owned div would strand it the moment that screen
+// unmounted. Mount this component ONCE, above the router.
 
 import { useEffect, useRef } from "react";
 
 import { useAppearance } from "@/store/appearance";
 import { createConstellation, type ConstellationHandle } from "./scene";
 
-/** The stable container the app shell mounts in the fixed background stack. */
-export const CONSTELLATION_ROOT_ID = "constellation-root";
-
-const FALLBACK_ID = "constellation-root-fallback";
-
-interface Container {
-  el: HTMLElement;
-  /** True when we created it and must remove it again. */
-  owned: boolean;
-}
+const CONTAINER_ID = "constellation-root";
 
 /**
- * Use the shell's container when it exists; otherwise create an equivalent one.
- * The shell lands in a parallel PR, so both paths must work.
+ * The fixed, pointer-transparent layer the renderer draws into.
+ *
+ * Prepended to `<body>` so it precedes `#root` in DOM order: the two ambient
+ * blooms are also `z-index:1`, and the handoff stacks them ABOVE the canvas
+ * (§ 0 background stack, layers 2 → 3 → 4). Equal z-index means DOM order
+ * decides, so the canvas has to come first.
  */
-function resolveContainer(): Container {
-  const existing = document.getElementById(CONSTELLATION_ROOT_ID);
-  if (existing) return { el: existing, owned: false };
-
-  const reused = document.getElementById(FALLBACK_ID);
-  if (reused) return { el: reused, owned: true };
-
+function createContainer(): HTMLElement {
   const el = document.createElement("div");
-  el.id = FALLBACK_ID;
+  el.id = CONTAINER_ID;
+  el.setAttribute("aria-hidden", "true");
   el.style.position = "fixed";
   el.style.inset = "0";
   el.style.zIndex = "1";
   el.style.pointerEvents = "none";
-  document.body.appendChild(el);
-  return { el, owned: true };
+  document.body.prepend(el);
+  return el;
 }
 
 /**
  * The ambient WebGL constellation field.
  *
  * No props: everything it needs (`fx3d`, `accent`, `mode`) comes from the
- * appearance store. Mount it once, anywhere in the tree.
+ * appearance store. Mount it once, above the router.
  */
 export function Constellation(): null {
   const fx3d = useAppearance((s) => s.fx3d);
@@ -62,14 +56,16 @@ export function Constellation(): null {
   accentRef.current = accent;
   modeRef.current = mode;
 
-  // Create / tear down. `fx3d` is the only trigger.
+  // Create / tear down. `fx3d` is the only trigger — Handoff § 10: "the
+  // Settings toggle disposes the renderer and clears the container, and
+  // re-creates it when switched back."
   useEffect(() => {
     if (!fx3d) return;
 
-    const container = resolveContainer();
+    const container = createContainer();
     let handle: ConstellationHandle | null = null;
     try {
-      handle = createConstellation(container.el, {
+      handle = createConstellation(container, {
         accent: accentRef.current,
         mode: modeRef.current,
       });
@@ -82,8 +78,7 @@ export function Constellation(): null {
     return () => {
       handle?.dispose();
       handleRef.current = null;
-      container.el.replaceChildren();
-      if (container.owned) container.el.remove();
+      container.remove();
     };
   }, [fx3d]);
 

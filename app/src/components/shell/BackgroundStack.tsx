@@ -1,6 +1,10 @@
 // Handoff § 0. App shell › Background stack — four fixed, inset-0 layers:
 //   z0  flat var(--bg)
-//   z1  the WebGL constellation container (filled by the 3D-field agent)
+//   z1  the WebGL constellation container — NOT rendered here. `<Constellation>`
+//       is mounted once above the router (main.tsx) and owns its own container,
+//       because the field also has to survive the landing view, which has no
+//       app shell. It prepends that container to <body>, so it precedes these
+//       blooms in DOM order and paints beneath them, as the handoff stacks it.
 //   z1  bloom A — 660x660 at top:-16% left:-8%, radial var(--pt), blur(34px),
 //       glowPulse 9s
 //   z1  bloom B — 740x740 at bottom:-22% right:-6%, radial var(--bloom2),
@@ -11,12 +15,6 @@
 
 import { useAppearance } from "@/store/appearance";
 
-/**
- * Stable mount point for the three.js renderer. The constellation agent looks
- * this element up by id; nothing else may reparent or remove it.
- */
-export const CONSTELLATION_ROOT_ID = "constellation-root";
-
 export function BackgroundStack() {
   const ambient = useAppearance((s) => s.ambient);
   const glow = { opacity: ambient / 100 };
@@ -24,11 +22,6 @@ export function BackgroundStack() {
   return (
     <>
       <div className="fixed inset-0 z-0 bg-bg" />
-
-      <div
-        id={CONSTELLATION_ROOT_ID}
-        className="pointer-events-none fixed inset-0 z-[1]"
-      />
 
       <div
         aria-hidden

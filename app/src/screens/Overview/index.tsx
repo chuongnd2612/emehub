@@ -23,6 +23,9 @@ import {
   type Project,
 } from "@/data";
 
+import { ImportDialog, useImportRun } from "@/components/import";
+import { useUi } from "@/store/ui";
+
 import { ActivityFeed } from "./ActivityFeed";
 import { GreetingRow } from "./GreetingRow";
 import { KpiTiles } from "./KpiTiles";
@@ -35,6 +38,13 @@ export default function OverviewScreen() {
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+
+  // Handoff § 5: the Import dialog also opens from the Overview quick action.
+  // The spinner belongs to the chip that opened it, so the run state lives
+  // here and the dialog is mounted alongside (see `useImportRun`).
+  const modal = useUi((s) => s.modal);
+  const setModal = useUi((s) => s.setModal);
+  const { importing, run } = useImportRun();
 
   useEffect(() => {
     let live = true;
@@ -59,7 +69,7 @@ export default function OverviewScreen() {
 
   return (
     <div className="flex animate-fade-in-up flex-col gap-[14px]">
-      <GreetingRow />
+      <GreetingRow importing={importing} onImport={() => setModal("import")} />
 
       <div className="grid grid-cols-2 gap-[14px]">
         {products.map((p) => (
@@ -76,6 +86,16 @@ export default function OverviewScreen() {
           <TopProjects projects={projects} />
         </div>
       </div>
+
+      {/* Workspace defaults are not persisted yet (Settings › Workspace
+          defaults is screen state), so the Overview import opens on Azure
+          DevOps — the workspace default shown there. */}
+      <ImportDialog
+        open={modal === "import"}
+        provider="ado"
+        onClose={() => setModal(null)}
+        onImport={run}
+      />
     </div>
   );
 }

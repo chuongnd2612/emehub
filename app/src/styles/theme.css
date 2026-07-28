@@ -78,7 +78,13 @@
   --txt2: #252935;
   --txt3: #414759;
   --txt4: #565d70;
-  --muted: #6a7182;
+  /* CONTRAST FIX (measured, wave-3). The handoff's theme-token table gives
+     light `--muted` as #6a7182, but its own darkening map gives
+     `#8b8b9e -> #5c6273` — and #8b8b9e IS the dark `--muted`. The two tables
+     disagree, and #6a7182 measures 4.29:1 on --bg (3.73:1 composited on the
+     Claude explainer banner), which breaks the table's own promise that every
+     token is >=4.5:1 on its surface. We take the darkening map's value. */
+  --muted: #5c6273;
   --faint: #5f6675;
   --label: #5c6371;
   --shadow: rgba(18, 22, 36, 0.16);
@@ -87,7 +93,12 @@
   --scroll2: rgba(18, 22, 36, 0.3);
   --brandSoft: #5b3fc4;
   --cyanSoft: #0d6a7a;
-  --terra: #a2542f;
+  /* CONTRAST FIX (measured, wave-3). The handoff's #a2542f is >=4.5:1 on a
+     plain card, but the inline code chips it specifies sit on
+     rgba(217,119,87,.14) INSIDE the terracotta explainer banner — composited
+     that is #ebdedd, where #a2542f measures 4.16:1. Darkened just enough to
+     clear 4.5:1 there (4.68:1) while staying the same terracotta hue. */
+  --terra: #984c26;
   --silver: linear-gradient(
     135deg,
     #3f4759 0%,
