@@ -1,0 +1,44 @@
+# --- secrets & local config -------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- python (api/) ----------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.db
+*.sqlite3
+
+# --- node (app/) ------------------------------------------------------------
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+
+# --- runtime workspace ------------------------------------------------------
+workspace/
+api/workspace/
+downloads/
+
+# --- test / verification output ---------------------------------------------
+playwright-report/
+test-results/
+coverage/
+.playwright/
+
+# --- editors & os -----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
