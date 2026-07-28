@@ -1,0 +1,83 @@
+# EmeHub — build & run the whole stack in Docker.
+#
+#   1. cp .env.example .env      # then fill in the two secrets
+#   2. docker compose up -d --build
+#   3. open http://localhost:5180
+#
+# Ports are chosen not to clash with QAgent (api 8787, web 5174, db 5456) or
+# DAgent (web 3000), so all three stacks can run on one host during migration.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    environment:
+      EMEHUB_HOST: 0.0.0.0
+      EMEHUB_API_PORT: "8790"
+      # TWO DIFFERENT SECRETS. Both required — the app refuses to start without
+      # them, and there is deliberately no generated-on-boot fallback
+      # (CLAUDE.md › Security rules; ADR 0005).
+      EMEHUB_JWT_SECRET: ${EMEHUB_JWT_SECRET:?set EMEHUB_JWT_SECRET in .env}
+      EMEHUB_ENCRYPTION_KEY: ${EMEHUB_ENCRYPTION_KEY:?set EMEHUB_ENCRYPTION_KEY in .env}
+      EMEHUB_COOKIE_SECURE: ${EMEHUB_COOKIE_SECURE:-false}
+      EMEHUB_COOKIE_DOMAIN: ${EMEHUB_COOKIE_DOMAIN:-}
+      EMEHUB_ACCESS_TOKEN_TTL_MINUTES: ${EMEHUB_ACCESS_TOKEN_TTL_MINUTES:-15}
+      EMEHUB_REFRESH_TOKEN_TTL_DAYS: ${EMEHUB_REFRESH_TOKEN_TTL_DAYS:-30}
+      EMEHUB_AGENT_QAGENT_URL: ${EMEHUB_AGENT_QAGENT_URL:-http://localhost:5174}
+      EMEHUB_AGENT_DAGENT_URL: ${EMEHUB_AGENT_DAGENT_URL:-http://localhost:3000}
+      EMEHUB_ADMIN_EMAIL: ${EMEHUB_ADMIN_EMAIL:-}
+      EMEHUB_ADMIN_PASSWORD: ${EMEHUB_ADMIN_PASSWORD:-}
+      EMEHUB_LOG_LEVEL: ${EMEHUB_LOG_LEVEL:-info}
+      EMEHUB_WORKSPACE_DIR: /app/api/workspace
+      # Connect to the bundled Postgres over the compose network.
+      EMEHUB_DATABASE_URL: postgresql+psycopg://${EMEHUB_DB_USER:-emehub}:${EMEHUB_DB_PASSWORD:-emehub}@db:5432/${EMEHUB_DB_NAME:-emehub}
+    volumes:
+      # Materialised credentials and cloned state, persisted across restarts.
+      - emehub-workspace:/app/api/workspace
+    expose:
+      - "8790"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8790/health').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${EMEHUB_DB_USER:-emehub}
+      POSTGRES_PASSWORD: ${EMEHUB_DB_PASSWORD:-emehub}
+      POSTGRES_DB: ${EMEHUB_DB_NAME:-emehub}
+    volumes:
+      - emehub-db:/var/lib/postgresql/data
+    # Published so host tools (DBeaver, psql) can connect at localhost:5457.
+    ports:
+      - "${EMEHUB_DB_PORT:-5457}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${EMEHUB_DB_USER:-emehub} -d ${EMEHUB_DB_NAME:-emehub}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${EMEHUB_WEB_PORT:-5180}:5180"
+    restart: unless-stopped
+
+volumes:
+  emehub-workspace:
+  emehub-db:

@@ -1,0 +1,636 @@
+/* ============================================================================
+   EmeHub theme layer — transcribed VERBATIM from
+   design/design_handoff_emehub/README.md › "Design Tokens".
+
+   Token names are the handoff's names and must NOT be renamed: light mode and
+   accent switching both depend on them (CLAUDE.md › Design › Rules).
+
+   Structure:
+     1. fonts + tailwind
+     2. :root            — dark column of the theme-token table
+     3. [data-mode=light] — light column (+ derived --pOn / --psText)
+     4. [data-accent=*]  — the four accents (default red)
+     5. semantic + provider colours (both modes)
+     6. @keyframes — the Motion table, verbatim
+     7. base element styles, scrollbars, ::selection, reduced motion
+     8. @theme inline — maps every token to a Tailwind utility so components
+        write bg-card / text-muted / border-bd and NEVER a hex.
+   ========================================================================= */
+
+@import "./fonts.css";
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   2. Theme tokens — DARK (the default)
+   ------------------------------------------------------------------------ */
+:root {
+  --bg: #0a0a0f;
+  --panel: rgba(20, 20, 28, 0.55);
+  --card: rgba(255, 255, 255, 0.035);
+  --card2: rgba(255, 255, 255, 0.045);
+  --card3: rgba(255, 255, 255, 0.05);
+  --inset: rgba(255, 255, 255, 0.03);
+  --bd: rgba(255, 255, 255, 0.07);
+  --bd2: rgba(255, 255, 255, 0.09);
+  --bd3: rgba(255, 255, 255, 0.06);
+  --pop: #191921;
+  --code: rgba(8, 8, 13, 0.6);
+  --txt: #ececf1;
+  --txt2: #dcdce4;
+  --txt3: #c3c3d0;
+  --txt4: #a9a9bc;
+  --muted: #8b8b9e;
+  --faint: #7a7a8c;
+  --label: #6c6c7e;
+  --shadow: rgba(0, 0, 0, 0.6);
+  --bloom2: rgba(150, 160, 180, 0.2);
+  --scroll: rgba(255, 255, 255, 0.09);
+  --scroll2: rgba(255, 255, 255, 0.18);
+  --brandSoft: #c4b5fd;
+  --cyanSoft: #a5f3fc;
+  --terra: #e0a58c;
+  --silver: linear-gradient(
+    135deg,
+    #ffffff 0%,
+    #cfd4dd 30%,
+    #8f95a1 48%,
+    #f4f6f9 62%,
+    #a9afba 100%
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   3. Theme tokens — LIGHT
+   ------------------------------------------------------------------------ */
+[data-mode="light"] {
+  --bg: #eef0f5;
+  --panel: rgba(255, 255, 255, 0.74);
+  --card: rgba(255, 255, 255, 0.66);
+  --card2: rgba(255, 255, 255, 0.82);
+  --card3: rgba(18, 22, 36, 0.05);
+  --inset: rgba(18, 22, 36, 0.035);
+  --bd: rgba(18, 22, 36, 0.1);
+  --bd2: rgba(18, 22, 36, 0.14);
+  --bd3: rgba(18, 22, 36, 0.075);
+  --pop: #ffffff;
+  --code: rgba(18, 22, 36, 0.05);
+  --txt: #141721;
+  --txt2: #252935;
+  --txt3: #414759;
+  --txt4: #565d70;
+  --muted: #6a7182;
+  --faint: #5f6675;
+  --label: #5c6371;
+  --shadow: rgba(18, 22, 36, 0.16);
+  --bloom2: rgba(120, 135, 165, 0.16);
+  --scroll: rgba(18, 22, 36, 0.16);
+  --scroll2: rgba(18, 22, 36, 0.3);
+  --brandSoft: #5b3fc4;
+  --cyanSoft: #0d6a7a;
+  --terra: #a2542f;
+  --silver: linear-gradient(
+    135deg,
+    #3f4759 0%,
+    #7b8496 34%,
+    #2f3644 52%,
+    #8d95a6 70%,
+    #454d5f 100%
+  );
+
+  /* Derived accent tokens. --pOn = text on an accent tint, --psText = accent
+     text on a surface. Dark uses #fff / --ps; light uses the accent's --pDark.
+     Redefined here so a single [data-mode] flip carries both. */
+  --pOn: var(--pDark);
+  --psText: var(--pDark);
+}
+
+/* ---------------------------------------------------------------------------
+   4. Accent tokens — set on the app root via data-accent. Default: EMESOFT Red.
+   ------------------------------------------------------------------------ */
+:root,
+[data-accent="red"] {
+  --p: #e1172b;
+  --pl: #ff5568;
+  --ps: #ffa1ab;
+  --pg: linear-gradient(135deg, #ff4d5c, #c20d22);
+  --pglow: rgba(225, 23, 43, 0.5);
+  --pt: rgba(225, 23, 43, 0.14);
+  --pb: rgba(225, 23, 43, 0.34);
+  --pDark: #a80d1e;
+}
+
+[data-accent="purple"] {
+  --p: #8b5cf6;
+  --pl: #a78bfa;
+  --ps: #c4b5fd;
+  --pg: linear-gradient(135deg, #8b5cf6, #6366f1);
+  --pglow: rgba(139, 92, 246, 0.5);
+  --pt: rgba(139, 92, 246, 0.14);
+  --pb: rgba(139, 92, 246, 0.34);
+  --pDark: #5227b8;
+}
+
+[data-accent="cyan"] {
+  --p: #22d3ee;
+  --pl: #67e8f9;
+  --ps: #a5f3fc;
+  --pg: linear-gradient(135deg, #22d3ee, #0ea5b7);
+  --pglow: rgba(34, 211, 238, 0.45);
+  --pt: rgba(34, 211, 238, 0.13);
+  --pb: rgba(34, 211, 238, 0.32);
+  --pDark: #0b5c69;
+}
+
+[data-accent="steel"] {
+  --p: #9aa3b2;
+  --pl: #c3cad6;
+  --ps: #dde2ea;
+  --pg: linear-gradient(135deg, #e2e6ec, #8d939e);
+  --pglow: rgba(180, 190, 205, 0.4);
+  --pt: rgba(180, 190, 205, 0.13);
+  --pb: rgba(180, 190, 205, 0.3);
+  --pDark: #434a59;
+}
+
+/* Dark defaults for the derived pair. Declared AFTER the accent blocks so they
+   win over nothing, and BEFORE the light override below so light still wins
+   (light is re-stated because [data-mode] and [data-accent] have equal
+   specificity and both sit on the same element). */
+:root {
+  --pOn: #fff;
+  --psText: var(--ps);
+}
+
+[data-mode="light"][data-accent],
+[data-mode="light"] {
+  --pOn: var(--pDark);
+  --psText: var(--pDark);
+}
+
+/* ---------------------------------------------------------------------------
+   5. Semantic status colours + provider/brand colours.
+
+   Light values apply the handoff's darkening map:
+     #6ee7b7 -> #0b6d4c   #fbbf24 -> #8a5b00   #fb7185 -> #a5123c
+     #a5f3fc/#67e8f9 -> #0d6a7a   #c4b5fd/#a78bfa -> #5b3fc4
+     #c3cad6 -> #4a5162   #8b8b9e -> #5c6273
+   Pill tint alpha goes to .15; white tints become rgba(18,22,36,.07).
+   ------------------------------------------------------------------------ */
+:root {
+  /* Done / Passed / Imported / Indexed / Connected / Active */
+  --ok: #6ee7b7;
+  --okTint: rgba(16, 185, 129, 0.14);
+  /* In progress / Importing / Pending / Attention / Expiring */
+  --warn: #fbbf24;
+  --warnTint: rgba(251, 191, 36, 0.14);
+  /* Blocked / Failed / Expired */
+  --danger: #fb7185;
+  --dangerTint: rgba(244, 63, 94, 0.14);
+  /* In review */
+  --info: #a5f3fc;
+  --infoTint: rgba(34, 211, 238, 0.13);
+  /* New */
+  --neutral: #c3cad6;
+  --neutralTint: rgba(255, 255, 255, 0.07);
+  /* Paused */
+  --paused: #8b8b9e;
+  --pausedTint: rgba(255, 255, 255, 0.07);
+
+  /* Agent colours (also used as pill tints on project + activity rows). */
+  --qagent: #a78bfa;
+  --qagentTint: rgba(139, 92, 246, 0.12);
+  --dagent: #67e8f9;
+  --dagentTint: rgba(34, 211, 238, 0.12);
+
+  /* Provider / brand marks. These are brand colours and do NOT darken —
+     use --terra for Claude *text* in light mode. */
+  --claude: #d97757;
+  --claudeTint: rgba(217, 119, 87, 0.14);
+  --azure: #0078d4;
+  --jira: #2684ff;
+  --github: #c9ced8;
+  --githubGlyph: #12121a;
+}
+
+[data-mode="light"] {
+  --ok: #0b6d4c;
+  --okTint: rgba(16, 185, 129, 0.15);
+  --warn: #8a5b00;
+  --warnTint: rgba(251, 191, 36, 0.15);
+  --danger: #a5123c;
+  --dangerTint: rgba(244, 63, 94, 0.15);
+  --info: #0d6a7a;
+  --infoTint: rgba(34, 211, 238, 0.15);
+  --neutral: #4a5162;
+  --neutralTint: rgba(18, 22, 36, 0.07);
+  --paused: #5c6273;
+  --pausedTint: rgba(18, 22, 36, 0.07);
+
+  --qagent: #5b3fc4;
+  --qagentTint: rgba(139, 92, 246, 0.15);
+  --dagent: #0d6a7a;
+  --dagentTint: rgba(34, 211, 238, 0.15);
+
+  --claudeTint: rgba(217, 119, 87, 0.15);
+}
+
+/* ---------------------------------------------------------------------------
+   6. @keyframes — Handoff › "Motion — CSS keyframes", defined once, globally.
+   ------------------------------------------------------------------------ */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes glowPulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+@keyframes floaty {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-9px);
+  }
+}
+@keyframes pulseDot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.82);
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes metalFlash {
+  0% {
+    transform: translate(150%, -150%) rotate(45deg);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.85;
+  }
+  55% {
+    transform: translate(-160%, 160%) rotate(45deg);
+    opacity: 0.85;
+  }
+  68% {
+    transform: translate(-160%, 160%) rotate(45deg);
+    opacity: 0;
+  }
+  100% {
+    transform: translate(-160%, 160%) rotate(45deg);
+    opacity: 0;
+  }
+}
+@keyframes sheen {
+  0% {
+    background-position: -380px 0;
+  }
+  100% {
+    background-position: 380px 0;
+  }
+}
+@keyframes toastIn {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 26px) scale(0.96);
+  }
+  60% {
+    opacity: 1;
+    transform: translate(-50%, -3px) scale(1.005);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+@keyframes toastBar {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+@keyframes barGrow {
+  from {
+    transform: scaleY(0.04);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+@keyframes ring {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   7. Base element styles
+   ------------------------------------------------------------------------ */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--txt);
+  font-family: "Satoshi", "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+  /* Handoff › Motion — transitions: a ~.35s cross-fade on body when the mode
+     flips. The prototype dropped this for tool reasons; restored here. */
+  transition:
+    background-color 0.35s ease,
+    color 0.35s ease;
+}
+
+button {
+  font-family: inherit;
+}
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+::selection {
+  background: var(--pt);
+  color: var(--txt);
+}
+
+/* Scrollbars: 10px, transparent track, --scroll thumb with a 2px transparent
+   border and background-clip:padding-box. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scroll);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll2);
+  background-clip: padding-box;
+}
+* {
+  scrollbar-color: var(--scroll) transparent;
+  scrollbar-width: thin;
+}
+
+/* Handoff › Motion — transitions: `background / border-color / color .2s` on
+   theme-token-driven surfaces (the prototype removed these; restored). */
+@layer base {
+  a,
+  button,
+  input,
+  select,
+  textarea,
+  [data-surface] {
+    transition:
+      background-color 0.2s ease,
+      border-color 0.2s ease,
+      color 0.2s ease;
+  }
+}
+
+/* Reduced motion: kill the decorative loops, keep entrances instant. The
+   three.js field separately drops to 40 nodes / 500 dust particles. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   8. Tailwind 4 theme mapping.
+
+   `@theme inline` makes each utility emit `var(--token)` rather than the
+   resolved value, so flipping [data-mode] / [data-accent] restyles the whole
+   app with no re-render. Components use these utilities and NEVER a hex.
+   ------------------------------------------------------------------------ */
+@theme inline {
+  /* surfaces */
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-card: var(--card);
+  --color-card2: var(--card2);
+  --color-card3: var(--card3);
+  --color-inset: var(--inset);
+  --color-pop: var(--pop);
+  --color-code: var(--code);
+
+  /* borders */
+  --color-bd: var(--bd);
+  --color-bd2: var(--bd2);
+  --color-bd3: var(--bd3);
+
+  /* type */
+  --color-txt: var(--txt);
+  --color-txt2: var(--txt2);
+  --color-txt3: var(--txt3);
+  --color-txt4: var(--txt4);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-label: var(--label);
+  --color-brand-soft: var(--brandSoft);
+  --color-cyan-soft: var(--cyanSoft);
+  --color-terra: var(--terra);
+
+  /* accent */
+  --color-p: var(--p);
+  --color-pl: var(--pl);
+  --color-ps: var(--ps);
+  --color-pt: var(--pt);
+  --color-pb: var(--pb);
+  --color-p-on: var(--pOn);
+  --color-ps-text: var(--psText);
+  --color-p-dark: var(--pDark);
+
+  /* semantic status */
+  --color-ok: var(--ok);
+  --color-ok-tint: var(--okTint);
+  --color-warn: var(--warn);
+  --color-warn-tint: var(--warnTint);
+  --color-danger: var(--danger);
+  --color-danger-tint: var(--dangerTint);
+  --color-info: var(--info);
+  --color-info-tint: var(--infoTint);
+  --color-neutral: var(--neutral);
+  --color-neutral-tint: var(--neutralTint);
+  --color-paused: var(--paused);
+  --color-paused-tint: var(--pausedTint);
+
+  /* agents + providers */
+  --color-qagent: var(--qagent);
+  --color-qagent-tint: var(--qagentTint);
+  --color-dagent: var(--dagent);
+  --color-dagent-tint: var(--dagentTint);
+  --color-claude: var(--claude);
+  --color-claude-tint: var(--claudeTint);
+  --color-azure: var(--azure);
+  --color-jira: var(--jira);
+  --color-github: var(--github);
+  --color-github-glyph: var(--githubGlyph);
+
+  /* radius — Handoff › Spacing, radius, elevation */
+  --radius-pill: 20px;
+  --radius-control: 9px;
+  --radius-control-lg: 11px;
+  --radius-button: 13px;
+  --radius-button-lg: 14px;
+  --radius-card: 18px;
+  --radius-card-lg: 22px;
+  --radius-panel: 22px;
+  --radius-glyph: 11px;
+  --radius-glyph-lg: 14px;
+
+  /* elevation */
+  --shadow-panel: 0 24px 60px -20px var(--shadow);
+  --shadow-pop: 0 24px 60px -18px rgba(0, 0, 0, 0.8);
+  --shadow-dialog: 0 40px 90px -20px #000;
+  --shadow-primary: 0 8px 20px -6px var(--pglow);
+
+  /* glass blur */
+  --blur-glass: 22px;
+  --blur-panel: 28px;
+
+  /* type families */
+  --font-sans: "Satoshi", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* named animations */
+  --animate-fade-in-up: fadeInUp 0.38s ease both;
+  --animate-fade-in: fadeIn 0.2s ease both;
+  --animate-scale-in: scaleIn 0.15s ease both;
+  --animate-scale-in-dialog: scaleIn 0.22s ease both;
+  --animate-slide-in: slideIn 0.25s ease both;
+  --animate-glow-pulse: glowPulse 9s ease-in-out infinite;
+  --animate-floaty: floaty 6s ease-in-out infinite;
+  --animate-pulse-dot: pulseDot 2.4s ease-in-out infinite;
+  /* Spinner speeds — Handoff › Motion: .7s upload, .8s test/import, .9s index */
+  --animate-spin-upload: spin 0.7s linear infinite;
+  --animate-spin-run: spin 0.8s linear infinite;
+  --animate-spin-index: spin 0.9s linear infinite;
+  --animate-toast-in: toastIn 0.34s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  --animate-bar-grow: barGrow 0.5s ease both;
+  --animate-ring: ring 1.6s ease-out infinite;
+  --animate-sheen: sheen 1.4s linear infinite;
+}
+
+/* ---------------------------------------------------------------------------
+   Gradient tokens can't be expressed as Tailwind colours, so they get named
+   utilities instead. Components use these rather than reaching for `--pg`.
+   ------------------------------------------------------------------------ */
+@utility bg-accent-grad {
+  background: var(--pg);
+}
+
+@utility text-silver {
+  background: var(--silver);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+@utility glass {
+  background: var(--card);
+  /* Lightning CSS adds the -webkit- prefix; declaring it by hand makes it drop
+     the unprefixed property. */
+  backdrop-filter: blur(22px);
+  border: 1px solid var(--bd);
+}
+
+@utility glass-panel {
+  background: var(--panel);
+  backdrop-filter: blur(28px);
+  border: 1px solid var(--bd);
+}
+
+/* The 60%-wide diagonal sheen that sweeps the 3D logo. `opacity:0` base +
+   animation-fill-mode:backwards so nothing shows during the 2s delay. */
+@utility metal-flash {
+  opacity: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.55),
+    transparent
+  );
+  animation: metalFlash 7.5s ease-in-out infinite 2s;
+  animation-fill-mode: backwards;
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
