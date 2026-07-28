@@ -6,12 +6,13 @@
 //   main:   page header + the scroll region (flex:1; min-height:0;
 //           overflow-y:auto; padding:2px 4px 20px 2px)
 //
-// Overlays (command palette, Claude credential popover) portal to
-// document.body — see components/overlays.
+// Overlays (command palette, Claude credential popover, the shared modals)
+// portal to document.body — see components/overlays and components/modals.
 
 import { useCallback, useEffect, useRef } from "react";
 import { Outlet } from "react-router-dom";
 
+import { ModalHost } from "@/components/modals";
 import { CommandPalette } from "@/components/overlays";
 import {
   BackgroundStack,
@@ -69,6 +70,7 @@ export default function AppLayout() {
       </div>
 
       <CommandPalette />
+      <ModalHost />
     </HeaderProvider>
   );
 }

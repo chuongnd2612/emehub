@@ -4,14 +4,17 @@
 // primary. The active tab is intra-screen SELECTION, so it lives in the URL as
 // `?tab=` — not in Zustand (CLAUDE.md › Frontend conventions). The modal is
 // UI-only state and does live in the store.
+//
+// The Invite modal itself is mounted globally (`components/modals/ModalHost`)
+// because the Overview quick action raises it too; this screen just re-reads
+// the list whenever that modal closes.
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Button, Icon } from "@/components/ui";
-import { getInvitations, type Invitation } from "@/data";
+import { getInvitations, revokeInvitation, type Invitation } from "@/data";
 import { useUi } from "@/store/ui";
 import { InvitationsList } from "./InvitationsList";
-import { InviteMemberModal } from "./InviteMemberModal";
 import { MembersTable } from "./MembersTable";
 import { RolesGrid } from "./RolesGrid";
 import { TabStrip } from "./TabStrip";
@@ -37,13 +40,16 @@ export default function UsersScreen() {
 
   const [invitations, setInvitations] = useState<Invitation[]>([]);
 
+  // STUB: GET /api/invitations. Re-reads on mount and every time the global
+  // Invite modal closes, which is when a new invitation may have been created.
   useEffect(() => {
+    if (modal === "invite") return;
     let live = true;
     void getInvitations().then((rows) => live && setInvitations(rows));
     return () => {
       live = false;
     };
-  }, []);
+  }, [modal]);
 
   const setTab = (next: UsersTab) => {
     const p = new URLSearchParams(params);
@@ -76,20 +82,12 @@ export default function UsersScreen() {
         <InvitationsList
           invitations={invitations}
           onInvite={openInvite}
-          onRevoke={(inv) =>
-            setInvitations((prev) => prev.filter((i) => i.email !== inv.email))
-          }
+          onRevoke={(inv) => {
+            void revokeInvitation(inv.email);
+            setInvitations((prev) => prev.filter((i) => i.email !== inv.email));
+          }}
         />
       )}
-
-      <InviteMemberModal
-        open={modal === "invite"}
-        onClose={() => setModal(null)}
-        onInvited={(inv) => {
-          setInvitations((prev) => [inv, ...prev]);
-          setTab("invitations");
-        }}
-      />
     </div>
   );
 }

@@ -1,5 +1,8 @@
 // Handoff § 8 › "right-aligned `Invite member` primary" and Overlays › Modals
 // ("Invite member — 520px, var(--pop), radius 20, animation:fadeInUp .25s").
+//
+// Lives here rather than under screens/Users because the Overview quick action
+// opens it too — it is mounted once by `ModalHost`.
 
 import { useState } from "react";
 import { Button, Input, Modal, toast } from "@/components/ui";
@@ -11,7 +14,8 @@ const INVITE_ROLES: RoleName[] = ["Admin", "Member", "Viewer"];
 export interface InviteMemberModalProps {
   open: boolean;
   onClose: () => void;
-  onInvited: (invitation: Invitation) => void;
+  /** Fired once the stub POST resolves, with the created invitation. */
+  onInvited?: (invitation: Invitation) => void;
 }
 
 export function InviteMemberModal({
@@ -24,7 +28,7 @@ export function InviteMemberModal({
 
   const send = () => {
     const address = email.trim() || "teammate@emesoft.net";
-    void invite(address, role).then(onInvited);
+    void invite(address, role).then((inv) => onInvited?.(inv));
     setEmail("");
     onClose();
     toast("Invitation sent", `${address} · ${role}`, "ok");

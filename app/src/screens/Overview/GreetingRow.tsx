@@ -3,25 +3,37 @@
 // "Good morning, Emre" 28px/900 + a one-line status; right-aligned quick
 // actions as ghost chips with icons. Copy is verbatim from the prototype.
 
-import { Icon, type IconName } from "@/components/ui";
+import type { ReactNode } from "react";
+
+import { Icon, Spinner, type IconName } from "@/components/ui";
 import { useUi } from "@/store/ui";
 
 interface QuickAction {
   label: string;
+  /** Replaces the icon while an async action is in flight. */
+  glyph?: ReactNode;
   icon: IconName;
   run: () => void;
 }
 
-export function GreetingRow() {
+export interface GreetingRowProps {
+  /** True while an import raised from here is running — Handoff § 5. */
+  importing: boolean;
+  /** Opens the Import dialog. */
+  onImport: () => void;
+}
+
+export function GreetingRow({ importing, onImport }: GreetingRowProps) {
   const setModal = useUi((s) => s.setModal);
 
   const actions: QuickAction[] = [
     {
-      label: "Import tickets",
+      // Handoff › Async behaviours: the label becomes `Importing…` with the
+      // icon spinning while the 1500 ms pull is in flight.
+      label: importing ? "Importing…" : "Import tickets",
+      glyph: importing ? <Spinner size={15} speed="run" /> : undefined,
       icon: "download",
-      // NO-OP for now. The Import dialog (Handoff § 5) is a separate slice; it
-      // is not mounted yet, so opening it from here would be a dead reference.
-      run: () => {},
+      run: onImport,
     },
     { label: "Add knowledge", icon: "book", run: () => setModal("knowledge") },
     { label: "Invite member", icon: "users", run: () => setModal("invite") },
@@ -50,7 +62,7 @@ export function GreetingRow() {
             className="flex cursor-pointer items-center gap-2 rounded-[12px] border border-bd2 bg-card2 px-[14px] py-[10px] text-[12.5px] font-semibold text-txt3 transition-[background-color,border-color,transform] duration-200 hover:-translate-y-[2px] hover:border-pb hover:bg-bd"
           >
             <span className="flex text-ps-text">
-              <Icon name={a.icon} size={15} strokeWidth={2.2} />
+              {a.glyph ?? <Icon name={a.icon} size={15} strokeWidth={2.2} />}
             </span>
             {a.label}
           </button>
