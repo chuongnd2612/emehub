@@ -20,23 +20,27 @@ disagreed with, or accepted.
 
 ---
 
-## Phase 1 — Skeleton
+## Phase 1 — The UI, against stubbed data
 
-A hub you can start.
+The full design handoff, implemented. Scope expanded from "a landing page" once the complete
+design landed in [`design/design_handoff_emehub/`](../design/design_handoff_emehub/)
+([ADR 0006](adr/0006-implementing-the-emehub-design-handoff.md)).
 
-- `api/` — FastAPI app, Postgres, Alembic, config via `EMEHUB_*` env, `/health`.
-- `app/` — React 19 + Vite + Tailwind 4 shell, the design system as tokens.
-- `docker-compose.yml` — `api` + `db` + `web` (nginx), mirroring QAgent's topology on
-  non-clashing ports.
-- The **landing page** built from [`design/EmeHub.dc.html`](../design/EmeHub.dc.html): hero,
-  suite grid, how-it-works, footer. Agent cards link out to the running agents.
+- `app/` — React 19 + Vite + Tailwind 4. The token layer (light/dark × four accents),
+  primitives, app shell, and all eleven views: Landing, Overview, Projects & Repositories,
+  Tickets, Import dialog, Claude Settings, Authentication, User Management, Integrations,
+  Settings, and the overlays.
+- `app/src/data/` — a **typed stub layer** shaped like the handoff's *Data fetching* section.
+  Every screen reads from it; no screen calls a real endpoint, because none exist.
+- `api/` — minimal FastAPI + `/health` only. Real endpoints arrive in Phases 2–4.
+- `docker-compose.yml` — `api` + `db` + `web` (nginx) on ports that don't clash with QAgent.
 
-**Exit criteria:** `docker compose up -d --build` serves the landing page; `/health` is green;
-`npm run typecheck && npm run build` pass.
+**Exit criteria:** `docker compose up -d --build` serves the app; `npm run typecheck` and
+`npm run build` pass; every screen renders in both modes and all four accents; the light-mode
+contrast audit finds no pale hue used as body text.
 
-**Open question to answer first:** the visual design is being reworked — the landing page
-should not be built twice. Either wait for the new design or build the shell and defer the
-landing page to the end of this phase.
+**Note.** Phases 2–4 then replace stubs with real calls, one resource at a time. The stub
+layer is the seam that makes that a per-file change rather than a rewrite.
 
 ---
 

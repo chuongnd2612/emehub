@@ -1,7 +1,14 @@
 # ADR 0004 — Inherit the QAgent design system
 
-- **Status:** Accepted
+- **Status:** **Superseded by [ADR 0006](0006-implementing-the-emehub-design-handoff.md)** (2026-07-29)
 - **Date:** 2026-07-28
+
+> **Superseded.** This ADR anticipated a new design and said the decision would stand
+> unchanged when it landed. It did not: the handoff introduces **four accents with EMESOFT Red
+> as the default** (this ADR forbade any accent outside purple/indigo/cyan), a **full light
+> mode** (this ADR assumed dark-only), and **rejects inline styles** (this ADR endorsed them).
+> The principle of one shared language across the suite survives; the specifics below do not.
+> See [ADR 0006](0006-implementing-the-emehub-design-handoff.md).
 
 ## Context
 

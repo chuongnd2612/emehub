@@ -101,16 +101,68 @@ Carried over from QAgent, each one learned the hard way:
 - For visual layering/rendering bugs, inspect the live DOM (`elementFromPoint`, computed
   styles) to find the actual cause **before** fixing. Don't iterate on opacity/z-index guesses.
 
-## Design
+## Design — the handoff is binding
 
-Follow [design/DESIGN_SYSTEM.md](design/DESIGN_SYSTEM.md)
-([ADR 0004](docs/adr/0004-inherit-the-q-agent-design-system.md)). Purple→indigo brand, cyan
-highlight, semantic green/amber/rose — **no accent hues outside that set**. Satoshi for UI,
-JetBrains Mono for ids/numbers/code. No emoji in UI. A new component is designed *in* this
-language and the document is updated; the hub does not fork the system.
+The design lives in **[design/design_handoff_emehub/](design/design_handoff_emehub/)** and it
+is the source of truth for every pixel. Read in this order:
 
-The visual design is being reworked and a new one will be supplied — check whether it has
-landed before building significant UI.
+1. **`README.md`** — the spec: screens, components, tokens, motion, state. Binding.
+2. **`EmeHub.dc.html`** — the working prototype. A **design reference, not code to copy**.
+   Open it in a browser when motion or a detail is ambiguous.
+3. **`Q-Agent-DESIGN_SYSTEM.md`** — the system it extends (foundations, voice).
+4. **`Q-Agent.ref.html`** — the sibling product, for ambiguous credential / connection /
+   ticket-filter behaviour.
+
+`support.js` is the prototype's rendering harness. **Never port it, never read it for
+patterns.**
+
+([ADR 0006](docs/adr/0006-implementing-the-emehub-design-handoff.md);
+[ADR 0004](docs/adr/0004-inherit-the-q-agent-design-system.md) is superseded.)
+
+### Rules
+
+- **Tokens are CSS custom properties, named exactly as the handoff names them**
+  (`--bg`, `--panel`, `--card`/`--card2`/`--card3`, `--bd`/`--bd2`/`--bd3`, `--pop`, `--txt`…
+  `--txt4`, `--muted`, `--faint`, `--label`, `--p`/`--pl`/`--ps`/`--pg`/`--pglow`/`--pt`/`--pb`,
+  `--pOn`, `--psText`, `--silver`, `--terra`). Light mode and accent switching depend on those
+  exact names — do not rename them to Tailwind-idiomatic ones.
+- **Never write a raw colour in a component.** Always a token. A hex in a `.tsx` file is a bug.
+- **Four accents, and the default is EMESOFT Red `#e1172b`** — not purple. The others are
+  Agent Purple, Signal Cyan, Metallic Steel. Accent is a user setting on the app root.
+- **Light mode is mandatory**, not an afterthought. Every pale hue used as *foreground text*
+  needs its darkened counterpart from the handoff's darkening map
+  (`#6ee7b7→#0b6d4c`, `#fbbf24→#8a5b00`, `#fb7185→#a5123c`, `#67e8f9→#0d6a7a`,
+  `#a78bfa→#5b3fc4`, …), and pill tint alpha goes to `.15`. Nothing below 4.5:1.
+- **No inline styles.** The prototype's `style="…"` is a constraint of the tool that produced
+  it — the handoff explicitly says to use our own conventions. Tailwind utilities bound to the
+  token layer. (This reverses the Q-Agent system's inline-style rule.)
+- **Restore the two transitions the prototype dropped**: toggle knob
+  `left .22s cubic-bezier(.2,.7,.3,1)`, and `background/border-color/color .2s` on
+  theme-token-driven surfaces. The prototype removed them for tool reasons only.
+- **Motion is specified, not improvised.** Keyframes, pointer-tilt maths and async feedback
+  timings come from the handoff's Motion tables verbatim. Pointer tilt is gated by the
+  *Depth on hover* setting; particle count drops under `prefers-reduced-motion`.
+- **Icons** are inline SVG, Feather/Lucide style: `viewBox="0 0 24 24"`, `fill="none"`,
+  `stroke="currentColor"`, `stroke-width:2–2.6`, round caps/joins, 12–22 px. Reach for
+  `lucide-react` only where the glyph matches exactly. The Claude mark is a filled 5-point
+  star in `#D97757`. No icon fonts, no raster icons, no illustrations, **no emoji**.
+- **Fonts self-hosted** — Satoshi (400/500/700/900) and JetBrains Mono (400/500/600). No CDN.
+- **Desktop-first, canvas 1512×950**, sidebar fixed 268 px. **Mobile layouts are not
+  designed — ask before inventing them.** Known degradations if you must go narrower: the
+  header title truncates first, tables scroll horizontally below ~1100 px, 3-up grids collapse
+  3→2→1, sidebar becomes an overlay drawer under ~1024 px.
+- **The header title must be the flexible item and must truncate**, or it overlaps the search
+  field at narrow widths. This is called out in the spec because it is easy to get wrong.
+- **Where an endpoint does not exist, stub it behind the typed data layer** (`app/src/data/`)
+  shaped like the handoff's *Data fetching* section — and say so in your response. Never
+  invent an API route silently.
+- **Copy is final.** Labels, placeholders, empty states and toast text are as written in the
+  handoff. Do not paraphrase.
+
+### Voice
+
+Confident, concise, product-led. Sentence case in UI; UPPERCASE only for small tracked labels.
+Empty states get a glyph, a one-line explanation and a primary CTA — never a bare "no data".
 
 ---
 
