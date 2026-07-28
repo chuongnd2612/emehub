@@ -119,7 +119,7 @@ Nothing in the table above is built yet — it is the target that Phase 1 implem
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | The contract: token claims, config endpoints, degradation, known blockers. |
 | [CLAUDE.md](CLAUDE.md) | Conventions and gates for anyone (human or agent) working in this repo. |
 | [design/DESIGN_SYSTEM.md](design/DESIGN_SYSTEM.md) | Colour, type, components, motion. |
-| [design/EmeHub.dc.html](design/EmeHub.dc.html) | The landing-page mockup this repo builds toward. |
+| [design/design_handoff_emehub/](design/design_handoff_emehub/) | **The binding design spec** — README, prototype, tokens, motion. |
 
 ### Architecture decisions
 
@@ -130,6 +130,7 @@ Nothing in the table above is built yet — it is the target that Phase 1 implem
 | [0003](docs/adr/0003-integration-via-http-and-hub-issued-jwt.md) | Agents integrate over HTTP with a hub-issued JWT. |
 | [0004](docs/adr/0004-inherit-the-q-agent-design-system.md) | Inherit the QAgent design system. |
 | [0005](docs/adr/0005-secret-and-key-management.md) | Separate the signing secret from the encryption key. |
+| [0006](docs/adr/0006-implementing-the-emehub-design-handoff.md) | The design handoff is binding; supersedes 0004. |
 
 ---
 
