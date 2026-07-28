@@ -1,40 +1,74 @@
-// PLACEHOLDER (wave 1) — Handoff § 0. App shell.
+// Handoff § 0. App shell — the frame every /app page renders inside.
 //
-// The real shell is the fixed 268px sidebar + sticky page header + scrolling
-// content, over the ambient background stack. Only the background stack and
-// the scroll region are wired here so the placeholder screens render; the
-// sidebar and header belong to the shell agent. Replace the body of this file;
-// do NOT touch src/router.tsx.
+//   root:   position:relative; display:flex; height:100vh; width:100%;
+//           padding:14px; gap:14px  (everything floats over the ambient stack)
+//   aside:  268px sidebar
+//   main:   page header + the scroll region (flex:1; min-height:0;
+//           overflow-y:auto; padding:2px 4px 20px 2px)
+//
+// Overlays (command palette, Claude credential popover) portal to
+// document.body — see components/overlays.
 
+import { useCallback, useEffect, useRef } from "react";
 import { Outlet } from "react-router-dom";
-import { useAppearance } from "@/store/appearance";
+
+import { CommandPalette } from "@/components/overlays";
+import {
+  BackgroundStack,
+  HeaderProvider,
+  PageHeader,
+  Sidebar,
+} from "@/components/shell";
+import { useUi } from "@/store/ui";
 
 export default function AppLayout() {
-  const ambient = useAppearance((s) => s.ambient);
-  // Ambient bloom opacity is a user setting (0–100) — a computed value, which
-  // is the documented exception to the no-inline-styles rule.
-  const glow = { opacity: ambient / 100 };
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const togglePalette = useUi((s) => s.togglePalette);
+  const setClaudeOpen = useUi((s) => s.setClaudeOpen);
+  const closeAll = useUi((s) => s.closeAll);
+
+  // Handoff › Keyboard: ⌘K / Ctrl+K toggles the palette; Esc closes every
+  // overlay. Individual overlays also handle Esc so they work in isolation.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setClaudeOpen(false);
+        togglePalette();
+        return;
+      }
+      if (e.key === "Escape") closeAll();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [closeAll, setClaudeOpen, togglePalette]);
+
+  // Handoff › Interactions › Navigation: the sidebar resets the scroll
+  // container to scrollTop = 0.
+  const resetScroll = useCallback(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, []);
 
   return (
-    <div className="relative min-h-screen w-full">
-      {/* Background stack — all position:fixed; inset:0. */}
-      <div className="fixed inset-0 z-0 bg-bg" />
-      <div
-        className="pointer-events-none fixed top-[-16%] left-[-8%] z-[1] size-[660px] animate-glow-pulse rounded-full bg-[radial-gradient(circle,var(--pt),transparent_62%)] blur-[34px]"
-        style={glow}
-      />
-      <div
-        className="pointer-events-none fixed right-[-6%] bottom-[-22%] z-[1] size-[740px] animate-glow-pulse rounded-full bg-[radial-gradient(circle,var(--bloom2),transparent_62%)] blur-[34px] [animation-delay:1s] [animation-duration:11s]"
-        style={glow}
-      />
+    <HeaderProvider>
+      <BackgroundStack />
 
       <div className="relative z-[2] flex h-screen w-full gap-3.5 p-3.5">
+        <Sidebar onNavigate={resetScroll} />
+
         <main className="flex min-w-0 flex-1 flex-col gap-3.5">
-          <div className="min-h-0 flex-1 overflow-y-auto pt-[2px] pr-1 pb-5 pl-[2px]">
+          <PageHeader />
+
+          <div
+            ref={scrollRef}
+            className="min-h-0 flex-1 overflow-y-auto pt-[2px] pr-1 pb-5 pl-[2px]"
+          >
             <Outlet />
           </div>
         </main>
       </div>
-    </div>
+
+      <CommandPalette />
+    </HeaderProvider>
   );
 }
