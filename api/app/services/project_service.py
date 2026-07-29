@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import TypeVar
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.project import Project
@@ -74,6 +75,88 @@ def list_projects(db: Session, user: User | None) -> list[Project]:
 def get_project(db: Session, key: str, user: User | None) -> Project | None:
     """Resolve one project by key with own → shared precedence."""
     return own_then_shared(db, Project, user, Project.key == key)
+
+
+def summaries_for(
+    db: Session, rows: list[Project], user: User | None
+) -> dict[str, dict]:
+    """Per-project card figures for a whole list, in three queries total.
+
+    The client used to assemble these itself, costing ``GET config`` +
+    ``GET tickets?projectId=`` + one or two ``GET knowledge`` **per project** —
+    3N+1 requests to draw one screen.
+
+    Only non-secret scalars are returned. In particular **no test-account
+    material, not even ``hasPassword``** — the list response deliberately
+    carries none of it (see ``list_projects`` in the router), and that must
+    stay true now that the payload is richer.
+    """
+    from app.models.knowledge import ProjectKnowledge
+    from app.models.project_config import ProjectConfig
+    from app.models.ticket import Ticket
+    from app.services.ownership import owned
+
+    if not rows:
+        return {}
+
+    keys = [r.key for r in rows]
+    ids = [r.id for r in rows]
+
+    # own → shared precedence, applied the same way `list_projects` does.
+    def collapse(items, key_of):
+        best: dict[str, object] = {}
+        for item in items:
+            k = key_of(item)
+            current = best.get(k)
+            if current is None or (
+                getattr(current, "owner_id", None) is None
+                and item.owner_id is not None
+            ):
+                best[k] = item
+        return best
+
+    configs = collapse(
+        owned(db.query(ProjectConfig), ProjectConfig, user)
+        .filter(ProjectConfig.key.in_(keys))
+        .all(),
+        lambda c: c.key,
+    )
+    knowledge = collapse(
+        owned(db.query(ProjectKnowledge), ProjectKnowledge, user)
+        .filter(ProjectKnowledge.project_key.in_(keys))
+        .all(),
+        lambda k: k.project_key,
+    )
+
+    counts: dict[int, int] = {}
+    for project_id, total in (
+        owned(db.query(Ticket.project_id, func.count(Ticket.id)), Ticket, user)
+        .filter(Ticket.project_id.in_(ids))
+        .group_by(Ticket.project_id)
+        .all()
+    ):
+        counts[project_id] = total
+
+    summaries: dict[str, dict] = {}
+    for row in rows:
+        config = configs.get(row.key)
+        repos = list(getattr(config, "repos", None) or [])
+        default_repo = next(
+            (r for r in repos if isinstance(r, dict) and r.get("default")),
+            repos[0] if repos and isinstance(repos[0], dict) else None,
+        )
+        know = knowledge.get(row.key)
+        summaries[row.key] = {
+            "repo": (default_repo or {}).get("name", "") or "",
+            "repo_url": (default_repo or {}).get("repo_url", "") or "",
+            "branch": (default_repo or {}).get("default_branch", "") or "",
+            "repo_count": len(repos),
+            "provider": getattr(know, "provider", "") or "",
+            "knowledge_status": getattr(know, "status", "") or "not_indexed",
+            "knowledge_confidence": getattr(know, "confidence", 0) or 0,
+            "ticket_count": counts.get(row.id, 0),
+        }
+    return summaries
 
 
 def write_target_owner(user: User | None, *, shared: bool) -> int | None:

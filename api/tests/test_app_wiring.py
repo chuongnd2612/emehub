@@ -10,19 +10,33 @@ import pytest
 
 from app import security
 
+from conftest import MIN_EXPECTED_ROUTES, api_routes
+
+
+def test_route_discovery_actually_finds_routes(app):
+    """Guard for the guard.
+
+    ``test_every_route_is_either_allowlisted_or_guarded`` below is a loop with
+    an ``assert x == []`` at the end: if discovery yields nothing, it passes
+    while checking nothing. It did exactly that for a while — it walked
+    ``app.routes`` flat, but ``include_router`` nests routes under an
+    ``_IncludedRouter`` in this FastAPI version, so it inspected **zero** of
+    them. This test exists so that failure mode is loud.
+    """
+    assert len(api_routes(app)) >= MIN_EXPECTED_ROUTES
+
 
 def test_every_route_is_either_allowlisted_or_guarded(app):
     """No route may be reachable without authentication unless it is one of the
     handful of explicitly public paths."""
-    from fastapi.routing import APIRoute
-
     from app.deps_auth import require_admin, require_principal, require_user
 
     guards = {require_user, require_admin, require_principal}
+    routes = api_routes(app)
+    assert len(routes) >= MIN_EXPECTED_ROUTES, "route discovery is broken"
+
     unguarded = []
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
-            continue
+    for route in routes:
         if security.is_public(route.path):
             continue
         callables = {d.call for d in route.dependant.dependencies}

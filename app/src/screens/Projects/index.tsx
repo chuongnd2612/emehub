@@ -72,7 +72,14 @@ function MiniStat({
 
 function ProjectCard({ project }: { project: Project }) {
   const navigate = useNavigate();
-  const knowledge = project.knowledge;
+  // A list row carries the hub's `summary` and a null `knowledge` object (the
+  // list response deliberately holds no config or knowledge). Prefer the full
+  // object when present, fall back to the summary scalars, so this card works
+  // from either read.
+  const indexed =
+    (project.knowledge?.status ?? project.knowledgeStatus) === "indexed";
+  const confidence =
+    project.knowledge?.confidence ?? project.knowledgeConfidence ?? 0;
 
   return (
     <GlassCard
@@ -94,7 +101,7 @@ function ProjectCard({ project }: { project: Project }) {
       <div className="grid grid-cols-3 gap-2">
         <MiniStat value={String(project.tickets)} label="WORK ITEMS" />
         <MiniStat
-          value={knowledge ? `${knowledge.confidence}%` : "—"}
+          value={indexed ? `${confidence}%` : "—"}
           label="CONFIDENCE"
         />
         <MiniStat value={project.branch || "—"} label="BRANCH" small />
@@ -179,9 +186,14 @@ export default function ProjectsScreen() {
     </Button>
   );
 
-  const repos = projects.filter((p) => Boolean(p.repo)).length;
+  // `repoCount` and `knowledgeStatus` come from the hub's list summary;
+  // `p.repo`/`p.knowledge` are the detail-read equivalents.
+  const repos = projects.reduce(
+    (n, p) => n + (p.repoCount ?? (p.repo ? 1 : 0)),
+    0,
+  );
   const indexed = projects.filter(
-    (p) => p.knowledge?.status === "indexed",
+    (p) => (p.knowledge?.status ?? p.knowledgeStatus) === "indexed",
   ).length;
 
   return (

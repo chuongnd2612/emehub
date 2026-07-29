@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 
 import { getConnections } from "@/data/connections";
 import { getProjects } from "@/data/projects";
-import { getTicketPage } from "@/data/tickets";
+import { countTickets } from "@/data/tickets";
 
 export interface SidebarStats {
   projectCount: number | null;
@@ -38,13 +38,13 @@ export function useSidebarStats(): SidebarStats {
     const load = async () => {
       const [projects, tickets, connections] = await Promise.all([
         getProjects().catch(() => null),
-        getTicketPage({ pageSize: 1 }).catch(() => null),
+        countTickets().catch(() => null),
         getConnections().catch(() => null),
       ]);
       if (cancelled) return;
       setStats({
         projectCount: projects ? projects.length : null,
-        ticketCount: tickets ? tickets.total : null,
+        ticketCount: tickets,
         connectionCount: connections
           ? connections.reduce((n, g) => n + g.connections.length, 0)
           : null,

@@ -1,9 +1,12 @@
 # EmeHub — Integration contract
 
-The specification QAgent and DAgent implement in order to be part of the suite. Written
-before any code so it can be argued with cheaply.
+The specification QAgent and DAgent implement in order to be part of the suite.
 
-Status: **draft, nothing implemented.** Every endpoint below is a target, not a promise.
+Status: **the hub side is built; no agent consumes it yet.** Everything in §2 and §3 is live
+against the running API — you can call it today. What has *not* happened is the other half:
+neither QAgent nor DAgent validates a hub token or reads its configuration from here, so the
+hub currently runs in parallel with both rather than in front of them. See
+[ROADMAP.md](ROADMAP.md) Phases 2–5.
 
 ---
 
@@ -74,17 +77,35 @@ noted.
 | `GET` | `/credentials/claude/resolve` | The Claude credential this user should run with, already resolved through the own → shared → none precedence. Returns the credential material; see §4. |
 | `GET` | `/connections` | Provider connections visible to the user, with their capabilities (`work_item`, `repository`). Never includes the PAT. |
 | `POST` | `/connections/{id}/proxy` | *(deferred)* Ask the hub to make a provider call on the agent's behalf, so the PAT never leaves the hub. See §4. |
-| `GET` | `/projects` | Project registry: key, name, base URL, environments, bound connections. |
-| `GET` | `/projects/{key}/config` | Full project configuration including repositories. Test-account passwords are returned only to the owning user. |
-| `GET` | `/projects/{key}/knowledge` | Project-level knowledge. |
-| `GET` | `/projects/{key}/repos/{repo}/knowledge` | Per-repository knowledge base. |
+| `GET` | `/projects` | Project registry. Each row carries a `summary` of non-secret card figures (repo, branch, counts, knowledge status) so a list screen costs one request, not 3N+1. **No test-account material, not even `hasPassword`.** |
+| `GET` | `/projects/{key}` | One project, same shape as a list row. |
+| `GET` | `/projects/{key}/config` | Full project configuration including repositories. Test-account passwords are returned **only to the owning user** — a shared config (`owner_id IS NULL`) is owned by nobody, so its accounts stay masked even for an admin. |
+| `GET` | `/projects/{key}/knowledge` | Project-level knowledge. 404 when the project has no knowledge row. |
+| `GET` | `/projects/{key}/repos/{repo}/knowledge` | Per-repository knowledge base; falls back to the project-level row. |
 | `PATCH` | `/projects/{key}/repos/{repo}/knowledge` | **Write.** Contribute discovered entries (QAgent's runtime selector discovery). Must not clobber existing `verified_at_runtime` entries. |
-| `GET` | `/tickets` | Synced tickets, paged and filterable by project. |
-| `GET` | `/tickets/{external_id}` | One ticket, normalised. |
+| `PUT` | `/projects/{key}/repos/{repo}/knowledge` | **Write.** Report the result of a build the agent ran on its own host — status, blob, confidence, and `docPath` (an opaque agent-host path the hub stores and never resolves). |
+| `GET` | `/tickets` | Synced tickets, paged and filterable by project, provider, connection, state, assignee, sprint and free text. |
+| `GET` | `/tickets/{external_id}` | One ticket, normalised. Optional `?providerKind=` disambiguates the same id across providers. |
 | `POST` | `/audit/events` | **Write.** Append an audit event attributed to the calling agent. |
 
 Agents MAY cache any `GET` above. Cache lifetime is the agent's choice; the hub sets
 `Cache-Control` as a hint, not a rule.
+
+### Hub-only routes
+
+Built and live, but **not** part of the agent contract — they require the `emehub` audience,
+so an agent token is refused. Listed so the surface is not mistaken for undocumented:
+
+`PUT|DELETE /credentials/claude`, `PUT|DELETE /credentials/claude/shared`,
+`PUT /credentials/claude/mode`, `POST /credentials/claude/test`,
+`GET|POST /credentials/claude/usage` · `POST|PATCH|DELETE /connections`,
+`POST /connections/{id}/test`, `GET /connections/{id}/{projects|repos|sprints|work-item-metadata}`
+· `POST /projects`, `PATCH /projects/{key}`, `PUT /projects/{key}/config` ·
+`POST /tickets/sync`, `DELETE /tickets/{external_id}` · all of `/auth/*`.
+
+Two exceptions read by agents with their own audience:
+`PUT /credentials/claude/refreshed` (the CLI rotated its token; the hub stays authoritative)
+and `POST /credentials/claude/usage`.
 
 ---
 

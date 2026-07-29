@@ -56,6 +56,18 @@ import type {
 
 /* ── Wire shapes ─────────────────────────────────────────────────────────── */
 
+/** `ProjectSummaryOut` — non-secret card figures, batch-loaded by the hub. */
+interface ProjectSummaryWire {
+  repo?: string;
+  repoUrl?: string;
+  branch?: string;
+  repoCount?: number;
+  provider?: string;
+  knowledgeStatus?: string;
+  knowledgeConfidence?: number;
+  ticketCount?: number;
+}
+
 interface ProjectWire {
   id: number;
   key: string;
@@ -63,6 +75,7 @@ interface ProjectWire {
   shared?: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
+  summary?: ProjectSummaryWire | null;
 }
 
 interface ProjectConfigWire {
@@ -270,9 +283,53 @@ const assemble = async (wire: ProjectWire): Promise<Project> => {
   };
 };
 
-/** GET /projects — the registry visible to the caller, joined and decorated. */
+/**
+ * Build a card from the hub's own `summary` — no per-project fan-out.
+ *
+ * The list used to call `assemble` for every row, costing config + ticket
+ * count + one or two knowledge reads each (3N+1 requests to draw one screen).
+ * The hub now batch-loads those figures in three queries and returns them on
+ * the row, so the list is a single request.
+ *
+ * `config` and `knowledge` are left null here on purpose: the card does not
+ * render them, and the list response deliberately carries no test-account
+ * material. The detail screen still fetches the full objects.
+ */
+const fromSummary = (wire: ProjectWire): Project => {
+  const s = wire.summary ?? {};
+  const name = wire.name?.trim() || wire.key;
+  const provider =
+    providerFromKind(s.provider ?? "") ?? providerFromRepoUrl(s.repoUrl ?? "");
+  return {
+    id: wire.key,
+    rowId: wire.id,
+    name,
+    repo: s.repo || s.repoUrl || "",
+    provider,
+    providerName: provider ? PROVIDER_DISPLAY[provider] : "Not connected",
+    branch: s.branch || "",
+    agents: [],
+    initials: projectInitials(name),
+    gradient: gradientFor(wire.key),
+    updated: relativeTime(wire.updatedAt ?? wire.createdAt ?? null),
+    shared: bool(wire.shared),
+    tickets: s.ticketCount ?? 0,
+    knowledge: null,
+    config: null,
+    /** Status string straight from the hub — the card's pill reads this. */
+    knowledgeStatus: s.knowledgeStatus || "not_indexed",
+    knowledgeConfidence: s.knowledgeConfidence ?? 0,
+    repoCount: s.repoCount ?? 0,
+  };
+};
+
+/**
+ * GET /projects — one request. Falls back to the old per-project fan-out only
+ * if the hub omitted `summary` (an older API than this client).
+ */
 export const getProjects = async (): Promise<Project[]> => {
   const rows = await api.get<ProjectWire[]>("/projects");
+  if (rows.every((r) => r.summary)) return rows.map(fromSummary);
   return Promise.all(rows.map(assemble));
 };
 
