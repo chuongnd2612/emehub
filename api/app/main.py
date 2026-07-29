@@ -38,7 +38,7 @@ from app.config import settings
 from app.db import init_db
 from app.deps_auth import require_principal, require_user
 from app.logging import logger, setup_logging
-from app.routers import audit, auth, health, me
+from app.routers import audit, auth, health, me, tickets
 from app.security import auth_guard
 
 VERSION = "0.1.0"
@@ -56,6 +56,9 @@ ROUTERS = (
     (auth, MIXED),
     (me, CONTRACT),
     (audit, CONTRACT),
+    # Agents read the ticket store with the token they hold (aud: qagent/dagent),
+    # so it cannot be hub-audience-only — INTEGRATION.md §3.
+    (tickets, CONTRACT),
 )
 
 _POSTURE_DEPENDENCY = {
