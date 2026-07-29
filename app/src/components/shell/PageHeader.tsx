@@ -70,7 +70,11 @@ export function PageHeader() {
         <span className="min-w-0 flex-1 truncate text-left text-[13px] text-faint">
           Search projects, tickets, knowledge…
         </span>
-        <span className="shrink-0 rounded-[7px] border border-bd2 bg-bd3 px-[7px] py-[3px] font-mono text-[10.5px] font-semibold text-muted">
+        {/* text-txt4, not text-muted: this chip stacks bg-bd3 on the glass
+            header, the lightest small surface in the app, where --muted
+            measures 4.41:1 (#26). --txt4 clears it at 5.7:1. Raising --muted
+            globally to fix one chip would be the wrong trade. */}
+        <span className="shrink-0 rounded-[7px] border border-bd2 bg-bd3 px-[7px] py-[3px] font-mono text-[10.5px] font-semibold text-txt4">
           ⌘K
         </span>
       </button>
