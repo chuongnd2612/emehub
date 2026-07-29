@@ -1,8 +1,13 @@
 // Handoff § 3. Projects › detail › Agents —
 //   "agents wired to this project + a note pointing at Claude Settings ›
 //    Agent preferences."
+//
+// Nothing in the hub maps an agent to a project yet — `Project.agents` is
+// always empty for a live row — so the list is honest about being empty and the
+// notice says how an agent actually reaches this project today: by reading the
+// registry through the integration contract with its own token.
 
-import { GlassCard, Icon, Pill } from "@/components/ui";
+import { GlassCard, Icon, Notice, Pill } from "@/components/ui";
 import type { Project } from "@/data";
 import { AGENT_LABEL, agentTone } from "./shared";
 
@@ -30,6 +35,13 @@ export function AgentsTab({ project }: { project: Project }) {
           )}
         </div>
       </GlassCard>
+
+      <Notice tone="info">
+        EmeHub does not assign agents to projects yet. Any agent holding a token
+        for this workspace already reads{" "}
+        <b className="font-bold">{project.id}</b> — its configuration, its
+        repositories and its knowledge — through the integration contract.
+      </Notice>
 
       <div className="flex items-center gap-[14px] rounded-card border border-bd3 bg-inset px-5 py-[18px]">
         <span className="flex shrink-0 text-ps-text">

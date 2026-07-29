@@ -1,6 +1,6 @@
-// Handoff § 5. Import dialog — opened from Tickets today and from the Overview
-// quick action later, which is why it lives in `components/import/` rather than
-// inside the Tickets screen.
+// Handoff § 5. Import dialog — opened from Tickets and from the Overview quick
+// action, which is why it lives in `components/import/` rather than inside the
+// Tickets screen.
 //
 //   580px wide, var(--pop), radius 22, shadow-dialog, scaleIn .22s; scrim
 //   rgba(6,6,10,.62) + blur(7px) + fadeIn .2s          → <Modal size="dialog">
@@ -9,12 +9,22 @@
 //   Tickets toolbar renders, each showing `Any` until set; Jira adds a mono JQL
 //   field, GitHub a mono search-query field.
 //
-// Running an import closes the dialog and hands the request to `onImport` —
-// the caller owns the 1500 ms spinner (see `useImportRun`).
+// ## The schema is passed in, and Advanced can be empty
+//
+// Filter options are distinct values present in the hub's ticket store, which
+// the Tickets screen has already loaded (`buildTicketFilterSchema`). Passing it
+// in avoids a second fetch and keeps the two lists identical. A caller with no
+// tickets yet passes nothing, and Advanced says why it is empty rather than
+// showing dropdowns with no options.
+//
+// ## JQL and the GitHub search query are gone
+//
+// `SyncRequest` has no `jql` and no `searchQuery` field, and the adapters build
+// their own query from `mode` + the field filters. An input that is collected
+// and then dropped on the floor is worse than no input.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  getTicketFilterSchema,
   PROVIDERS,
   type ImportRequest,
   type ImportScope,
@@ -24,13 +34,13 @@ import {
 } from "@/data";
 import {
   Button,
-  Dropdown,
   Glyph,
   Icon,
-  Input,
   Modal,
+  Notice,
   RadioGroup,
   Segmented,
+  Dropdown,
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { IMPORT_SCOPE_OPTIONS } from "./scopes";
@@ -42,6 +52,11 @@ export interface ImportDialogProps {
   open: boolean;
   /** Which provider to pull from. Exactly one is active at a time. */
   provider: ProviderKey;
+  /**
+   * The provider's filter fields, already resolved against the store. Omit when
+   * the caller has none — Advanced then explains itself.
+   */
+  schema?: TicketFilterField[];
   /** Scrim click, ✕, Esc and Cancel. */
   onClose: () => void;
   /**
@@ -87,7 +102,7 @@ function FieldSelect({
         {field.label}
       </span>
       <Dropdown
-        ddKey={`import-field-${String(field.key)}`}
+        ddKey={`import-field-${field.key}`}
         width={264}
         value={value ?? null}
         onSelect={onPick}
@@ -120,34 +135,21 @@ function FieldSelect({
 export function ImportDialog({
   open,
   provider,
+  schema = [],
   onClose,
   onImport,
   defaultMode = "basic",
   defaultScope = "sprint",
 }: ImportDialogProps) {
-  const [schema, setSchema] = useState<TicketFilterField[]>([]);
   const [mode, setMode] = useState<ImportMode>(defaultMode);
   const [scope, setScope] = useState<ImportScope>(defaultScope);
   const [filters, setFilters] = useState<TicketFilters>({});
-  /** Serves the Jira JQL field and the GitHub search-query field. */
-  const [expression, setExpression] = useState("");
 
   const meta = PROVIDERS[provider];
-
-  useEffect(() => {
-    let live = true;
-    getTicketFilterSchema().then((s) => {
-      if (live) setSchema(s[provider]);
-    });
-    return () => {
-      live = false;
-    };
-  }, [provider]);
 
   // A provider switch changes the whole filter set, so nothing carries over.
   useEffect(() => {
     setFilters({});
-    setExpression("");
   }, [provider]);
 
   // Every visit starts from the caller's defaults.
@@ -174,7 +176,6 @@ export function ImportDialog({
             </span>
           </span>
         ),
-        hint: <span className="font-mono text-[11.5px]">{o.count}</span>,
       })),
     [meta.name],
   );
@@ -185,12 +186,6 @@ export function ImportDialog({
       mode,
       scope,
       filters: mode === "advanced" ? filters : {},
-      ...(mode === "advanced" && provider === "jira"
-        ? { jql: expression || undefined }
-        : null),
-      ...(mode === "advanced" && provider === "gh"
-        ? { searchQuery: expression || undefined }
-        : null),
     };
     onClose();
     onImport(request);
@@ -243,44 +238,22 @@ export function ImportDialog({
       ) : (
         <div className="flex flex-col gap-3">
           <SectionLabel>FILTER BY FIELD</SectionLabel>
-          <div className="grid grid-cols-2 gap-3">
-            {schema.map((field) => (
-              <FieldSelect
-                key={String(field.key)}
-                field={field}
-                value={filters[String(field.key)]}
-                onPick={(value) => pick(String(field.key), value)}
-              />
-            ))}
-          </div>
-
-          {provider === "jira" && (
-            <div className="mt-1 flex flex-col gap-[7px]">
-              <span className="text-[11.5px] font-semibold text-muted">
-                JQL (optional)
-              </span>
-              <Input
-                mono
-                value={expression}
-                onChange={(e) => setExpression(e.target.value)}
-                placeholder="project = LED AND status != Done"
-                className="h-auto py-[10px]"
-              />
-            </div>
-          )}
-
-          {provider === "gh" && (
-            <div className="mt-1 flex flex-col gap-[7px]">
-              <span className="text-[11.5px] font-semibold text-muted">
-                Search query (optional)
-              </span>
-              <Input
-                mono
-                value={expression}
-                onChange={(e) => setExpression(e.target.value)}
-                placeholder="is:issue is:open label:qa"
-                className="h-auto py-[10px]"
-              />
+          {schema.length === 0 ? (
+            <Notice tone="info">
+              Field filters are built from the work items EmeHub has already
+              mirrored, and there are none for {meta.name} yet. Run a basic
+              import first and the fields will fill in.
+            </Notice>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {schema.map((field) => (
+                <FieldSelect
+                  key={field.key}
+                  field={field}
+                  value={filters[field.key]}
+                  onPick={(value) => pick(field.key, value)}
+                />
+              ))}
             </div>
           )}
         </div>

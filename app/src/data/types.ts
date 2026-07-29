@@ -40,49 +40,156 @@ export interface Product {
 
 /* ── Projects & repositories ─────────────────────────────────────────────── */
 
-export interface Project {
-  id: string;
-  name: string;
-  /** Mono repo path, e.g. `emesoft/surveyor-web`. */
-  repo: string;
-  provider: ProviderKey;
-  /** Provider display name as shown on the card. */
-  providerName: string;
-  branch: string;
-  agents: AgentKey[];
-  initials: string;
-  /** CSS gradient for the initials tile. */
-  gradient: string;
-  tests: number;
-  coverage: string;
-  updated: string;
-  indexed: boolean;
-  lastIndexed: string;
-  /** Knowledge confidence, 0–100. */
-  confidence: number;
-  needsRefresh: boolean;
-  framework: string;
-  /** Work items mirrored from the provider. */
-  tickets: number;
-  runs: number;
-  passRate: string;
-  /** Mono knowledge version, e.g. `v4`. */
-  knowledgeVersion: string;
-  repository: Repository;
-}
+/**
+ * Lifecycle of a knowledge base, exactly as the hub stores it
+ * (`api/app/models/knowledge.py › KNOWLEDGE_STATUSES`). `indexing` belongs to
+ * whoever is building — the agent — and the hub only records the transition it
+ * is told about.
+ */
+export type KnowledgeWireStatus =
+  | "not_indexed"
+  | "indexing"
+  | "indexed"
+  | "stale"
+  | "error";
 
-export interface Repository {
+/**
+ * The knowledge blob an agent reports (`KnowledgeOut.knowledge`).
+ *
+ * The hub stores it verbatim — it never produces one, because building a
+ * knowledge base needs a repo clone and the Claude CLI on disk, neither of
+ * which the hub has (ROADMAP.md Phase 4). Shape mirrors QAgent's
+ * `KnowledgeBody`, which is what actually writes it.
+ */
+export interface KnowledgeBody {
+  branch: string;
   /** Detected stack chips. */
   stack: string[];
-  /** Shared utilities the agents reuse (mono rows). */
-  utils: string[];
-  /** Indexed assets counter. */
+  architecture: string;
+  domain: string;
+  /** The locator strategy the agent inferred — the test convention. */
+  locator: string;
   assets: number;
   pageObjects: number;
   fixtures: number;
+  /** Shared utilities the agents reuse (mono rows). */
+  utilities: string[];
+  baseUrl: string;
+  routes: unknown[];
+  selectors: unknown[];
+  environments: { name?: string; baseUrl?: string; notes?: string }[];
+  businessEntities: string[];
 }
 
-/** Derived from `indexed` + `needsRefresh`. */
+/** `KnowledgeOut` — the metadata row plus the blob. */
+export interface KnowledgeMeta {
+  id: number;
+  key: string;
+  projectKey: string;
+  /** "" for the project-level row. */
+  repo: string;
+  name: string;
+  /** Raw provider string the agent reported, e.g. "ado". May be "". */
+  provider: string;
+  framework: string;
+  status: KnowledgeWireStatus;
+  /** Knowledge confidence, 0–100. */
+  confidence: number;
+  /** Mono knowledge version, e.g. `v4`. */
+  version: string;
+  needsRefresh: boolean;
+  /** ISO timestamp, or null when it has never been indexed. */
+  lastIndexed: string | null;
+  /** Relative form of the above — "2h ago" / "never". */
+  lastIndexedLabel: string;
+  /** Agent-host directory holding knowledge.md/.json. Opaque to the hub. */
+  docPath: string;
+  lastError: string;
+  shared: boolean;
+  body: KnowledgeBody;
+}
+
+/** One configured repository — `ProjectConfigOut.repos[]`. */
+export interface ProjectRepo {
+  name: string;
+  repoUrl: string;
+  defaultBranch: string;
+  /** Path on the AGENT host. Stored and echoed; never resolved by the hub. */
+  localRepoPath: string;
+  default: boolean;
+}
+
+export interface ProjectEnvironment {
+  name: string;
+  baseUrl: string;
+  notes: string;
+}
+
+/** Passwords are never rendered — the config read returns `hasPassword`. */
+export interface ProjectTestAccount {
+  role: string;
+  username: string;
+  notes: string;
+  hasPassword: boolean;
+}
+
+/** `ProjectConfigOut`, minus the plaintext passwords we never display. */
+export interface ProjectConfig {
+  key: string;
+  name: string;
+  workItemConnectionId: number | null;
+  repositoryConnectionId: number | null;
+  baseUrl: string;
+  repos: ProjectRepo[];
+  environments: ProjectEnvironment[];
+  testAccounts: ProjectTestAccount[];
+  manualAuth: boolean;
+  shared: boolean;
+}
+
+/**
+ * A registry row, joined with its configuration, its knowledge metadata and its
+ * mirrored work-item count.
+ *
+ * The handoff's card also shows `tests`, `coverage`, `runs` and `passRate`.
+ * Those are QAgent's run history; the hub owns identity, configuration and
+ * knowledge *metadata* only (ADR 0001, ROADMAP Phase 4), so there is nothing
+ * behind them here and they are deliberately absent rather than invented.
+ */
+export interface Project {
+  /** Registry key — the path parameter for every `/projects` endpoint. */
+  id: string;
+  /** Numeric row id — the `projectId` filter on `GET /tickets`. */
+  rowId: number;
+  name: string;
+  /** Mono repo path from the default configured repo. "" when none. */
+  repo: string;
+  /** null when neither the config nor the knowledge row names a provider. */
+  provider: ProviderKey | null;
+  /** Provider display name, or "Not connected". */
+  providerName: string;
+  /** Default branch. "" when unknown. */
+  branch: string;
+  /**
+   * Agents wired to this project. The hub has no field for this yet, so it is
+   * always empty for live rows and the UI reads "No agent wired".
+   */
+  agents: AgentKey[];
+  initials: string;
+  /** CSS gradient for the initials tile — derived from the key. */
+  gradient: string;
+  /** Relative `updatedAt`. */
+  updated: string;
+  shared: boolean;
+  /** Work items mirrored — the `total` of `GET /tickets?projectId=…`. */
+  tickets: number;
+  /** null when the project has no knowledge row (the hub answers 404). */
+  knowledge: KnowledgeMeta | null;
+  /** null when the config read failed or the caller may not see it. */
+  config: ProjectConfig | null;
+}
+
+/** Derived from the knowledge row for the status pill. */
 export type KnowledgeStatus = "indexed" | "needs-refresh" | "not-indexed";
 
 export type KnowledgeSourceType = "Markdown" | "Document" | "URL" | "File";
@@ -109,40 +216,57 @@ export interface KnowledgeSection {
 
 /* ── Tickets ─────────────────────────────────────────────────────────────── */
 
-export type TicketStatus =
-  | "New"
-  | "In progress"
-  | "In review"
-  | "Blocked"
-  | "Done";
-
-export type ImportStatus = "Imported" | "Importing" | "Failed";
-
+/**
+ * One row of `GET /tickets`.
+ *
+ * Provider states and work-item types are project-configurable free text, so
+ * `status`, `type` and `priority` are plain strings rather than the handoff's
+ * closed sets — `statusTone()` maps the known ones and falls back to neutral.
+ *
+ * The handoff's AGENT and IMPORT columns have no source: the hub does not
+ * assign agents to work items, and every stored row is imported by definition
+ * (it exists because a sync put it there). `synced` replaces IMPORT.
+ */
 export interface Ticket {
+  /** The provider's own identifier, e.g. `SUR-1428`. */
   id: string;
   title: string;
-  provider: ProviderKey;
-  status: TicketStatus;
-  /** Assigned agent, or null for "Unassigned". */
-  agent: AgentKey | null;
-  sync: ImportStatus;
+  provider: ProviderKey | null;
+  status: string;
+  /** Provider work-item type — "Bug", "User Story", "Story"… */
+  type: string;
+  priority: string;
+  /** Hub project key this row is attributed to. "" when unattributed. */
   project: string;
+  /** The provider-side assignee. */
   owner: string;
-  /** Provider-variant fields. Only the keys in that provider's schema are set. */
-  sprint?: string;
-  area?: string;
-  type?: string;
-  epic?: string;
-  priority?: string;
-  milestone?: string;
-  label?: string;
+  sprint: string;
+  area: string;
+  epic: string;
+  labels: string[];
+  acCount: number;
+  /** Relative `syncedAt`, e.g. "26m ago". */
+  synced: string;
+  /** ISO `syncedAt` — drives the toolbar's "last import" line. */
+  syncedAt: string | null;
+}
+
+/** One page of `GET /tickets`. Filtering and paging are server-side. */
+export interface TicketPage {
+  items: Ticket[];
+  total: number;
+  page: number;
+  pageSize: number;
 }
 
 /** One filter pill / dropdown in the toolbar and the import dialog. */
 export interface TicketFilterField {
-  /** Matches a key on `Ticket`. */
-  key: keyof Ticket | "owner";
+  /** Local key, also the `TicketFilters` key. */
+  key: string;
   label: string;
+  /** The `GET /tickets` query parameter this pill drives. */
+  param: string;
+  /** Distinct values present in the hub's store for the active provider. */
   options: string[];
 }
 

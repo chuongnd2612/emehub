@@ -2,26 +2,38 @@
 //
 //   "Back link `← All projects`. Header card: 46px provider glyph, name
 //    23px/900, agent pills, mono `repo · branch · provider`, knowledge status
-//    pill, `Refresh repository` ghost + `Re-index knowledge` primary. Tab row:
-//    Overview · Project knowledge · Repository · Agents · Settings."
+//    pill … Tab row: Overview · Project knowledge · Repository · Agents ·
+//    Settings."
 //
 // The active tab lives in the `?tab=` QUERY PARAM — never in Zustand and never
 // in the path (CLAUDE.md › "Intra-screen selection goes in query params").
-// `projectId` comes from the URL via useParams for the same reason.
+// `:projectId` is the registry KEY and comes from the URL via useParams.
+//
+// ## The two header buttons the handoff draws, and why one is gone
+//
+// `Re-index knowledge` cannot exist here: the hub does not clone repositories
+// and does not run `project-bootstrap` — the agent builds on its own host and
+// reports the result with `PUT /projects/{key}/repos/{repo}/knowledge`
+// (ROADMAP.md Phase 4). A button that toasted "Re-index queued" would be a
+// button that does nothing, so it is replaced by `Reload`, which genuinely
+// re-reads the registry row, its config and its knowledge metadata — the useful
+// action when an agent has reported a build since the page opened. The
+// knowledge tab explains who does the building.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import {
   Button,
+  ErrorState,
   GlassCard,
   Glyph,
   Icon,
+  LoadingState,
   Pill,
-  statusTone,
-  toast,
 } from "@/components/ui";
-import { buildKnowledge, getProject, type Project } from "@/data";
+import { getProject, type Project } from "@/data";
+import { ApiError } from "@/lib/api";
 
 import { AgentsTab } from "./AgentsTab";
 import { KnowledgeTab } from "./KnowledgeTab";
@@ -32,9 +44,11 @@ import {
   AGENT_LABEL,
   PROJECT_TABS,
   PROVIDER_GLYPH,
+  UNKNOWN_GLYPH,
   agentTone,
   isProjectTab,
   knowledgeStatus,
+  knowledgeStatusTone,
   type ProjectTab,
 } from "./shared";
 
@@ -68,23 +82,31 @@ export default function ProjectDetailScreen() {
   const rootRef = useResetScrollOnMount();
 
   const [project, setProject] = useState<Project | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  /** Handoff › State Management › Projects › `builtKnowledge`. */
-  const [justBuilt, setJustBuilt] = useState(false);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [error, setError] = useState("");
 
-  useEffect(() => {
+  const load = useCallback(() => {
     let live = true;
-    setLoaded(false);
-    setJustBuilt(false);
-    void getProject(projectId).then((p) => {
-      if (!live) return;
-      setProject(p);
-      setLoaded(true);
-    });
+    setStatus("loading");
+    void getProject(projectId)
+      .then((p) => {
+        if (!live) return;
+        setProject(p);
+        setStatus("ready");
+      })
+      .catch((err: unknown) => {
+        if (!live) return;
+        setError(
+          err instanceof ApiError ? err.message : "The hub did not respond.",
+        );
+        setStatus("error");
+      });
     return () => {
       live = false;
     };
   }, [projectId]);
+
+  useEffect(load, [load]);
 
   const tabParam = searchParams.get("tab");
   const tab: ProjectTab = isProjectTab(tabParam) ? tabParam : "overview";
@@ -97,30 +119,47 @@ export default function ProjectDetailScreen() {
 
   // An unknown :projectId falls back to the list — never guess a project.
   useEffect(() => {
-    if (loaded && !project) navigate("/app/projects", { replace: true });
-  }, [loaded, project, navigate]);
+    if (status === "ready" && !project) {
+      navigate("/app/projects", { replace: true });
+    }
+  }, [status, project, navigate]);
+
+  if (status === "loading") {
+    return (
+      <div ref={rootRef}>
+        <LoadingState label="Loading project…" />
+      </div>
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <div ref={rootRef}>
+        <GlassCard className="rounded-[20px]">
+          <ErrorState
+            title="Could not load this project"
+            detail={error}
+            onRetry={load}
+          />
+        </GlassCard>
+      </div>
+    );
+  }
 
   if (!project) return <div ref={rootRef} />;
 
-  const built = project.indexed || justBuilt;
-  const status = knowledgeStatus(project, built);
-  const provider = PROVIDER_GLYPH[project.provider];
+  const knowledge = project.knowledge;
+  const label = knowledgeStatus(knowledge);
+  const provider = project.provider
+    ? PROVIDER_GLYPH[project.provider]
+    : UNKNOWN_GLYPH;
 
-  const onBuild = () => {
-    void buildKnowledge(project.id);
-    setJustBuilt(true);
-    setTab("knowledge");
-    toast(
-      "Indexing started",
-      "Both agents will pick up the new knowledge base when it finishes",
-    );
-  };
+  const subtitle = [project.repo, project.branch, project.providerName]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
-    <div
-      ref={rootRef}
-      className="flex animate-fade-in-up flex-col gap-[14px]"
-    >
+    <div ref={rootRef} className="flex animate-fade-in-up flex-col gap-[14px]">
       <Link
         to="/app/projects"
         className="flex items-center gap-2 self-start text-[12.5px] font-semibold text-muted no-underline transition-colors duration-200 hover:text-txt2"
@@ -137,6 +176,7 @@ export default function ProjectDetailScreen() {
             <span className="text-[23px] font-black tracking-[-.035em]">
               {project.name}
             </span>
+            {project.shared && <Pill tone="accent">Shared</Pill>}
             {project.agents.map((a) => (
               <Pill key={a} tone={agentTone(a)}>
                 {AGENT_LABEL[a]}
@@ -144,48 +184,29 @@ export default function ProjectDetailScreen() {
             ))}
           </div>
           <div className="mt-[5px] font-mono text-[11.5px] text-faint">
-            {project.repo} · {project.branch} · {project.providerName}
+            {subtitle || project.id}
           </div>
         </div>
 
-        {/* Prototype copy: "Knowledge: <status>". */}
         <Pill
-          tone={statusTone(status)}
+          tone={knowledgeStatusTone(label)}
           dot
           className="px-[13px] py-2 text-[12.5px] font-bold"
         >
-          Knowledge: {status}
+          Knowledge: {label}
         </Pill>
 
         <Button
           className="h-auto rounded-button px-[15px] py-[10px]"
-          icon={<Icon name="sync" size={14} strokeWidth={2.2} />}
-          onClick={() =>
-            toast(
-              "Repository refreshed",
-              "Latest commits pulled — no structural changes detected",
-            )
-          }
+          icon={<Icon name="refresh" size={14} strokeWidth={2.2} />}
+          onClick={load}
         >
-          Refresh repository
-        </Button>
-        <Button
-          variant="primary"
-          className="h-auto rounded-button px-[17px] py-[10px]"
-          icon={<Icon name="spark" size={14} strokeWidth={2.2} />}
-          onClick={() =>
-            toast(
-              "Re-index queued",
-              "Knowledge base will be rebuilt from the default branch",
-            )
-          }
-        >
-          Re-index knowledge
+          Reload
         </Button>
       </GlassCard>
 
       <div className="flex flex-wrap items-center gap-2">
-        {PROJECT_TABS.map(([key, label]) => {
+        {PROJECT_TABS.map(([key, tabLabel]) => {
           const active = tab === key;
           return (
             <button
@@ -200,7 +221,7 @@ export default function ProjectDetailScreen() {
                   : "border-transparent bg-transparent text-muted hover:bg-card3"
               }`}
             >
-              {label}
+              {tabLabel}
             </button>
           );
         })}
@@ -208,14 +229,14 @@ export default function ProjectDetailScreen() {
 
       {tab === "overview" && <OverviewTab project={project} />}
       {tab === "knowledge" && (
-        <KnowledgeTab project={project} built={built} onBuild={onBuild} />
+        <KnowledgeTab project={project} onReload={load} />
       )}
       {tab === "repos" && <RepositoryTab project={project} />}
       {tab === "agents" && <AgentsTab project={project} />}
       {tab === "settings" && (
         <SettingsTab
           project={project}
-          knowledgeStatusLabel={status}
+          knowledgeStatusLabel={label}
           onOpenKnowledge={() => setTab("knowledge")}
         />
       )}
