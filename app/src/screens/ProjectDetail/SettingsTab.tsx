@@ -5,16 +5,20 @@
 //    index; then a 3-up read-only meta grid (provider, repository, knowledge
 //    scope)."
 //
-// The three toggles have no storage: `ProjectConfigIn` has `name`, connections,
-// `baseUrl`, repos, environments, test accounts, `manualAuth` and `extra` —
-// nothing that carries a re-index-on-merge or block-on-stale policy. They stay
-// local UI state and the notice says the setting is not persisted, rather than
-// leaving a switch that silently forgets.
+// The three toggles above have no storage: `ProjectConfigIn` has no field for
+// a re-index-on-merge or block-on-stale policy. They stay local UI state.
+//
+// Everything BELOW that card is not in the handoff at all — it is the
+// functional core of Q-Agent's `ProjectSettingsForm.tsx`, ported because it is
+// what actually configures a project (connection bindings, base URL, test
+// accounts, environments) and EmeHub had no equivalent. See
+// `ProjectConfigForm.tsx` for what was and wasn't carried over, and why.
 
 import { useState } from "react";
 
 import { Button, GlassCard, Icon, Notice, Toggle } from "@/components/ui";
 import type { Project } from "@/data";
+import { ProjectConfigForm } from "./ProjectConfigForm";
 import type { KnowledgeStatusLabel } from "./shared";
 
 function MetaCard({ label, children }: { label: string; children: React.ReactNode }) {
@@ -32,10 +36,13 @@ export function SettingsTab({
   project,
   knowledgeStatusLabel,
   onOpenKnowledge,
+  onReload,
 }: {
   project: Project;
   knowledgeStatusLabel: KnowledgeStatusLabel;
   onOpenKnowledge: () => void;
+  /** Re-reads the project after `ProjectConfigForm` saves. */
+  onReload: () => void;
 }) {
   // Handoff › State Management › Projects: pjAutoIndex, pjEvidence,
   // pjBlockUnindexed. UI-only, scoped to this screen — see the header comment.
@@ -99,9 +106,9 @@ export function SettingsTab({
         </div>
 
         <Notice tone="warn" className="mt-3">
-          These three policies are not stored yet — the project configuration
-          the hub persists covers connections, repositories, environments and
-          test accounts. Changing a switch here affects this page only.
+          These three policies are not stored yet — the hub has no field for
+          them. The project configuration below (connections, base URL, test
+          accounts, environments) is real and saves to the hub.
         </Notice>
       </GlassCard>
 
@@ -122,6 +129,8 @@ export function SettingsTab({
           </div>
         </MetaCard>
       </div>
+
+      <ProjectConfigForm project={project} onSaved={onReload} />
     </div>
   );
 }
