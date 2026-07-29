@@ -15,10 +15,16 @@ Azure DevOps connection can serve both jobs at once.
 
 ## This module is the only place the PAT is decrypted
 
-:func:`adapter_for` is the single decryption point. Everything above it — the
-router, the schemas — never touches ``pat_encrypted``, and the decrypted value
-lives only for the duration of one adapter call. Nothing here logs a connection's
-secret, its config or its adapter.
+Two functions decrypt, and both live here on purpose: :func:`adapter_for`, for a
+provider API call, and :func:`repository_pat`, for the ``git clone`` a hub-side
+knowledge build performs (ADR 0007). Everything above them — the routers, the
+schemas, ``repo_service`` — never touches ``pat_encrypted``, and the plaintext
+lives only as a local for the length of one call. Nothing here logs a
+connection's secret, its config or its adapter.
+
+The clone path is the sharper of the two: a PAT injected into an HTTPS URL is a
+secret inside a string that git happily echoes into its own error output. See
+:func:`repository_pat` and ``repo_service`` for the scrubbing that answers it.
 
 ## Visibility
 
@@ -64,6 +70,7 @@ __all__ = [
     "get_connection",
     "normalize_capabilities",
     "reject_secret_like_config",
+    "repository_pat",
     "resolve_repository_for_project",
     "resolve_work_item_for_ticket",
     "supported_capabilities",
@@ -269,6 +276,33 @@ def adapter_for(
         {"pat": pat or ""},
         transport=transport,
     )
+
+
+def repository_pat(connection: ProviderConnection) -> str:
+    """The decrypted PAT for a clone, or ``""`` when the connection carries none.
+
+    The second — and last — decryption point in the hub (ADR 0007). Split from
+    :func:`adapter_for` because a clone needs the raw token to inject into an
+    HTTPS URL rather than an adapter that knows how to send it.
+
+    An unset PAT yields ``""`` so a **public** repository still clones. An
+    undecryptable one does not: that is a key-rotation accident, and passing it
+    on as "no credential" would turn it into a confusing 404-from-git instead of
+    the operational error it is.
+
+    Raises:
+        ProviderError: the stored PAT does not decrypt under the current
+            ``EMEHUB_ENCRYPTION_KEY``.
+    """
+    if not connection.pat_encrypted:
+        return ""
+    pat = crypto.decrypt(connection.pat_encrypted)
+    if pat is None:
+        raise ProviderError(
+            f"The stored credential for '{connection.display_name}' cannot be "
+            "decrypted with the current encryption key"
+        )
+    return pat
 
 
 # ------------------------------------------------------------- work-item routing

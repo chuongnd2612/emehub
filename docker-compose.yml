@@ -31,10 +31,19 @@ services:
       EMEHUB_ADMIN_PASSWORD: ${EMEHUB_ADMIN_PASSWORD:-}
       EMEHUB_LOG_LEVEL: ${EMEHUB_LOG_LEVEL:-info}
       EMEHUB_WORKSPACE_DIR: /app/api/workspace
+      # Knowledge builds run here (ADR 0007): clones, the Claude CLI and the
+      # materialised credential all live under the workspace volume above.
+      EMEHUB_KNOWLEDGE_BUILD_CONCURRENCY: ${EMEHUB_KNOWLEDGE_BUILD_CONCURRENCY:-2}
+      EMEHUB_CLAUDE_MODEL: ${EMEHUB_CLAUDE_MODEL:-claude-sonnet-5}
+      EMEHUB_CLAUDE_BOOTSTRAP_TIMEOUT_S: ${EMEHUB_CLAUDE_BOOTSTRAP_TIMEOUT_S:-1200}
+      EMEHUB_CLONE_TIMEOUT_S: ${EMEHUB_CLONE_TIMEOUT_S:-180}
       # Connect to the bundled Postgres over the compose network.
       EMEHUB_DATABASE_URL: postgresql+psycopg://${EMEHUB_DB_USER:-emehub}:${EMEHUB_DB_PASSWORD:-emehub}@db:5432/${EMEHUB_DB_NAME:-emehub}
     volumes:
-      # Materialised credentials and cloned state, persisted across restarts.
+      # Repository clones, emitted knowledge artefacts, and the materialised
+      # Claude credential a build runs under. **Sensitive** (ADR 0007): this
+      # volume holds plaintext credential material for the duration of a build.
+      # Not a world-readable mount, and not a volume to copy casually.
       - emehub-workspace:/app/api/workspace
     # Published, not merely exposed, so `npm run dev` can proxy /api straight at
     # the containerised backend (app/vite.config.ts targets 127.0.0.1:8790).

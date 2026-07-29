@@ -5,11 +5,17 @@ QAgent's knowledge lives in two places: a Postgres row and a pair of artifacts
 built by the ``project-bootstrap`` skill running the Claude CLI inside a repo
 clone on the QAgent host.
 
-**The hub owns the row, not the filesystem** (ROADMAP.md Phase 4 — "the hard
-part is not the data, it is the filesystem"). The hub never clones a repository,
-never runs ``project-bootstrap`` and owns no workspace directory. ``doc_path``
-is therefore an opaque *agent-host* path the agent reports and the hub stores so
-the agent can find its own artifacts again — the hub never resolves or reads it.
+**The hub owns both, now** ([ADR 0007](../../../docs/adr/0007-knowledge-builds-run-on-the-hub.md)).
+It clones the repository, runs ``project-bootstrap`` and writes the artefact pair
+into an owner-scoped workspace directory. It is not the *only* builder: QAgent
+still builds its own and reports the result through
+``PUT /projects/{key}/repos/{repo}/knowledge``.
+
+``doc_path`` therefore means one of two things depending on who built the row,
+and nothing in the schema distinguishes them because nothing needs to: a hub
+build writes a path under ``EMEHUB_WORKSPACE_DIR``, an agent's report carries an
+opaque agent-host path the hub stores and never resolves. Either way the hub
+only ever *reads back* a path it wrote itself.
 
 Rows are keyed by :func:`compose_key`, and uniqueness is scoped to
 ``(key, owner_id)`` so the same repo's knowledge can exist once per member and
@@ -25,8 +31,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base, UTCDateTime, timestamp_column, utcnow
 
-#: Lifecycle of a knowledge base. ``indexing`` is owned by whoever is building
-#: (the agent); the hub only records the transition it is told about.
+#: Lifecycle of a knowledge base. ``indexing`` is owned by whoever is building —
+#: the hub itself for a ``POST …/knowledge/build`` (where it is also the
+#: in-flight guard), or an agent that sets it through ``PUT …/knowledge``.
 KNOWLEDGE_STATUSES = ("not_indexed", "indexing", "indexed", "stale", "error")
 
 STATUS_NOT_INDEXED = "not_indexed"
@@ -81,7 +88,8 @@ class ProjectKnowledge(Base):
     #: {branch, stack[], architecture, domain, locator, base_url, routes[],
     #:  selectors[], auth{}, environments[], business_entities[], …}
     knowledge: Mapped[dict] = mapped_column(JSON, default=dict)
-    #: Agent-host directory holding the emitted knowledge.md/.json. Opaque here.
+    #: Directory holding the emitted knowledge.md/.json — under the hub's
+    #: workspace when the hub built it, opaque and agent-host when reported.
     doc_path: Mapped[str] = mapped_column(String(600), default="")
     #: Last build error (when status == "error"); cleared on success.
     last_error: Mapped[str] = mapped_column(String(1000), default="")

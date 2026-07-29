@@ -100,8 +100,20 @@ so an agent token is refused. Listed so the surface is not mistaken for undocume
 `PUT /credentials/claude/mode`, `POST /credentials/claude/test`,
 `GET|POST /credentials/claude/usage` · `POST|PATCH|DELETE /connections`,
 `POST /connections/{id}/test`, `GET /connections/{id}/{projects|repos|sprints|work-item-metadata}`
-· `POST /projects`, `PATCH /projects/{key}`, `PUT /projects/{key}/config` ·
+· `POST /projects`, `PATCH /projects/{key}`, `PUT /projects/{key}/config`,
+`POST /projects/{key}/repos/{repo}/knowledge/build` ·
 `POST /tickets/sync`, `DELETE /tickets/{external_id}` · all of `/auth/*`.
+
+`POST …/knowledge/build` is hub-only for a specific reason: it clones a repository, runs a
+Claude CLI process for minutes and spends money against the owner's credential
+([ADR 0007](adr/0007-knowledge-builds-run-on-the-hub.md)). None of that should be reachable
+with an agent's token. It answers `202` with the row already at `indexing`; the caller polls
+`GET …/knowledge` until the status settles, and reads `lastError` when it settles on `error`.
+Requesting a build that is already running returns the same `indexing` row without starting a
+second one. Builds beyond `EMEHUB_KNOWLEDGE_BUILD_CONCURRENCY` queue rather than run.
+
+An agent that builds its own knowledge is unaffected: `PUT …/knowledge` above is still how to
+report one, and the hub becoming *a* builder does not make it the only one.
 
 Two exceptions read by agents with their own audience:
 `PUT /credentials/claude/refreshed` (the CLI rotated its token; the hub stays authoritative)
@@ -120,6 +132,12 @@ hub. Mitigations to implement: response is never cached to disk by the agent in 
 beyond the CLI's config dir; the CLI's own token rotation is posted back
 (`PUT /credentials/claude/refreshed`) so the hub stays authoritative; the endpoint is
 audited on every call.
+
+> Since [ADR 0007](adr/0007-knowledge-builds-run-on-the-hub.md) the hub also materialises a
+> Claude credential *for itself*, into a locked-down `CLAUDE_CONFIG_DIR` under
+> `EMEHUB_WORKSPACE_DIR`, to run a knowledge build. That does **not** change this section:
+> nothing crosses the boundary to an agent. It does mean the workspace volume holds plaintext
+> credential material for the duration of a build, and must be treated accordingly.
 
 **Provider PAT.** Deliberately *not* returned. Agents that need a provider call get one of:
 
@@ -172,7 +190,13 @@ Consuming a hub-issued credential therefore means building a materialisation pat
 equivalent to QAgent's `claude_credentials.materialize()` — write the resolved credential to a
 per-user `CLAUDE_CONFIG_DIR`, run the CLI against it, capture rotated tokens back to the hub.
 Until that exists, DAgent can consume hub *identity* but not hub *credentials*, and those two
-milestones should not be bundled into one issue.
+milestones should not be bundled into one issue. The hub's own
+`api/app/services/claude_credentials.py::materialize` ([ADR 0007](adr/0007-knowledge-builds-run-on-the-hub.md))
+is now a second worked example of that path, alongside QAgent's.
+
+Note that [ADR 0007](adr/0007-knowledge-builds-run-on-the-hub.md) removes one thing from
+DAgent's critical path: it can obtain a **knowledge base** from the hub today, with no build
+capability of its own. That was one of the reasons for the reversal.
 
 Separately: `--dangerously-skip-permissions` is defensible for a single-developer local tool
 and indefensible for a multi-user service. Whether DAgent stays local-only or becomes a

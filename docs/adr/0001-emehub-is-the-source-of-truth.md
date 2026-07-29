@@ -1,7 +1,14 @@
 # ADR 0001 — EmeHub is the source of truth, not a launcher
 
-- **Status:** Accepted
+- **Status:** Accepted, **amended by [ADR 0007](0007-knowledge-builds-run-on-the-hub.md)** (2026-07-29)
 - **Date:** 2026-07-28
+
+> **Amendment.** The "agents own the domain work" boundary below now has one carve-out:
+> the hub *builds the shared artefacts it already owns the inputs for* — specifically
+> knowledge bases, whose repository connection, PAT, project config and Claude credential all
+> already live here. The rule is now "the hub builds hub-owned data; it does not do an agent's
+> job." No test generation, no code generation, no browser automation, no PR creation. See
+> [ADR 0007](0007-knowledge-builds-run-on-the-hub.md).
 
 ## Context
 

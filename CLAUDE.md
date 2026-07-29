@@ -11,11 +11,18 @@ Project-specific guidelines. Merge with the global `~/.claude/CLAUDE.md`.
 ## What this repo is
 
 EmeHub is the source of truth for identity and shared configuration across the EMESOFT agent
-suite ([ADR 0001](docs/adr/0001-emehub-is-the-source-of-truth.md)). It does **not** do domain
-work — no test generation, no code generation, no browsers, no Claude invocation for
-end-user tasks. If a change adds domain behaviour to the hub, it belongs in an agent instead.
+suite ([ADR 0001](docs/adr/0001-emehub-is-the-source-of-truth.md)).
 
-**Current state: Phase 0.** Documentation only. There is no `api/` or `app/` yet.
+**The boundary:** the hub *builds the shared artefacts it already owns every input for* —
+which today means knowledge bases, and nothing else
+([ADR 0007](docs/adr/0007-knowledge-builds-run-on-the-hub.md)). It does **not** do an agent's
+job: no test generation, no code generation, no browser automation, no PR creation. If a
+change adds domain behaviour beyond that carve-out, it belongs in an agent instead.
+
+**Current state.** The hub is built and running: FastAPI + Postgres behind nginx, all eleven
+UI views live against real endpoints, ~408 backend tests. What has *not* happened is the
+agent cutover — neither Q-Agent nor D-Agent consumes the hub yet, so it runs in parallel with
+both rather than in front of them. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 

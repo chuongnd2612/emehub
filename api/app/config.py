@@ -75,6 +75,30 @@ class Settings(BaseSettings):
     log_level: str = "info"
     workspace_dir: str = "./workspace"
 
+    # ── Knowledge builds (ADR 0007 — builds run on the hub) ────────────────
+    #: The Claude Code CLI executable. Baked into the image; overridable for a
+    #: host install at a different path.
+    claude_bin: str = "claude"
+    #: Model every hub-run Claude call uses. Matches QAgent's default so the two
+    #: stacks produce comparable knowledge.
+    claude_model: str = "claude-sonnet-5"
+    #: Default per-call CLI budget.
+    claude_timeout_s: int = 300
+    #: A knowledge build traverses a whole repository, so it gets its own,
+    #: much longer, budget. A CLI that exceeds it lands the row in ``error``.
+    claude_bootstrap_timeout_s: int = 1200
+    #: Ceiling on a single ``git clone``/``fetch``.
+    clone_timeout_s: int = 180
+    #: **Process-wide** cap on concurrent knowledge builds. A build is minutes
+    #: long, clones a repository and runs a Claude CLI process, so an uncapped
+    #: queue lets one member exhaust the workspace's CPU and disk. Builds over
+    #: the cap wait their turn with the row left in ``indexing``; they are never
+    #: dropped. Raise it only with the container's CPU/disk in mind.
+    knowledge_build_concurrency: int = 2
+    #: Directory holding ``<skill>/SKILL.md``. Empty means the repo's own
+    #: ``skills/`` (``/app/skills`` in the image — see api/Dockerfile).
+    skills_dir: str = ""
+
     # ── CORS ───────────────────────────────────────────────────────────────
     # The SPA is same-origin in every packaged deployment (nginx proxies /api),
     # so this only matters for `npm run dev` against a locally-run API.
@@ -110,6 +134,14 @@ class Settings(BaseSettings):
     def workspace_path(self) -> Path:
         path = Path(self.workspace_dir)
         return path if path.is_absolute() else (API_DIR / path).resolve()
+
+    @property
+    def skills_path(self) -> Path:
+        """Where ``<skill>/SKILL.md`` lives — the repo root's ``skills/``."""
+        if (self.skills_dir or "").strip():
+            path = Path(self.skills_dir)
+            return path if path.is_absolute() else (API_DIR / path).resolve()
+        return API_DIR.parent / "skills"
 
     def ensure_dirs(self) -> None:
         self.workspace_path.mkdir(parents=True, exist_ok=True)

@@ -15,10 +15,22 @@ truncated or otherwise — the plaintext exists only as a local in
 Storage is via :mod:`app.crypto` only (the ``enc::v1:`` envelope over
 ``EMEHUB_ENCRYPTION_KEY``). The JWT secret must never appear here — ADR 0005.
 
-The hub never materialises the credential to disk and never invokes the Claude
-CLI: it holds no domain behaviour (CLAUDE.md › What this repo is). Materialising
-into a ``CLAUDE_CONFIG_DIR`` is the agent's job, which is why QAgent's
-``materialize()`` is deliberately *not* ported.
+## Materialisation (ADR 0007)
+
+The hub *does* now write the credential to disk, for one job only: running
+``project-bootstrap`` through the Claude CLI during a knowledge build. That is
+what :func:`materialize` and :func:`resolve_effective_config_dir` are for. Two
+properties keep it honest:
+
+* the file is written **only** under the workspace volume, in an owner-scoped
+  ``claude-config`` directory (:mod:`app.services.workspace_scope`), and both
+  the directory and the file are chmod'ed to the owning process alone;
+* it is still not *returned* by anything. :func:`resolve_material` remains the
+  one function that hands credential material to a caller.
+
+``emehub-workspace`` therefore holds plaintext credential material for the
+duration of a build — ADR 0007 § Consequences says so explicitly, and it is why
+that volume is not something to copy casually.
 
 ## Parsing
 
@@ -33,8 +45,10 @@ required, ``expiresAt``/``expires_at`` as epoch ms, ``scopes`` defaulting to
 from __future__ import annotations
 
 import json
+import stat
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -59,10 +73,12 @@ __all__ = [
     "get_own",
     "get_shared",
     "mark_expired",
+    "materialize",
     "meta_for",
     "parse_credentials",
     "persist_refreshed_from_raw",
     "resolve",
+    "resolve_effective_config_dir",
     "resolve_material",
     "set_preferred_mode",
     "status_for",
@@ -296,6 +312,76 @@ def resolve_material(db: Session, owner_id: int | None) -> dict | None:
             "stored Claude credential could not be decrypted with the current key"
         )
     return {"source": source, "credentials": plaintext, **meta_for(row)}
+
+
+# --------------------------------------------------------- materialisation
+def _lock_down(path: Path, *, is_dir: bool) -> None:
+    """Restrict ``path`` to the owning process. Best-effort, never fatal.
+
+    ``chmod`` is a no-op on Windows and can fail on exotic filesystems; a
+    failure here must not abort a build, because the containing directory is
+    already inside the workspace volume. On Linux — which is where the hub
+    actually runs — this is what stops the materialised credential from being
+    world-readable inside the container.
+    """
+    try:
+        path.chmod(stat.S_IRWXU if is_dir else (stat.S_IRUSR | stat.S_IWUSR))
+    except OSError:  # pragma: no cover - platform dependent
+        pass
+
+
+def materialize(row: ClaudeCredentials) -> Path:
+    """Write ``row``'s decrypted credential into a locked-down config dir.
+
+    Ported from QAgent's ``materialize()``, which the original hub port
+    deliberately left out; ADR 0007 now requires it, because the Claude CLI
+    reads its OAuth session from ``<CLAUDE_CONFIG_DIR>/.credentials.json`` and
+    has no other way to be handed one.
+
+    The directory is chosen from the **credential row's own owner**, not the
+    requesting user, so a member running under the shared credential shares its
+    materialised copy instead of minting a second plaintext copy of the same
+    secret. Returns the *directory* — that is the value ``CLAUDE_CONFIG_DIR``
+    takes. Rewritten on every call, so a re-uploaded credential takes effect on
+    the next build without a restart.
+
+    Raises:
+        ClaudeCredentialsError: the stored blob does not decrypt under the
+            current key. Never writes the ciphertext as if it were the file.
+    """
+    from app.services.workspace_scope import scoped_claude_config_dir
+
+    plaintext = crypto.decrypt(row.credentials)
+    if plaintext is None:
+        raise ClaudeCredentialsError(
+            "stored Claude credential could not be decrypted with the current key"
+        )
+
+    config_dir = scoped_claude_config_dir(row.owner_id)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    _lock_down(config_dir, is_dir=True)
+
+    creds_path = config_dir / ".credentials.json"
+    creds_path.write_text(plaintext, encoding="utf-8")
+    _lock_down(creds_path, is_dir=False)
+    return config_dir
+
+
+def resolve_effective_config_dir(
+    db: Session, owner_id: int | None
+) -> tuple[Path, str] | None:
+    """Materialise the credential ``owner_id`` should run with.
+
+    Returns ``(config_dir, source)`` where ``source`` is ``"own"`` or
+    ``"shared"`` (so the caller can stamp the usage row with which account paid),
+    or ``None`` when there is no credential at all. There is no interactive
+    ``claude login`` fallback — a hub with no credential fails the build with a
+    message a human can act on.
+    """
+    row, source = resolve(db, owner_id)
+    if row is None:
+        return None
+    return materialize(row), source
 
 
 # ------------------------------------------------------------------ writes
