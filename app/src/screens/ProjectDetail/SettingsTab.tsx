@@ -18,6 +18,7 @@ import { useState } from "react";
 
 import { Button, GlassCard, Icon, Notice, Toggle } from "@/components/ui";
 import type { Project } from "@/data";
+import { DangerZone } from "./DangerZone";
 import { ProjectConfigForm } from "./ProjectConfigForm";
 import type { KnowledgeStatusLabel } from "./shared";
 
@@ -131,6 +132,8 @@ export function SettingsTab({
       </div>
 
       <ProjectConfigForm project={project} onSaved={onReload} />
+
+      <DangerZone project={project} />
     </div>
   );
 }

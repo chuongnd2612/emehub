@@ -32,14 +32,26 @@ from app.db import Base, UTCDateTime, timestamp_column, utcnow
 
 #: Persisted status. Only these two are ever stored.
 STATUS_ACTIVE = "active"
-#: Set when a real CLI call reported the token is no longer usable, or when the
-#: parsed ``expiresAt`` has passed.
+#: Set when a real CLI call reported the token is no longer usable. **This is
+#: the authoritative "does not work" signal** and it wins over every derivation
+#: (``services.claude_cli._mark_credential_invalid`` sets it).
 STATUS_EXPIRED = "expired"
 
 #: Derived only — never stored. Mirrors the frontend's rule in
 #: ``app/src/data/credentials.ts`` (``daysLeft <= 2``) so the hub and the SPA
 #: agree on what "about to lapse" means.
 STATUS_EXPIRING = "expiring"
+
+#: Derived only — the access token's ``expiresAt`` has passed **but the file
+#: carries a refresh token**, so the Claude CLI mints a new access token on its
+#: next run without anyone re-uploading anything.
+#:
+#: This state exists because a Claude OAuth *access* token lives hours. Without
+#: it, a real ``~/.claude/.credentials.json`` reads ``expired`` within an
+#: afternoon of being uploaded and every credential in the workspace shows a red
+#: pill that means nothing. Deliberately **not** ``active``: the token on file
+#: genuinely is past its expiry, and saying otherwise would overstate health.
+STATUS_REFRESHABLE = "refreshable"
 
 STORED_STATUSES = (STATUS_ACTIVE, STATUS_EXPIRED)
 
@@ -62,6 +74,16 @@ class ClaudeCredentials(Base):
         UTCDateTime, nullable=True, default=None
     )
     scopes: Mapped[list | None] = mapped_column(JSON, nullable=True, default=None)
+    # Whether the encrypted blob carries a `refreshToken`. **The boolean only —
+    # the refresh token itself stays inside `credentials` and is never copied
+    # into a column of its own.** Tri-state on purpose: NULL means "nobody has
+    # looked yet", which is how every row that predates this column starts.
+    # `services.claude_credentials.backfill_refresh_flag` resolves NULL on the
+    # next read, so existing rows self-heal without a data migration that would
+    # have to decrypt the whole table under Alembic.
+    has_refresh_token: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True, default=None
+    )
     subscription_type: Mapped[str | None] = mapped_column(
         String(64), nullable=True, default=None
     )

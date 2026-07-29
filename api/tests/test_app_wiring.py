@@ -156,5 +156,28 @@ def test_migrations_created_every_table(workspace_dir):
     assert {"users", "auth_sessions", "audit_logs", "alembic_version"} <= tables
 
 
+def test_every_migration_id_fits_the_alembic_version_column():
+    """`alembic_version.version_num` is `varchar(32)` and Alembic creates it at
+    that width. An over-long revision id runs the DDL and then fails on the
+    stamp — Postgres only, because SQLite does not enforce VARCHAR length, so
+    the whole test suite goes green and the container refuses to boot.
+
+    That happened once (0006). This is the guard.
+    """
+    from pathlib import Path
+
+    versions = Path(__file__).resolve().parents[1] / "migrations" / "versions"
+    ids = []
+    for path in sorted(versions.glob("*.py")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("revision: str"):
+                ids.append((path.name, line.split("=", 1)[1].strip().strip('"')))
+                break
+
+    assert ids, "no migrations found — the glob is wrong, not the migrations"
+    too_long = [(name, rid, len(rid)) for name, rid in ids if len(rid) > 32]
+    assert not too_long, f"revision ids over 32 chars: {too_long}"
+
+
 def test_openapi_builds(client):
     assert client.get("/openapi.json").status_code == 200

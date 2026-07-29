@@ -48,7 +48,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import Field
 from sqlalchemy.orm import Session
 
@@ -329,6 +329,70 @@ def _may_write_shared(user: User | None) -> bool:
     from app.services.ownership import can_write_shared
 
     return can_write_shared(user)
+
+
+@router.delete("/{key}", status_code=204, response_class=Response)
+def delete_project(
+    key: str,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Delete a project and everything the hub owns about it. Hub audience only.
+
+    Scoped like every other project read: own → shared → **404**. Another
+    member's same-keyed project is invisible, so it is not found rather than
+    forbidden — a 403 here would confirm it exists. A *shared* project resolves
+    and then needs the admin rule, which is a real 403: the caller can see the
+    row, they simply may not delete it.
+
+    **Cascade.** ``project_config`` (including the encrypted test-account
+    passwords), every ``project_knowledge`` row for the key, and the project's
+    directories in the workspace volume — the shallow clone and the built
+    knowledge artefacts. All pinned to the project's own namespace.
+
+    **Tickets block the delete rather than being cascaded.** A ticket mirrors a
+    real work item in Azure DevOps or Jira; deleting a batch of them as a side
+    effect of tidying up the registry destroys more than was asked for, and the
+    hub cannot put them back without the connection the project was bound to.
+    Orphaning them is not on the table either. So this returns ``409`` naming
+    the count, and ``DELETE /tickets/{external_id}`` is the explicit second
+    step. See ``project_service.delete_project``.
+    """
+    row = _project_or_404(db, key, user)
+    if row.owner_id is None and not _may_write_shared(user):
+        raise HTTPException(
+            status_code=403, detail="Only admins may delete shared projects"
+        )
+
+    shared = row.owner_id is None
+    try:
+        removed = project_service.delete_project(db, row)
+    except project_service.ProjectHasTickets as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This project still mirrors {exc.count} work "
+                f"item{'' if exc.count == 1 else 's'}. Delete them from Tickets "
+                "first, then delete the project."
+            ),
+        ) from exc
+
+    db.commit()
+    audit_service.record(
+        category="project",
+        action="Deleted project",
+        target=key,
+        actor=user.email,
+        actor_id=user.id,
+        # Counts only — never a config field, never an account.
+        meta=(
+            f"{removed['configs']} config row(s), "
+            f"{removed['knowledge']} knowledge row(s)"
+        ),
+        owner_id=None if shared else user.id,
+        db=db,
+    )
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------- config

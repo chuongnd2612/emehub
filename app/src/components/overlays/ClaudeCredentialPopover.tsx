@@ -20,10 +20,11 @@ import {
   StatusPill,
 } from "@/components/ui";
 import {
-  credentialStatus,
+  derivedCredentialStatus,
   formatDaysLeft,
   getSharedCredentials,
   type CredentialSource,
+  type CredentialStatus,
   type SharedCredential,
 } from "@/data";
 import {
@@ -46,14 +47,17 @@ const DEFAULT_MODEL = "Claude Sonnet 4.6";
 const STATUS_LABEL = {
   active: "Active",
   expiring: "Expiring",
+  // Issue #63 — elapsed access token, refresh token on file, CLI renews it.
+  refreshable: "Refreshes",
   expired: "Expired",
-} as const;
+} as const satisfies Record<CredentialStatus, string>;
 
 const DOT_CLASS = {
   active: "bg-ok shadow-[0_0_8px_var(--ok)]",
   expiring: "bg-warn shadow-[0_0_8px_var(--warn)]",
+  refreshable: "bg-cyan-soft shadow-[0_0_8px_var(--dagent)]",
   expired: "bg-danger shadow-[0_0_8px_var(--danger)]",
-} as const;
+} as const satisfies Record<CredentialStatus, string>;
 
 const SOURCE_OPTIONS = [
   { value: "shared" as const, label: "Shared" },
@@ -105,9 +109,9 @@ export function ClaudeCredentialChip() {
 
   // Derived status: shared → the default credential's; personal → always
   // "expired" until a personal token is attached (none is, see below).
-  const status = isShared
+  const status: CredentialStatus = isShared
     ? defaultCred
-      ? credentialStatus(defaultCred.daysLeft)
+      ? derivedCredentialStatus(defaultCred)
       : "expired"
     : "expired";
 
