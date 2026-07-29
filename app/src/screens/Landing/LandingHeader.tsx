@@ -1,8 +1,9 @@
 // Handoff § 1. Landing — header.
 //
-// 88px 3D logo (pointer tilt + the `metalFlash` sheen), a 1×56 divider, the
-// `Eme` + silver `Hub` wordmark at 40/900/-.04em, then the text links and the
-// primary `Enter EmeHub →` button.
+// 88px 3D logo (pointer tilt), a 1×56 divider, the `Eme` + silver `Hub`
+// wordmark at 40/900/-.04em, then the text links and the primary
+// `Enter EmeHub →` button. The handoff's diagonal `metalFlash` sheen was
+// removed — it read as an animation glitch, not a shine.
 
 import { useNavigate } from "react-router-dom";
 
@@ -26,15 +27,11 @@ export function LandingHeader() {
           ref={logo.ref}
           className="relative flex items-center gap-5 [filter:drop-shadow(0_16px_26px_var(--shadow))] [transform-style:preserve-3d] will-change-transform"
         >
-          <div className="relative overflow-hidden rounded-lg">
-            <img
-              src="/assets/eme-3d-logo-cut.png"
-              alt="EMESOFT"
-              className="pointer-events-none block h-[88px] w-auto"
-            />
-            {/* 60%-wide diagonal sheen — `metalFlash 7.5s ease-in-out infinite 2s`. */}
-            <span className="metal-flash absolute top-0 left-0 h-full w-[60%]" />
-          </div>
+          <img
+            src="/assets/eme-3d-logo-cut.png"
+            alt="EMESOFT"
+            className="pointer-events-none block h-[88px] w-auto rounded-lg"
+          />
           <span className="h-14 w-px bg-bd2" />
           <span className="text-[40px] font-black tracking-[-.04em] text-txt">
             Eme<span className="text-silver">Hub</span>

@@ -1,5 +1,5 @@
 // Handoff § 0. App shell › Sidebar — 268px glass panel, top→bottom:
-//   1. 3D logo button (tilt + metal sheen) → the landing view
+//   1. 3D logo button (tilt) → the landing view
 //   2. product lockup (accent tile + Eme/Hub + AI OPERATING CENTER)
 //   3. nav, one flat list under WORKSPACE / PLATFORM headings
 //   4. footer: status card + user chip
@@ -13,6 +13,7 @@ import { useLogoTilt } from "@/hooks/useTilt";
 import { cn } from "@/lib/cn";
 import { displayName, useAuth, userInitials, userRole } from "@/store/auth";
 import { NAV_GROUPS } from "./nav";
+import { useSidebarStats } from "./useSidebarStats";
 
 export interface SidebarProps {
   /** Called on every nav click so the shell can reset scrollTop to 0. */
@@ -24,6 +25,12 @@ export function Sidebar({ onNavigate }: SidebarProps) {
   const logo = useLogoTilt<HTMLDivElement>();
   const user = useAuth((s) => s.user);
   const role = userRole(user);
+  const stats = useSidebarStats();
+  const badgeFor: Record<string, number | null> = {
+    "/app/projects": stats.projectCount,
+    "/app/tickets": stats.ticketCount,
+    "/app/integrations": stats.connectionCount,
+  };
 
   return (
     <aside
@@ -90,62 +97,81 @@ export function Sidebar({ onNavigate }: SidebarProps) {
             <div className="px-1.5 pt-3 pb-[7px] text-[10px] font-bold tracking-[.12em] text-label">
               {group.label}
             </div>
-            {group.items.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                onClick={onNavigate}
-                data-surface
-                className={({ isActive }) =>
-                  cn(
-                    "flex w-full items-center gap-2.5 rounded-[11px] border px-2.5 py-[9px]",
-                    "text-left text-[13px] font-semibold",
-                    isActive
-                      ? "border-pb bg-pt text-p-on"
-                      : "border-transparent bg-transparent text-muted hover:bg-bd3",
-                  )
-                }
-              >
-                {({ isActive }) => (
-                  <>
-                    <span className="flex w-[18px] shrink-0 justify-center">
-                      <Icon name={item.icon} size={16} strokeWidth={2.1} />
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-left">
-                      {item.label}
-                    </span>
-                    {item.badge && (
-                      <span
-                        className={cn(
-                          "rounded-pill px-[7px] py-0.5 font-mono text-[10px] font-bold",
-                          isActive
-                            ? "bg-accent-grad text-white"
-                            : "bg-bd text-muted",
-                        )}
-                      >
-                        {item.badge}
+            {group.items.map((item) => {
+              // Badges are live counts (useSidebarStats), never the
+              // hardcoded fixture values the handoff shipped. A count that
+              // hasn't loaded yet (or failed) renders no badge at all rather
+              // than a stale or invented number.
+              const liveCount = badgeFor[item.to];
+              const badge =
+                liveCount !== undefined && liveCount !== null
+                  ? String(liveCount)
+                  : undefined;
+              return (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.end}
+                  onClick={onNavigate}
+                  data-surface
+                  className={({ isActive }) =>
+                    cn(
+                      "flex w-full items-center gap-2.5 rounded-[11px] border px-2.5 py-[9px]",
+                      "text-left text-[13px] font-semibold",
+                      isActive
+                        ? "border-pb bg-pt text-p-on"
+                        : "border-transparent bg-transparent text-muted hover:bg-bd3",
+                    )
+                  }
+                >
+                  {({ isActive }) => (
+                    <>
+                      <span className="flex w-[18px] shrink-0 justify-center">
+                        <Icon name={item.icon} size={16} strokeWidth={2.1} />
                       </span>
-                    )}
-                  </>
-                )}
-              </NavLink>
-            ))}
+                      <span className="min-w-0 flex-1 truncate text-left">
+                        {item.label}
+                      </span>
+                      {badge && (
+                        <span
+                          className={cn(
+                            "rounded-pill px-[7px] py-0.5 font-mono text-[10px] font-bold",
+                            isActive
+                              ? "bg-accent-grad text-white"
+                              : "bg-bd text-muted",
+                          )}
+                        >
+                          {badge}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </NavLink>
+              );
+            })}
           </div>
         ))}
       </nav>
 
-      {/* 4. Footer. */}
+      {/* 4. Footer.
+          The handoff's status card said "ALL SYSTEMS NOMINAL" and "2 agents
+          online" unconditionally — there is no agent-heartbeat concept on
+          the hub to back that, and it would be a false claim. This reports
+          only what the hub actually knows: the live connection count. */}
       <div className="mt-auto pt-3.5">
         <div className="flex flex-col gap-[9px] rounded-card border border-bd bg-card p-3.5">
           <div className="flex items-center gap-2">
             <span className="size-[7px] shrink-0 animate-pulse-dot rounded-full bg-ok shadow-[0_0_8px_var(--ok)]" />
             <span className="text-[11px] font-bold tracking-[.06em] text-txt3">
-              ALL SYSTEMS NOMINAL
+              HUB CONNECTED
             </span>
           </div>
           <div className="text-[11.5px] leading-[1.45] text-faint">
-            3 integrations connected · 2 agents online
+            {stats.connectionCount === null
+              ? "Checking integrations…"
+              : stats.connectionCount === 1
+                ? "1 integration connected"
+                : `${stats.connectionCount} integrations connected`}
           </div>
         </div>
 
