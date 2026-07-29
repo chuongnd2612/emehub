@@ -38,7 +38,7 @@ from app.config import settings
 from app.db import init_db
 from app.deps_auth import require_principal, require_user
 from app.logging import logger, setup_logging
-from app.routers import audit, auth, health, me, projects, tickets
+from app.routers import audit, auth, credentials, health, me, projects, tickets
 from app.security import auth_guard
 
 VERSION = "0.1.0"
@@ -56,6 +56,11 @@ ROUTERS = (
     (auth, MIXED),
     (me, CONTRACT),
     (audit, CONTRACT),
+    # CONTRACT because `/credentials/claude/resolve`, `/refreshed` and `/usage`
+    # are called by an agent with its own token; every management endpoint in
+    # that router declares its own require_user/require_admin on top, so an
+    # agent token can fetch a credential but cannot manage one.
+    (credentials, CONTRACT),
     # CONTRACT: GET /projects, GET …/config, GET …/knowledge and PATCH …/knowledge
     # are called by an agent with its own token (aud: "qagent"). The router's
     # non-contract writes each add Depends(require_user) to stay hub-only.
