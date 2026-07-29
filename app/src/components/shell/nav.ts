@@ -93,6 +93,12 @@ export const ROUTE_HEADER: Record<string, HeaderContent> = {
     title: "Settings",
     subtitle: "Appearance, workspace defaults and notifications",
   },
+  // Not in the handoff's nav — the account screen has no design and is reached
+  // from the sidebar user chip, not the nav list. It still needs a header.
+  "/app/profile": {
+    title: "Your account",
+    subtitle: "Personal details, password and two-factor authentication",
+  },
 };
 
 /** Resolve the fallback header for a pathname (`/app/projects/:id` → Projects). */

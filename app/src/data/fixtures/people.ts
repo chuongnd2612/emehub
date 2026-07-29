@@ -1,15 +1,12 @@
-// Prototype `MEMBERS`, `ROLES`, `INVITES`, typed.
+// Prototype `ROLES` and `INVITES`, typed.
+//
+// The prototype's `MEMBERS` array is GONE: `getMembers()` now reads
+// `GET /auth/users`, so a fixture member list could only ever be rendered as if
+// it were real — the one thing the empty/error-state rules forbid.
+// `CURRENT_USER` is gone for the same reason: the signed-in principal comes
+// from `store/auth.ts`, which holds what `/auth/me` returned.
 
-import type { Invitation, Member, Role } from "../types";
-
-export const MEMBERS: Member[] = [
-  { name: "Emre Kaya", email: "emre.kaya@emesoft.net", role: "Owner", lastActive: "active now", initials: "EK", credential: "shared", credentialId: "sc1" },
-  { name: "Ayse Demir", email: "ayse.demir@emesoft.net", role: "Admin", lastActive: "12m ago", initials: "AD", credential: "shared", credentialId: "sc1" },
-  { name: "Mert Yilmaz", email: "mert.yilmaz@emesoft.net", role: "Member", lastActive: "2h ago", initials: "MY", credential: "personal", credentialId: null },
-  { name: "Selin Kaya", email: "selin.kaya@emesoft.net", role: "Member", lastActive: "yesterday", initials: "SK", credential: "shared", credentialId: "sc2" },
-  { name: "Jakub Novak", email: "j.novak@emesoft.net", role: "Member", lastActive: "3d ago", initials: "JN", credential: "shared", credentialId: "sc1" },
-  { name: "Lena Braun", email: "lena.braun@partner.io", role: "Viewer", lastActive: "1w ago", initials: "LB", credential: "none", credentialId: null },
-];
+import type { Invitation, Role } from "../types";
 
 export const ROLES: Role[] = [
   {
@@ -43,11 +40,3 @@ export const INVITATIONS: Invitation[] = [
   { email: "qa.contractor@partner.io", role: "Viewer", sent: "5d ago", by: "Emre Kaya" },
   { email: "tolga.sen@emesoft.net", role: "Member", sent: "1w ago", by: "Ayse Demir" },
 ];
-
-/** The signed-in user shown in the sidebar chip. */
-export const CURRENT_USER = {
-  name: "Emre Kaya",
-  initials: "EK",
-  role: "Owner · EMESOFT",
-  email: "emre.kaya@emesoft.net",
-};

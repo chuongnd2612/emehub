@@ -1,8 +1,9 @@
 // Typed entities for every object the handoff's screens render.
 //
-// Nothing here is fetched from a real endpoint yet — `data/index.ts` resolves
-// all of it from `data/fixtures/`. The shapes are the contract wave-2 screens
-// code against, so swapping in the real API is a change to index.ts only.
+// Identity is now fetched for real (`data/auth.ts`, `data/people.ts`); the
+// rest still resolves from `data/fixtures/` behind a `// STUB (no endpoint
+// yet):` marker. The shapes are the contract the screens code against, so
+// swapping a stub for a real call stays a change inside `data/`.
 
 /* ── Providers & agents ──────────────────────────────────────────────────── */
 
@@ -261,15 +262,38 @@ export interface Integration {
 
 /* ── People & access ─────────────────────────────────────────────────────── */
 
+/**
+ * The four roles the handoff's Roles grid describes.
+ *
+ * The hub only *stores* two of them (`admin` | `member` — `api/app/models/
+ * user.py › USER_ROLES`), so only "Admin" and "Member" round-trip through
+ * `PATCH /auth/users/{id}`. "Owner" and "Viewer" exist in the design and in the
+ * (stubbed) Roles grid; `ASSIGNABLE_ROLES` in `data/people.ts` is the subset the
+ * API will actually accept, and the member role picker offers only that subset.
+ */
 export type RoleName = "Owner" | "Admin" | "Member" | "Viewer";
 
 export interface Member {
+  /** Hub user id — the path parameter for `PATCH|DELETE /auth/users/{id}`. */
+  id: number;
   name: string;
   email: string;
   role: RoleName;
+  /** Relative last-seen, e.g. "active now" / "3d ago" / "never". */
   lastActive: string;
   initials: string;
-  /** Which Claude credential this member runs on. */
+  /** Deactivated members still list, greyed, so an admin can re-enable them. */
+  isActive: boolean;
+  /** Live sessions for this member, from `AdminUserOut.sessionCount`. */
+  sessionCount: number;
+  /**
+   * Which Claude credential this member runs on.
+   *
+   * STUB (no endpoint yet): nothing in the API maps a user to a Claude
+   * credential, so this is always "none" for live rows. Kept on the type
+   * because the handoff's Members table has a CLAUDE CREDENTIAL column and the
+   * Roles fixtures still populate it.
+   */
   credential: "shared" | "personal" | "none";
   /** SharedCredential id when `credential === 'shared'`. */
   credentialId: string | null;
@@ -291,14 +315,58 @@ export interface Invitation {
 
 /* ── Authentication ──────────────────────────────────────────────────────── */
 
+/**
+ * One row of `GET /auth/sessions`.
+ *
+ * The wire shape is `{id, userAgent, ip, createdAt, lastSeenAt, expiresAt,
+ * current}` — there is no geo lookup on the hub, so the prototype's "where"
+ * column has no source and is gone. `device` and `when` are derived client-side
+ * from `userAgent` / `lastSeenAt` (see `data/auth.ts`).
+ */
 export interface Session {
   id: string;
+  /** Derived from the User-Agent, e.g. "Windows · Chrome". */
   device: string;
-  where: string;
+  /** The raw User-Agent, shown as the row's tooltip. */
+  userAgent: string;
   ip: string;
+  /** Relative last-seen, e.g. "active now" / "26m ago". */
   when: string;
+  /** Relative expiry, e.g. "in 30 days". Empty when the session has none. */
+  expires: string;
   current: boolean;
 }
+
+/* ── The signed-in principal ─────────────────────────────────────────────── */
+
+/** `UserOut` from the hub — the principal every authenticated call resolves. */
+export interface AuthUser {
+  id: number;
+  email: string;
+  firstName: string;
+  lastName: string;
+  /** Raw hub role: "admin" | "member". Use `roleName()` for the display name. */
+  role: string;
+  isActive: boolean;
+  totpEnabled: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+  lastActive: string | null;
+}
+
+/** Enrolment material from `POST /auth/2fa/setup`. Contains the TOTP secret. */
+export interface TotpSetup {
+  secret: string;
+  otpauthUri: string;
+}
+
+/**
+ * The two shapes `POST /auth/login` can answer with. Discriminated on `kind`
+ * so a caller cannot forget the MFA branch.
+ */
+export type LoginOutcome =
+  | { kind: "authed"; user: AuthUser }
+  | { kind: "mfa"; mfaToken: string };
 
 export interface ApiKey {
   id: string;

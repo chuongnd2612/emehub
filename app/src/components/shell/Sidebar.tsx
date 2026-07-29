@@ -8,9 +8,10 @@
 
 import { NavLink, useNavigate } from "react-router-dom";
 
-import { Icon, toast } from "@/components/ui";
+import { Icon } from "@/components/ui";
 import { useLogoTilt } from "@/hooks/useTilt";
 import { cn } from "@/lib/cn";
+import { displayName, useAuth, userInitials, userRole } from "@/store/auth";
 import { NAV_GROUPS } from "./nav";
 
 export interface SidebarProps {
@@ -21,6 +22,8 @@ export interface SidebarProps {
 export function Sidebar({ onNavigate }: SidebarProps) {
   const navigate = useNavigate();
   const logo = useLogoTilt<HTMLDivElement>();
+  const user = useAuth((s) => s.user);
+  const role = userRole(user);
 
   return (
     <aside
@@ -146,30 +149,31 @@ export function Sidebar({ onNavigate }: SidebarProps) {
           </div>
         </div>
 
+        {/* The signed-in principal, from `store/auth.ts` (i.e. what /auth/me
+            returned) — never a fixture. The prototype's chip only fired a
+            toast; it now opens the account screen. */}
         <button
           type="button"
           data-surface
-          onClick={() =>
-            toast(
-              "Signed in as Emre Kaya",
-              "Owner of the EMESOFT workspace",
-              "info",
-            )
-          }
+          aria-label="Open your account"
+          onClick={() => {
+            onNavigate();
+            navigate("/app/profile");
+          }}
           className={cn(
             "mt-2.5 flex w-full cursor-pointer items-center gap-2.5 rounded-[13px]",
             "border border-bd bg-card px-2.5 py-[9px] hover:bg-bd3",
           )}
         >
           <span className="flex size-[30px] shrink-0 items-center justify-center rounded-[10px] bg-accent-grad text-[12px] font-extrabold text-white">
-            EK
+            {userInitials(user)}
           </span>
           <span className="min-w-0 flex-1 text-left">
             <span className="block truncate text-[12.5px] font-bold text-txt2">
-              Emre Kaya
+              {displayName(user) || "Your account"}
             </span>
             <span className="block truncate text-[10.5px] text-faint">
-              Owner · EMESOFT
+              {role ? `${role} · EMESOFT` : "EMESOFT"}
             </span>
           </span>
           <Icon

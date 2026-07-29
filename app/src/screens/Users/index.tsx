@@ -8,10 +8,15 @@
 // The Invite modal itself is mounted globally (`components/modals/ModalHost`)
 // because the Overview quick action raises it too; this screen just re-reads
 // the list whenever that modal closes.
+//
+// Members is live (`GET /auth/users`). Roles and Invitations are NOT: the hub
+// has no roles resource and no invitation resource, so those two tabs still
+// render fixtures and each says so up front. Rendering fixture data without a
+// label would be presenting it as real, which the design rules forbid.
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Button, Icon } from "@/components/ui";
+import { Button, Icon, Notice } from "@/components/ui";
 import { getInvitations, revokeInvitation, type Invitation } from "@/data";
 import { useUi } from "@/store/ui";
 import { InvitationsList } from "./InvitationsList";
@@ -77,16 +82,37 @@ export default function UsersScreen() {
       />
 
       {tab === "members" && <MembersTable />}
-      {tab === "roles" && <RolesGrid />}
+
+      {tab === "roles" && (
+        <>
+          <Notice tone="warn">
+            Preview data. The hub stores two roles — Admin and Member — and has
+            no permissions resource, so these cards and their checklists are the
+            design, not live configuration.
+          </Notice>
+          <RolesGrid />
+        </>
+      )}
+
       {tab === "invitations" && (
-        <InvitationsList
-          invitations={invitations}
-          onInvite={openInvite}
-          onRevoke={(inv) => {
-            void revokeInvitation(inv.email);
-            setInvitations((prev) => prev.filter((i) => i.email !== inv.email));
-          }}
-        />
+        <>
+          <Notice tone="warn">
+            Preview data. An invitation creates the account straight away, so
+            the hub has nothing pending to list. This shows what this browser
+            has sent plus the seeded examples, and clears on reload — revoking
+            here does not delete the account.
+          </Notice>
+          <InvitationsList
+            invitations={invitations}
+            onInvite={openInvite}
+            onRevoke={(inv) => {
+              void revokeInvitation(inv.email);
+              setInvitations((prev) =>
+                prev.filter((i) => i.email !== inv.email),
+              );
+            }}
+          />
+        </>
       )}
     </div>
   );

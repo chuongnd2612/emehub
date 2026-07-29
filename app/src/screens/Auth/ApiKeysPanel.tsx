@@ -3,11 +3,17 @@
 // SECURITY (CLAUDE.md › "Never log or return a secret"): the data layer only
 // ever carries the visible PREFIX of a key. Rows render masked by default and
 // the remainder is only materialised behind an explicit Reveal.
+//
+// STILL A STUB. The hub has no API-key resource at all — no list, no create, no
+// revoke (verified against `/api/openapi.json`). These rows are the design's
+// fixtures and the panel says so, because rendering them unlabelled would be
+// presenting invented keys as real ones.
 
 import { useEffect, useState } from "react";
 import {
   Button,
   Icon,
+  Notice,
   Table,
   TableCell,
   TableEmpty,
@@ -49,6 +55,12 @@ export function ApiKeysPanel() {
 
   return (
     <div className="flex flex-col gap-3.5">
+      <Notice tone="warn">
+        Preview data. The hub does not issue API keys yet, so none of these are
+        real and Create key is not wired to anything. Use a signed-in session
+        for machine access until the endpoint lands.
+      </Notice>
+
       <div className="flex items-center gap-3">
         <span className="text-[12.5px] font-semibold text-muted">
           {keys.length} active keys · rotate every 90 days

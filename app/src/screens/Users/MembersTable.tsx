@@ -1,13 +1,28 @@
-// Handoff § 8 › Members — columns `36px | 1.05fr | 1.3fr | 170px | 110px |
-// 130px`, header `MEMBER · EMAIL · CLAUDE CREDENTIAL · LAST ACTIVE · ROLE`.
-// The credential cell is a 7px dot + label; the role cell is a badge, and
-// non-owners open a role dropdown.
+// Handoff § 8 › Members — the credential cell is a 7px dot + label; the role
+// cell is a badge, and a changeable role opens a dropdown.
+//
+// Live against `GET /auth/users` and `PATCH /auth/users/{id}`.
+//
+// Three departures from the prototype, all forced by what the hub actually
+// stores (see `data/people.ts` for the reasoning):
+//   • The role picker offers Admin and Member only. Owner and Viewer are design
+//     vocabulary with no storage behind them, and PATCHing either 400s.
+//   • The CLAUDE CREDENTIAL column reads "Not assigned" on every row: nothing
+//     on the hub maps a user to a credential. It stays because the column is in
+//     the design and the mapping is coming; it does not fabricate an answer.
+//   • A DEVICES column is added, because `AdminUserOut.sessionCount` is real.
+//
+// The endpoint is admin-only. A member gets a 403, which surfaces as its own
+// error state rather than an empty table.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+
 import {
   Dropdown,
+  ErrorState,
   Glyph,
   Icon,
+  LoadingState,
   Pill,
   Table,
   TableCell,
@@ -17,18 +32,17 @@ import {
   type PillTone,
 } from "@/components/ui";
 import {
+  ASSIGNABLE_ROLES,
   changeRole,
   getMembers,
-  getSharedCredentials,
   type Member,
   type RoleName,
-  type SharedCredential,
 } from "@/data";
+import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import { useAuth } from "@/store/auth";
 
-const COLUMNS = "36px minmax(0,1.05fr) minmax(0,1.3fr) 170px 110px 130px";
-
-const ROLES: RoleName[] = ["Owner", "Admin", "Member", "Viewer"];
+const COLUMNS = "36px minmax(0,1.05fr) minmax(0,1.3fr) 150px 110px 90px 130px";
 
 const ROLE_TONE: Record<RoleName, PillTone> = {
   Owner: "accent",
@@ -37,43 +51,94 @@ const ROLE_TONE: Record<RoleName, PillTone> = {
   Viewer: "neutral",
 };
 
-/** Dot + label for the Claude credential cell. Tokens only — no hex. */
-function credentialCell(
-  member: Member,
-  shared: SharedCredential[],
-): { dot: string; text: string; label: string } {
-  if (member.credential === "personal") {
-    return { dot: "bg-dagent", text: "text-cyan-soft", label: "Personal token" };
-  }
-  if (member.credential === "none") {
-    return { dot: "bg-bd2", text: "text-label", label: "Not assigned" };
-  }
-  const match = shared.find((c) => c.id === member.credentialId);
-  return {
-    dot: "bg-claude",
-    text: "text-txt3",
-    label: match ? match.label : "Shared account",
-  };
-}
-
 export function MembersTable() {
-  const [members, setMembers] = useState<Member[]>([]);
-  const [shared, setShared] = useState<SharedCredential[]>([]);
+  const [members, setMembers] = useState<Member[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [forbidden, setForbidden] = useState(false);
+  const [busyId, setBusyId] = useState<number | null>(null);
 
-  useEffect(() => {
-    let live = true;
-    void getMembers().then((rows) => live && setMembers(rows));
-    void getSharedCredentials().then((rows) => live && setShared(rows));
-    return () => {
-      live = false;
-    };
+  const me = useAuth((s) => s.user);
+  const refreshUser = useAuth((s) => s.refreshUser);
+
+  const load = useCallback(async () => {
+    setError(null);
+    setForbidden(false);
+    try {
+      setMembers(await getMembers());
+    } catch (err) {
+      setMembers(null);
+      if (err instanceof ApiError && err.status === 403) {
+        setForbidden(true);
+        return;
+      }
+      setError(
+        err instanceof ApiError ? err.message : "The hub did not respond.",
+      );
+    }
   }, []);
 
-  const pickRole = (member: Member, role: RoleName) => {
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const pickRole = async (member: Member, role: RoleName) => {
     if (role === member.role) return;
-    void changeRole(member.email, role).then(setMembers);
-    toast("Role updated", `${member.email} is now a ${role}`, "ok");
+    setBusyId(member.id);
+    try {
+      const updated = await changeRole(member.id, role);
+      setMembers(
+        (prev) =>
+          prev?.map((m) =>
+            m.id === updated.id
+              ? // The PATCH response carries no sessionCount; keep the listed one.
+                { ...updated, sessionCount: m.sessionCount }
+              : m,
+          ) ?? null,
+      );
+      toast("Role updated", `${member.email} is now a ${role}`, "ok");
+      // Demoting yourself changes what you may do next — resync the principal.
+      if (me && me.id === member.id) void refreshUser();
+    } catch (err) {
+      toast(
+        "Could not change that role",
+        err instanceof ApiError ? err.message : "The hub did not respond.",
+        "warn",
+      );
+    } finally {
+      setBusyId(null);
+    }
   };
+
+  if (forbidden) {
+    return (
+      <Table>
+        <ErrorState
+          title="You need admin access to see members"
+          detail="Only workspace admins can list accounts. Ask an admin to change your role, or open Authentication to manage your own session."
+        />
+      </Table>
+    );
+  }
+
+  if (error) {
+    return (
+      <Table>
+        <ErrorState
+          title="Could not load workspace members"
+          detail={error}
+          onRetry={() => void load()}
+        />
+      </Table>
+    );
+  }
+
+  if (members === null) {
+    return (
+      <Table>
+        <LoadingState label="Loading members…" />
+      </Table>
+    );
+  }
 
   return (
     <Table>
@@ -83,78 +148,85 @@ export function MembersTable() {
         <span>EMAIL</span>
         <span>CLAUDE CREDENTIAL</span>
         <span>LAST ACTIVE</span>
+        <span>DEVICES</span>
         <span className="text-right">ROLE</span>
       </TableRow>
 
       {members.length === 0 ? (
         <TableEmpty icon="users" message="No members in this workspace yet" />
       ) : (
-        members.map((m) => {
-          const cred = credentialCell(m, shared);
-          const locked = m.role === "Owner";
-          return (
-            <TableRow key={m.email} columns={COLUMNS}>
-              <TableCell>
-                <Glyph size={34} fill="accent" label={m.initials} />
-              </TableCell>
-              <TableCell className="text-[13.5px] font-bold text-txt2">
-                {m.name}
-              </TableCell>
-              <TableCell className="text-[12.5px] text-muted">
-                {m.email}
-              </TableCell>
-              <TableCell>
-                <span
-                  className={cn("size-[7px] shrink-0 rounded-full", cred.dot)}
-                />
-                <span className={cn("truncate text-[12px]", cred.text)}>
-                  {cred.label}
-                </span>
-              </TableCell>
-              <TableCell className="text-[12px] text-label">
-                {m.lastActive}
-              </TableCell>
-              <TableCell align="end">
-                {locked ? (
-                  <Pill tone={ROLE_TONE[m.role]} size="sm">
-                    {m.role}
-                  </Pill>
-                ) : (
-                  <Dropdown<RoleName>
-                    ddKey={`role:${m.email}`}
-                    width={170}
-                    align="end"
-                    value={m.role}
-                    items={ROLES.map((r) => ({ value: r, label: r }))}
-                    onSelect={(role) => pickRole(m, role)}
-                    trigger={({ ref, toggle }) => (
-                      <button
-                        ref={ref}
-                        type="button"
-                        onClick={toggle}
-                        className={cn(
-                          "flex cursor-pointer items-center gap-[7px] rounded-control-lg",
-                          "border border-bd2 bg-card2 px-[11px] py-1.5",
-                          "transition-colors duration-200 hover:bg-bd3",
-                        )}
-                      >
-                        <Pill tone={ROLE_TONE[m.role]} size="sm">
-                          {m.role}
-                        </Pill>
-                        <Icon
-                          name="chevronDown"
-                          size={13}
-                          strokeWidth={2.4}
-                          className="text-faint"
-                        />
-                      </button>
+        members.map((m) => (
+          <TableRow
+            key={m.id}
+            columns={COLUMNS}
+            className={cn(!m.isActive && "opacity-55")}
+          >
+            <TableCell>
+              <Glyph size={34} fill="accent" label={m.initials} />
+            </TableCell>
+            <TableCell className="text-[13.5px] font-bold text-txt2">
+              <span className="truncate">{m.name}</span>
+              {!m.isActive && (
+                <Pill tone="neutral" size="sm">
+                  Deactivated
+                </Pill>
+              )}
+              {me?.id === m.id && (
+                <Pill tone="accent" size="sm">
+                  You
+                </Pill>
+              )}
+            </TableCell>
+            <TableCell className="text-[12.5px] text-muted">{m.email}</TableCell>
+            <TableCell>
+              {/* STUB (no endpoint yet): no user → Claude credential mapping. */}
+              <span className="size-[7px] shrink-0 rounded-full bg-bd2" />
+              <span className="truncate text-[12px] text-label">
+                Not assigned
+              </span>
+            </TableCell>
+            <TableCell className="text-[12px] text-label">
+              {m.lastActive}
+            </TableCell>
+            <TableCell mono className="text-muted">
+              {m.sessionCount}
+            </TableCell>
+            <TableCell align="end">
+              <Dropdown<RoleName>
+                ddKey={`role:${m.id}`}
+                width={170}
+                align="end"
+                value={m.role}
+                items={ASSIGNABLE_ROLES.map((r) => ({ value: r, label: r }))}
+                onSelect={(role) => void pickRole(m, role)}
+                trigger={({ ref, toggle }) => (
+                  <button
+                    ref={ref}
+                    type="button"
+                    disabled={busyId === m.id}
+                    onClick={toggle}
+                    className={cn(
+                      "flex cursor-pointer items-center gap-[7px] rounded-control-lg",
+                      "border border-bd2 bg-card2 px-[11px] py-1.5",
+                      "transition-colors duration-200 hover:bg-bd3",
+                      "disabled:cursor-not-allowed disabled:opacity-50",
                     )}
-                  />
+                  >
+                    <Pill tone={ROLE_TONE[m.role]} size="sm">
+                      {m.role}
+                    </Pill>
+                    <Icon
+                      name="chevronDown"
+                      size={13}
+                      strokeWidth={2.4}
+                      className="text-faint"
+                    />
+                  </button>
                 )}
-              </TableCell>
-            </TableRow>
-          );
-        })
+              />
+            </TableCell>
+          </TableRow>
+        ))
       )}
     </Table>
   );

@@ -28,6 +28,24 @@ const CSRF_HEADER = "X-CSRF-Token";
 
 const REFRESH_PATH = "/auth/refresh";
 
+/**
+ * Endpoints where a 401 is the ANSWER, not a stale-token problem.
+ *
+ * `POST /auth/login` answers a wrong password with 401 "Invalid email or
+ * password"; `POST /auth/login/mfa` answers a wrong code the same way. Running
+ * those through the refresh-and-retry path is wrong twice over: it replaces the
+ * hub's message with "Not authenticated", and it fires the unauthenticated
+ * handler — signing out a visitor who was never signed in — on nothing worse
+ * than a typo. Both were observed live before this list existed.
+ */
+const NO_REFRESH_PATHS = new Set([
+  "/auth/login",
+  "/auth/login/mfa",
+  "/auth/request-reset",
+  "/auth/reset",
+  REFRESH_PATH,
+]);
+
 export class ApiError extends Error {
   readonly status: number;
   readonly detail: unknown;
@@ -134,20 +152,47 @@ const send = async (path: string, options: RequestOptions): Promise<Response> =>
  */
 let refreshInFlight: Promise<boolean> | null = null;
 
+/**
+ * `POST /auth/refresh` with the CSRF double-submit the endpoint requires.
+ *
+ * Exported because the session store's `bootstrap()` needs the same call — the
+ * refresh endpoint is the one route whose headers are not derivable from the
+ * generic client, and having two copies of the double-submit is how one of them
+ * ends up wrong. Installs the returned access token as a side effect, so the
+ * caller only has to read `user` off the body.
+ *
+ * Throws `ApiError` on any non-2xx (a missing/rotated cookie is a 401, a
+ * missing CSRF header a 403).
+ */
+export async function refreshSession<T = unknown>(): Promise<T> {
+  const csrf = readCookie(CSRF_COOKIE);
+  const response = await send(REFRESH_PATH, {
+    method: "POST",
+    skipRefresh: true,
+    headers: csrf ? { [CSRF_HEADER]: csrf } : undefined,
+  });
+  const body = await parseBody(response);
+  if (!response.ok) {
+    const detail =
+      body && typeof body === "object" && "detail" in body
+        ? (body as { detail: unknown }).detail
+        : body;
+    throw new ApiError(
+      response.status,
+      detail,
+      typeof detail === "string" ? detail : undefined,
+    );
+  }
+  const token = (body as { accessToken?: string } | null)?.accessToken;
+  if (token) setAccessToken(token);
+  return body as T;
+}
+
 const refreshAccessToken = async (): Promise<boolean> => {
   refreshInFlight ??= (async () => {
     try {
-      const csrf = readCookie(CSRF_COOKIE);
-      const response = await send(REFRESH_PATH, {
-        method: "POST",
-        skipRefresh: true,
-        headers: csrf ? { [CSRF_HEADER]: csrf } : undefined,
-      });
-      if (!response.ok) return false;
-      const body = (await response.json()) as { accessToken?: string };
-      if (!body.accessToken) return false;
-      setAccessToken(body.accessToken);
-      return true;
+      const body = await refreshSession<{ accessToken?: string }>();
+      return Boolean(body?.accessToken);
     } catch {
       return false;
     } finally {
@@ -168,6 +213,10 @@ const refreshAccessToken = async (): Promise<boolean> => {
  * On 401 it refreshes once and retries the original request exactly once — a
  * second 401 means the session is over, so it clears the token, notifies the
  * handler and throws {@link UnauthenticatedError}. It never loops.
+ *
+ * The public auth endpoints in {@link NO_REFRESH_PATHS} are exempt: their 401
+ * is a real answer and is surfaced as a plain {@link ApiError} carrying the
+ * hub's own message.
  */
 export async function apiFetch<T = unknown>(
   path: string,
@@ -175,7 +224,11 @@ export async function apiFetch<T = unknown>(
 ): Promise<T> {
   let response = await send(path, options);
 
-  if (response.status === 401 && !options.skipRefresh && path !== REFRESH_PATH) {
+  if (
+    response.status === 401 &&
+    !options.skipRefresh &&
+    !NO_REFRESH_PATHS.has(path)
+  ) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       response = await send(path, { ...options, skipRefresh: true });
