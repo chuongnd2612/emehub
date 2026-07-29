@@ -3,18 +3,31 @@
 //
 // Lives here rather than under screens/Users because the Overview quick action
 // opens it too — it is mounted once by `ModalHost`.
+//
+// Live against `POST /auth/users/invite`, which creates the account with an
+// unusable password and returns a one-shot reset token. Two consequences the
+// prototype does not model:
+//   • It can fail — 409 on a duplicate email, 403 if you are not an admin — so
+//     the modal no longer closes optimistically on submit.
+//   • Only Admin and Member are offered. The hub stores no other role
+//     (`data/people.ts`), and Owner was already excluded by the design.
 
 import { useState } from "react";
-import { Button, Input, Modal, toast } from "@/components/ui";
-import { invite, type Invitation, type RoleName } from "@/data";
 
-/** Owner is never offered on an invitation — ownership is transferred, not sent. */
-const INVITE_ROLES: RoleName[] = ["Admin", "Member", "Viewer"];
+import { Button, Input, Modal, Notice, toast } from "@/components/ui";
+import {
+  ASSIGNABLE_ROLES,
+  invite,
+  type Invitation,
+  type RoleName,
+} from "@/data";
+import { ApiError } from "@/lib/api";
+import { displayName, useAuth } from "@/store/auth";
 
 export interface InviteMemberModalProps {
   open: boolean;
   onClose: () => void;
-  /** Fired once the stub POST resolves, with the created invitation. */
+  /** Fired once the hub confirms, with the created invitation. */
   onInvited?: (invitation: Invitation) => void;
 }
 
@@ -23,30 +36,67 @@ export function InviteMemberModal({
   onClose,
   onInvited,
 }: InviteMemberModalProps) {
+  const me = useAuth((s) => s.user);
+
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<RoleName>("Member");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  /** Dev-only: the hub echoes the redemption link outside production. */
+  const [resetPath, setResetPath] = useState<string | null>(null);
 
-  const send = () => {
-    const address = email.trim() || "teammate@emesoft.net";
-    void invite(address, role).then((inv) => onInvited?.(inv));
+  const close = () => {
+    if (pending) return;
     setEmail("");
+    setError(null);
+    setResetPath(null);
     onClose();
-    toast("Invitation sent", `${address} · ${role}`, "ok");
+  };
+
+  const send = async () => {
+    const address = email.trim();
+    if (pending || !address) return;
+    setPending(true);
+    setError(null);
+    try {
+      const result = await invite(address, role, displayName(me) || "an admin");
+      onInvited?.(result.invitation);
+      toast("Invitation sent", `${result.invitation.email} · ${role}`, "ok");
+      if (result.resetPath) {
+        // Email delivery is a stub on this environment, so keep the modal open
+        // — the link has to be handed over by hand.
+        setResetPath(result.resetPath);
+        setEmail("");
+      } else {
+        close();
+      }
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "The hub did not respond.",
+      );
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={close}
       title="Invite a member"
       subtitle="They will join the EMESOFT workspace and inherit the shared credentials."
       footer={
         <>
-          <Button variant="primary" className="flex-1" onClick={send}>
-            Send invitation
+          <Button
+            variant="primary"
+            className="flex-1"
+            disabled={pending || !email.trim()}
+            onClick={() => void send()}
+          >
+            {pending ? "Sending…" : "Send invitation"}
           </Button>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
+          <Button variant="ghost" disabled={pending} onClick={close}>
+            {resetPath ? "Done" : "Cancel"}
           </Button>
         </>
       }
@@ -54,6 +104,7 @@ export function InviteMemberModal({
       <Input
         label="WORK EMAIL"
         placeholder="name@emesoft.net"
+        type="email"
         autoFocus
         value={email}
         onChange={(e) => setEmail(e.target.value)}
@@ -64,7 +115,7 @@ export function InviteMemberModal({
           ROLE
         </span>
         <div className="flex gap-2">
-          {INVITE_ROLES.map((r) => (
+          {ASSIGNABLE_ROLES.map((r) => (
             <Button
               key={r}
               size="sm"
@@ -76,6 +127,16 @@ export function InviteMemberModal({
           ))}
         </div>
       </div>
+
+      {error && <Notice tone="danger">{error}</Notice>}
+
+      {resetPath && (
+        <Notice tone="info">
+          Email delivery is not wired up on this environment, so the hub returned
+          the invitation link directly. Send it to them:{" "}
+          <code className="font-mono text-[11.5px] break-all">{resetPath}</code>
+        </Notice>
+      )}
     </Modal>
   );
 }
