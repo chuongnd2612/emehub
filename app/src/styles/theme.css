@@ -40,8 +40,28 @@
   --txt3: #c3c3d0;
   --txt4: #a9a9bc;
   --muted: #8b8b9e;
-  --faint: #7a7a8c;
-  --label: #6c6c7e;
+  /* CONTRAST FIX (measured, #26). The handoff's dark `--faint` #7a7a8c and
+     `--label` #6c6c7e measure 3.62-4.42:1 and 2.96-3.84:1 — below AA. Both
+     carry real information (timestamps, table headers, field labels), so
+     neither is decorative, and `--label` is always 9.5-10.5px/700, well under
+     WCAG's large-text threshold, so it gets no exemption either.
+
+     Lifting them independently does not work: the ramp is too compressed at
+     the bottom. Any pair that both clear 4.5:1 lands within ~0.01 luminance of
+     each other AND of `--muted`, turning three tokens into one
+     indistinguishable grey — a worse outcome than the original failure.
+
+     So they are deliberately merged to one accessible value. Little is lost:
+     `--label` is already distinguished from `--faint` by typography
+     (uppercase, 700, .09-.12em tracking) rather than colour, and the ~0.05
+     luminance gap between them was doing almost no work. Both names are kept
+     so the 78 call sites do not churn and a designer can re-split later — if
+     they do, both halves must stay at or above #85859b in lightness.
+
+     #85859b measures 4.85:1 on --pop (the lightest surface either lands on)
+     and 5.48:1 on --bg. --muted stays above at 0.264 luminance. */
+  --faint: #85859b;
+  --label: #85859b;
   --shadow: rgba(0, 0, 0, 0.6);
   --bloom2: rgba(150, 160, 180, 0.2);
   --scroll: rgba(255, 255, 255, 0.09);
