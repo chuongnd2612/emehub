@@ -24,7 +24,7 @@
 // The accordion IS real: it is rendered from the `knowledge` blob
 // (`data/knowledge.ts › knowledgeSections`).
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   AccordionItem,
@@ -43,51 +43,118 @@ import {
 import {
   buildKnowledge,
   getKnowledgeSources,
+  getRepoKnowledge,
   knowledgeSections,
+  type KnowledgeMeta,
   type KnowledgeSource,
   type KnowledgeSourceType,
   type Project,
 } from "@/data";
 import { ApiError } from "@/lib/api";
 import { useUi } from "@/store/ui";
+import { BuildProgress } from "./BuildProgress";
 import { SOURCE_TYPE_CHIP, SOURCE_TYPES, chunkLabel, isBuilt } from "./shared";
 
 /**
- * How often an in-flight build is re-checked. A build is minutes long and the
- * hub caps how many run at once, so a tighter interval would only add load
- * without telling the user anything sooner.
+ * How often an in-flight build is re-checked.
+ *
+ * 2000 ms, matching the interval Q-Agent really polls at — the one part of its
+ * build experience that was never theatre. It is only paid while a build is
+ * running, and it is the *only* thing that ends the loading state (issue #68).
  */
-const POLL_MS = 5000;
+const POLL_MS = 2000;
 
 /**
- * Re-read the project while a build is in flight, so `indexing` settles into
- * `indexed` or `error` without the user reaching for the button.
+ * The whole build lifecycle, in one place, because its three rules are the
+ * point of issue #68 and separating them is how Q-Agent lost them:
+ *
+ * 1. **The loading state ends when the polled status leaves `indexing`.** Never
+ *    on the POST response — that response only means the row was enqueued, and
+ *    Q-Agent closing its overlay on it is why its overlay's duration correlates
+ *    with HTTP latency instead of with the build.
+ * 2. **The success toast fires on real completion.** It is raised by the
+ *    transition `indexing → indexed|error` observed in a poll, so it can only
+ *    happen after the hub has actually written a knowledge base.
+ * 3. **An orphaned row is not a build.** `build.orphaned` says the hub restarted
+ *    while this row was `indexing`; polling stops and the card offers a retry.
+ *
+ * Polling reads the knowledge row directly rather than calling `onReload`, so
+ * the surrounding screen is not thrown back into its loading state twice a
+ * second. `onReload` is called once, when the build settles.
  */
-function useBuildPolling(building: boolean, onReload: () => void) {
+function useBuildLifecycle(project: Project, onReload: () => void) {
+  const [knowledge, setKnowledge] = useState<KnowledgeMeta | null>(
+    project.knowledge,
+  );
+  const [starting, setStarting] = useState(false);
+  const previousStatus = useRef(project.knowledge?.status);
+
+  // A parent re-read (the header's Reload, a route change) is authoritative.
+  useEffect(() => {
+    setKnowledge(project.knowledge);
+    previousStatus.current = project.knowledge?.status;
+  }, [project.knowledge]);
+
+  const building =
+    knowledge?.status === "indexing" && !knowledge.build.orphaned;
+
   useEffect(() => {
     if (!building) return;
-    const timer = window.setInterval(onReload, POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [building, onReload]);
-}
+    let live = true;
+    const timer = window.setInterval(() => {
+      void getRepoKnowledge(project.id, project.repo)
+        .then((next) => {
+          if (live && next) setKnowledge(next);
+        })
+        .catch(() => {
+          /* A dropped poll is not a build failure; the next tick retries. */
+        });
+    }, POLL_MS);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [building, project.id, project.repo]);
 
-/**
- * Start a build and report it. Resolves when the row reaches `indexing`, not
- * when the build finishes — the polling above carries it from there.
- */
-function useStartBuild(project: Project, onReload: () => void) {
-  const [starting, setStarting] = useState(false);
+  // Rules 1 and 2: everything terminal hangs off this observed transition.
+  useEffect(() => {
+    const status = knowledge?.status;
+    const was = previousStatus.current;
+    previousStatus.current = status;
+    if (!status || was !== "indexing" || status === "indexing") return;
 
-  const start = () => {
+    if (status === "error") {
+      toast(
+        "The build failed",
+        knowledge?.lastError || "The hub did not say why.",
+        "warn",
+      );
+    } else {
+      toast(
+        "Project knowledge built",
+        `${project.repo || project.id} is indexed at ${knowledge?.version ?? "v1"}.`,
+        "ok",
+      );
+    }
+    onReload();
+  }, [knowledge, onReload, project.id, project.repo]);
+
+  /**
+   * Start a build. The toast says *started*, because that is all that has
+   * happened: the hub answers 202 with the row at `indexing`, stage `queued`.
+   */
+  const start = useCallback(() => {
     setStarting(true);
     void buildKnowledge(project.id, project.repo)
-      .then(() => {
+      .then((next) => {
         toast(
           "Build started",
           `EmeHub is indexing ${project.repo || project.id}. This takes a few minutes.`,
           "info",
         );
-        onReload();
+        // The enqueue response IS the row, at `indexing`/`queued` — adopting it
+        // starts the stepper without claiming anything was built.
+        setKnowledge(next);
       })
       .catch((error: unknown) => {
         toast(
@@ -97,9 +164,9 @@ function useStartBuild(project: Project, onReload: () => void) {
         );
       })
       .finally(() => setStarting(false));
-  };
+  }, [project.id, project.repo]);
 
-  return { starting, start };
+  return { knowledge, building, starting, start };
 }
 
 /** Handoff › source table — `34px | 2.6fr | 110 | 100 | 120 | 110 | 100`. */
@@ -130,45 +197,51 @@ function TypeChip({
   );
 }
 
-/** Not indexed — the handoff's dashed empty state, with a CTA that works. */
+/**
+ * Not indexed — the handoff's dashed empty state, with a CTA that works.
+ *
+ * While a build is running the dashed panel is replaced by the live stepper:
+ * the handoff's empty state is for "there is nothing here", and during a build
+ * there very much is.
+ */
 function NotIndexed({
   project,
-  onReload,
+  knowledge,
+  building,
+  starting,
+  start,
 }: {
   project: Project;
-  onReload: () => void;
+  knowledge: KnowledgeMeta | null;
+  building: boolean;
+  starting: boolean;
+  start: () => void;
 }) {
-  const knowledge = project.knowledge;
   const failed = knowledge?.status === "error";
-  const building = knowledge?.status === "indexing";
-  const { starting, start } = useStartBuild(project, onReload);
-
-  useBuildPolling(building, onReload);
+  const orphaned =
+    knowledge?.status === "indexing" && knowledge.build.orphaned === true;
 
   return (
     <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col items-center gap-[11px] rounded-[20px] border border-dashed border-bd2 bg-inset px-[30px] py-[48px] text-center">
-        <span className="flex size-[46px] items-center justify-center rounded-glyph-lg border border-pb bg-pt text-ps-text">
-          <Icon name="book" size={22} strokeWidth={2.1} />
-        </span>
-        <div className="text-[15.5px] font-extrabold tracking-[-.02em]">
-          {building ? "A build is in progress" : "No knowledge base yet"}
-        </div>
-        <p className="m-0 max-w-[440px] text-[12.5px] text-pretty text-muted">
-          {building
-            ? "EmeHub is cloning the repository and indexing it. This takes a few minutes; the result appears here on its own."
-            : "Index this repository once and every agent you launch inherits the versioned result."}
-        </p>
-        {building ? (
-          <Button
-            variant="primary"
-            className="mt-[6px] h-auto rounded-button px-[22px] py-3 text-[13.5px]"
-            icon={<Icon name="refresh" size={15} strokeWidth={2.2} />}
-            onClick={onReload}
-          >
-            Check again
-          </Button>
-        ) : (
+      {building || orphaned ? (
+        <BuildProgress
+          build={knowledge!.build}
+          repo={project.repo}
+          onRetry={start}
+          retrying={starting}
+        />
+      ) : (
+        <div className="flex flex-col items-center gap-[11px] rounded-[20px] border border-dashed border-bd2 bg-inset px-[30px] py-[48px] text-center">
+          <span className="flex size-[46px] items-center justify-center rounded-glyph-lg border border-pb bg-pt text-ps-text">
+            <Icon name="book" size={22} strokeWidth={2.1} />
+          </span>
+          <div className="text-[15.5px] font-extrabold tracking-[-.02em]">
+            No knowledge base yet
+          </div>
+          <p className="m-0 max-w-[440px] text-[12.5px] text-pretty text-muted">
+            Index this repository once and every agent you launch inherits the
+            versioned result.
+          </p>
           <Button
             variant="primary"
             className="mt-[6px] h-auto rounded-button px-[22px] py-3 text-[13.5px]"
@@ -178,8 +251,8 @@ function NotIndexed({
           >
             {starting ? "Starting…" : "Build project knowledge"}
           </Button>
-        )}
-      </div>
+        </div>
+      )}
 
       {failed && knowledge?.lastError && (
         <Notice tone="danger">
@@ -205,13 +278,15 @@ export function KnowledgeTab({
   onReload: () => void;
 }) {
   const setModal = useUi((s) => s.setModal);
-  const { starting, start } = useStartBuild(project, onReload);
+  const { knowledge, building, starting, start } = useBuildLifecycle(
+    project,
+    onReload,
+  );
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
   const [openKeys, setOpenKeys] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<KnowledgeSourceType | "All">("All");
 
-  const knowledge = project.knowledge;
   const sections = useMemo(() => knowledgeSections(knowledge), [knowledge]);
 
   useEffect(() => {
@@ -234,12 +309,36 @@ export function KnowledgeTab({
     );
   }, [sources, filter, query]);
 
-  if (!isBuilt(knowledge) || !knowledge) {
-    return <NotIndexed project={project} onReload={onReload} />;
+  // A *rebuild* keeps the built view: the previous knowledge base is still the
+  // truth until the new one lands, so the accordion stays and the stepper goes
+  // above it. Only a first build falls back to the empty state.
+  const rebuilding = building && knowledge?.lastIndexed != null;
+
+  if (!knowledge || (!isBuilt(knowledge) && !rebuilding)) {
+    return (
+      <NotIndexed
+        project={project}
+        knowledge={knowledge}
+        building={building}
+        starting={starting}
+        start={start}
+      />
+    );
   }
 
   return (
     <div className="flex flex-col gap-[14px]">
+      {/* A rebuild of an already-indexed base keeps the accordion visible and
+          puts the live stepper above it — the old knowledge is still the truth
+          until the new one lands. */}
+      {building && (
+        <BuildProgress
+          build={knowledge.build}
+          repo={project.repo}
+          onRetry={start}
+          retrying={starting}
+        />
+      )}
       <GlassCard className="rounded-[20px] p-[22px]">
         <div className="flex items-center gap-[10px]">
           <div className="flex-1">

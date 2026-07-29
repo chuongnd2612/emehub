@@ -95,6 +95,18 @@ class Settings(BaseSettings):
     #: the cap wait their turn with the row left in ``indexing``; they are never
     #: dropped. Raise it only with the container's CPU/disk in mind.
     knowledge_build_concurrency: int = 2
+    #: How often a running build may write its progress back to the row
+    #: (issue #68). A Claude stream emits an event every few hundred
+    #: milliseconds, so persisting each one would mean thousands of UPDATEs per
+    #: build; coalescing to this interval keeps the message live — the UI polls
+    #: at 2s — at a handful of writes per minute. A **stage change always writes
+    #: immediately**: that is the signal, not the noise.
+    knowledge_progress_interval_s: float = 1.5
+    #: After this long with no heartbeat, a row still sitting at ``indexing`` is
+    #: reported as orphaned — whatever was building it is gone. Comfortably above
+    #: both the progress interval and the queue heartbeat, so a merely slow build
+    #: is never called abandoned.
+    knowledge_build_stale_s: int = 120
     #: Directory holding ``<skill>/SKILL.md``. Empty means the repo's own
     #: ``skills/`` (``/app/skills`` in the image — see api/Dockerfile).
     skills_dir: str = ""

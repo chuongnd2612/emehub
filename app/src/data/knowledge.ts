@@ -31,6 +31,8 @@ import { api, ApiError } from "@/lib/api";
 import { relativeTime } from "./humanize";
 import type {
   KnowledgeBody,
+  KnowledgeBuildProgress,
+  KnowledgeBuildStage,
   KnowledgeMeta,
   KnowledgeSection,
   KnowledgeSource,
@@ -56,6 +58,12 @@ interface KnowledgeWire {
   docPath?: string;
   lastError?: string;
   shared?: boolean;
+  buildStage?: string;
+  buildStep?: number;
+  buildTotalSteps?: number;
+  buildMessage?: string;
+  buildStartedAt?: string | null;
+  buildOrphaned?: boolean;
 }
 
 const STATUSES: KnowledgeWireStatus[] = [
@@ -100,6 +108,46 @@ const toBody = (raw: Record<string, unknown> | undefined): KnowledgeBody => {
   };
 };
 
+/** The stage vocabulary, in the order the hub runs them. */
+export const KNOWLEDGE_BUILD_STAGES: KnowledgeBuildStage[] = [
+  "queued",
+  "resolving",
+  "cloning",
+  "analyzing",
+  "writing",
+];
+
+/**
+ * Handoff voice — present participle, sentence case. These are the *fallback*
+ * lines: the hub sends its own `buildMessage`, which during `analyzing` is
+ * whatever Claude is doing at that moment, and that always wins.
+ */
+export const KNOWLEDGE_BUILD_LABELS: Record<KnowledgeBuildStage, string> = {
+  queued: "Waiting for a build slot",
+  resolving: "Resolving the project configuration",
+  cloning: "Cloning the repository",
+  analyzing: "Reading the repository with Claude",
+  writing: "Writing the knowledge base",
+};
+
+const toStage = (raw: string | undefined): KnowledgeBuildStage | "" =>
+  KNOWLEDGE_BUILD_STAGES.find((s) => s === raw) ?? "";
+
+/**
+ * Decode the progress half of the row (issue #68).
+ *
+ * `totalSteps` falls back to the length of the stage list rather than to a
+ * literal, so a hub that grows a sixth stage does not silently render "3 of 5".
+ */
+const toBuild = (wire: KnowledgeWire): KnowledgeBuildProgress => ({
+  stage: toStage(wire.buildStage),
+  step: num(wire.buildStep),
+  totalSteps: num(wire.buildTotalSteps) || KNOWLEDGE_BUILD_STAGES.length,
+  message: wire.buildMessage ?? "",
+  startedAt: wire.buildStartedAt ?? null,
+  orphaned: wire.buildOrphaned === true,
+});
+
 const toMeta = (wire: KnowledgeWire): KnowledgeMeta => ({
   id: wire.id,
   key: wire.key,
@@ -118,6 +166,7 @@ const toMeta = (wire: KnowledgeWire): KnowledgeMeta => ({
   lastError: wire.lastError ?? "",
   shared: wire.shared === true,
   body: toBody(wire.knowledge),
+  build: toBuild(wire),
 });
 
 /** 404 means "no knowledge base", which is a state, not a failure. */

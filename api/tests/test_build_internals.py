@@ -32,6 +32,7 @@ from app.models.knowledge import ProjectKnowledge, compose_key
 from app.models.project_config import ProjectConfig
 from app.services import claude_cli, claude_credentials, knowledge_service, repo_service
 from app.services import workspace_scope as ws
+from tests.conftest import FakeClaudeProcess, stream_events
 
 PASSWORD = "password12345"
 PAT = "ghp_atokenthatmustnotescape0123456789"
@@ -719,23 +720,21 @@ def test_a_successful_build_indexes_the_row_and_writes_artefacts(
     clone = tmp_path / "clone"
     clone.mkdir()
     monkeypatch.setattr(repo_service, "ensure_clone", lambda *a, **k: clone)
+    # The build's CLI call streams now (issue #68), so the stub is a Popen
+    # replaying NDJSON rather than a finished CompletedProcess.
     monkeypatch.setattr(
         subprocess,
-        "run",
-        lambda *a, **k: _Completed(
-            json.dumps(
-                {
-                    "result": json.dumps(
-                        {
-                            "branch": "main",
-                            "stack": ["React", "FastAPI"],
-                            "routes": [{"path": "/login", "auth_required": False}],
-                            "confidence": 93,
-                        }
-                    ),
-                    "usage": {"input_tokens": 10, "output_tokens": 5},
-                    "total_cost_usd": 0.01,
-                }
+        "Popen",
+        lambda *a, **k: FakeClaudeProcess(
+            stream_events(
+                json.dumps(
+                    {
+                        "branch": "main",
+                        "stack": ["React", "FastAPI"],
+                        "routes": [{"path": "/login", "auth_required": False}],
+                        "confidence": 93,
+                    }
+                )
             )
         ),
     )

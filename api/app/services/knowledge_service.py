@@ -29,6 +29,13 @@ non-JSON output — lands the row in ``error`` with a ``last_error`` a human can
 act on. Nothing propagates out of the worker thread, and nothing that reaches
 ``last_error`` has been near a PAT (``repo_service`` scrubs; see there).
 
+**Progress is recorded, not performed** (issue #68). Every stage below is
+written to the row immediately *before* the work it names begins, and the Claude
+stage — most of the wall time — updates a live message from the CLI's own event
+stream. Nothing ticks on a timer. See :class:`BuildProgress` for the two write
+rules, and :func:`is_orphaned` for how a row abandoned by a dead container is
+told apart from one that is merely slow.
+
 ``PUT .../knowledge`` **stays** (:func:`apply_build_result`). QAgent builds its
 own knowledge and reports it, and the hub becoming *a* builder does not make it
 the only one.
@@ -61,8 +68,10 @@ and ``source``; selectors additionally carry the ``strategy`` that worked.
 from __future__ import annotations
 
 import json
+import re
 import threading
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -72,12 +81,20 @@ from app.config import settings
 from app.db import utcnow
 from app.logging import logger
 from app.models.knowledge import (
+    BUILD_MESSAGE_LIMIT,
+    BUILD_STAGE_ANALYZING,
+    BUILD_STAGE_CLONING,
+    BUILD_STAGE_LABELS,
+    BUILD_STAGE_QUEUED,
+    BUILD_STAGE_RESOLVING,
+    BUILD_STAGE_WRITING,
     KNOWLEDGE_STATUSES,
     STATUS_ERROR,
     STATUS_INDEXED,
     STATUS_INDEXING,
     STATUS_NOT_INDEXED,
     ProjectKnowledge,
+    build_step,
     compose_key,
 )
 from app.models.user import User
@@ -217,6 +234,9 @@ def apply_build_result(
             row.needs_refresh = False
             row.last_error = ""
         row.status = status
+        if status != STATUS_INDEXING:
+            # Whoever built it, the build is over — the stepper must stop.
+            clear_progress(row)
     if knowledge is not None:
         row.knowledge = knowledge
     if confidence is not None:
@@ -393,16 +413,237 @@ def start_build(row_id: int) -> bool:
     return True
 
 
+# ------------------------------------------------------------- progress (#68)
+#
+# A build used to write the row exactly twice — the flip to `indexing` and the
+# terminal status — so for the minutes in between there was nothing true to
+# show. These columns fix that, and the two rules below are what keep them from
+# becoming a different kind of lie.
+
+#: How often a *queued* worker touches its heartbeat while blocked on the
+#: semaphore. Waiting is real work being deferred, not a dead row, and the
+#: orphan test has to be able to tell the difference.
+_QUEUE_HEARTBEAT_S = 10.0
+
+#: Token-shaped runs, redacted from a live message before it is stored.
+#:
+#: The message is derived from Claude's own stream, and Claude is reading a
+#: clone whose ``.git/config`` still carries the authenticated remote URL. The
+#: structural rule in ``repo_service.redact`` catches that URL form; this catches
+#: a token quoted bare, with no ``@`` to match on. Known prefixes first, then any
+#: long opaque run — a 40-character unbroken token is not something a status line
+#: like "Reading …/README.md" ever legitimately contains.
+_TOKENISH = re.compile(
+    r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9\-_]{16,}"
+    r"|sk-[A-Za-z0-9\-_]{16,}|[A-Za-z0-9_\-]{40,})\b"
+)
+
+
+def scrub_progress_message(text: str) -> str:
+    """Make a stream-derived line safe to store and return. Never raises.
+
+    Three passes, in order: strip embedded credentials (structural, then
+    token-shaped), collapse whitespace so a multi-line tool argument cannot
+    break the UI's single row, and truncate to the column width.
+    """
+    from app.services.repo_service import redact
+
+    try:
+        cleaned = _TOKENISH.sub("***", redact(str(text or "")))
+    except Exception:  # noqa: BLE001 - a cosmetic line never breaks a build
+        return ""
+    return " ".join(cleaned.split())[:BUILD_MESSAGE_LIMIT]
+
+
+class BuildProgress:
+    """Coalesced, DB-backed progress for one build.
+
+    Two write rules, and the split matters:
+
+    * **A stage change writes immediately.** There are five of them in a build
+      that lasts minutes; they are the signal, and delaying one would mean the
+      stepper lags the work it is describing.
+    * **A message is throttled.** ``stream-json`` emits an event every few
+      hundred milliseconds, so persisting each would be thousands of UPDATEs per
+      build for a line nobody can read that fast. A message is written only when
+      it *materially changed* **and** ``knowledge_progress_interval_s`` has
+      elapsed since the last write — the UI polls at 2s, so anything finer is
+      load without information.
+
+    Writes go through the build's own session. Nothing else is pending on it at
+    any point a progress write happens (the row's own mutations all land in
+    :func:`apply_build`, after the last one), so the commit is the progress row
+    and nothing else.
+    """
+
+    def __init__(self, db: Session, row_id: int, *, interval: float | None = None) -> None:
+        self.db = db
+        self.row_id = row_id
+        self.interval = (
+            float(settings.knowledge_progress_interval_s) if interval is None else interval
+        )
+        #: Number of progress UPDATEs actually committed — the throttle, observable.
+        self.writes = 0
+        self._stage = ""
+        self._message = ""
+        self._last_write = 0.0
+
+    # -- the two rules -----------------------------------------------------
+    def stage(self, stage: str, message: str | None = None) -> None:
+        """Enter ``stage``. Always written, never coalesced."""
+        text = BUILD_STAGE_LABELS.get(stage, "") if message is None else message
+        self._persist(stage, text)
+
+    def message(self, text: str) -> None:
+        """Update the live line, subject to the throttle."""
+        cleaned = scrub_progress_message(text)
+        if not cleaned or cleaned == self._message:
+            return
+        if time.monotonic() - self._last_write < self.interval:
+            return
+        self._persist(self._stage, cleaned)
+
+    def heartbeat(self) -> None:
+        """Say "still alive" without changing what is displayed."""
+        self._persist(self._stage, self._message, touch_only=True)
+
+    def on_claude_event(self, event: dict) -> None:
+        """``claude_cli`` stream handler — one decoded event to one live line."""
+        from app.services.claude_cli import describe_event
+
+        described = describe_event(event)
+        if described:
+            self.message(described)
+
+    # -- the write ---------------------------------------------------------
+    def _persist(self, stage: str, message: str, *, touch_only: bool = False) -> None:
+        try:
+            row = self.db.get(ProjectKnowledge, self.row_id)
+            if row is None:
+                return
+            if not touch_only:
+                row.build_stage = stage
+                row.build_step = build_step(stage)
+                row.build_message = message[:BUILD_MESSAGE_LIMIT]
+            row.build_heartbeat_at = utcnow()
+            self.db.commit()
+        except Exception as exc:  # noqa: BLE001 - progress never fails a build
+            logger.warning("Could not record build progress: %s", type(exc).__name__)
+            try:
+                self.db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        self._stage = stage
+        self._message = message
+        self._last_write = time.monotonic()
+        self.writes += 1
+
+
+def begin_progress(db: Session, row_id: int, *, stage: str = BUILD_STAGE_QUEUED) -> None:
+    """Stamp ``build_started_at`` and the opening stage. Never raises.
+
+    Separate from :class:`BuildProgress` because it runs on a *transient*
+    session before the worker has one: the queue phase must not hold a database
+    connection while it blocks (see :func:`_run_build`).
+    """
+    try:
+        row = db.get(ProjectKnowledge, row_id)
+        if row is None:
+            return
+        row.build_stage = stage
+        row.build_step = build_step(stage)
+        row.build_message = BUILD_STAGE_LABELS.get(stage, "")
+        row.build_started_at = utcnow()
+        row.build_heartbeat_at = utcnow()
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not open build progress: %s", type(exc).__name__)
+
+
+def touch_queue_heartbeat(db: Session, row_id: int) -> None:
+    """Refresh the heartbeat of a build still blocked on the semaphore.
+
+    Only the heartbeat: the stage stays ``queued`` and ``build_started_at`` keeps
+    the moment the worker started waiting, because that *is* when the build
+    began from the user's point of view.
+    """
+    try:
+        row = db.get(ProjectKnowledge, row_id)
+        if row is None:
+            return
+        row.build_heartbeat_at = utcnow()
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not refresh a queued build heartbeat: %s", type(exc).__name__)
+
+
+def clear_progress(row: ProjectKnowledge) -> None:
+    """Blank the progress fields on a settled row. Caller commits.
+
+    ``build_started_at`` is deliberately **kept**: it is the last build's start
+    time, which is worth showing next to ``last_indexed``, and blanking it would
+    also blank half the orphan test for a row that failed rather than finished.
+    """
+    row.build_stage = ""
+    row.build_step = 0
+    row.build_message = ""
+    row.build_heartbeat_at = None
+
+
+def is_orphaned(row: ProjectKnowledge) -> bool:
+    """``True`` when this row says ``indexing`` but nothing is building it.
+
+    A container that restarts mid-build leaves the row exactly as the worker
+    last wrote it — ``indexing``, with a stage — and the in-process registry
+    that would have said otherwise died with the worker. Spinning on that
+    forever is the behaviour issue #68 exists to remove.
+
+    Two independent checks, because either alone is wrong:
+
+    * :func:`is_building` is authoritative only *positively*. It answers for
+      **this** process, so a build running in another worker would read as
+      absent — which is why a negative answer alone can never condemn a row.
+    * the heartbeat is the DB-backed truth: a live worker refreshes it at least
+      every ``_QUEUE_HEARTBEAT_S`` while queued and on every stage while
+      building. Silence past ``knowledge_build_stale_s`` is not slowness, it is
+      absence.
+
+    A row with no heartbeat *and* no start time is a build that never got as far
+    as recording anything — pre-#68 rows, and rows an agent set to ``indexing``
+    through ``PUT``. Those are left alone: the hub is not their builder and has
+    no standing to call them abandoned.
+    """
+    if row.status != STATUS_INDEXING:
+        return False
+    if row.id is not None and is_building(row.id):
+        return False
+    seen = row.build_heartbeat_at or row.build_started_at
+    if seen is None:
+        return False
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    stale_after = timedelta(seconds=max(1, int(settings.knowledge_build_stale_s)))
+    return datetime.now(timezone.utc) - seen > stale_after
+
+
 def _run_build(row_id: int) -> None:
     """Worker body. Waits for a slot, builds, and can never raise.
 
-    The semaphore is acquired *before* the session is opened so a queued build
-    holds no database connection while it waits.
+    The semaphore is still acquired *before* the build's session is opened, so a
+    queued build holds no database connection while it waits — the queue phase
+    uses transient sessions instead, one per heartbeat, which is what lets
+    ``queued`` be a recorded state rather than an invisible one.
     """
     from app import db as db_module
 
+    _with_transient_session(lambda db: begin_progress(db, row_id))
+
     semaphore = _build_semaphore()
-    semaphore.acquire()
+    while not semaphore.acquire(timeout=_QUEUE_HEARTBEAT_S):
+        # Still queued, still alive. Without this a build that waits out
+        # `knowledge_build_stale_s` behind the cap would be reported orphaned.
+        _with_transient_session(lambda db: touch_queue_heartbeat(db, row_id))
     try:
         db = db_module.SessionLocal()
         try:
@@ -415,6 +656,23 @@ def _run_build(row_id: int) -> None:
         semaphore.release()
         with _BUILD_LOCK:
             _building.discard(row_id)
+
+
+def _with_transient_session(work) -> None:
+    """Run ``work(db)`` on a session opened and closed around it. Never raises."""
+    from app import db as db_module
+
+    try:
+        db = db_module.SessionLocal()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not open a progress session: %s", type(exc).__name__)
+        return
+    try:
+        work(db)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Progress write failed: %s", type(exc).__name__)
+    finally:
+        db.close()
 
 
 def _record_failure(db: Session, row_id: int, exc: BaseException) -> None:
@@ -434,6 +692,9 @@ def _record_failure(db: Session, row_id: int, exc: BaseException) -> None:
         if row is not None:
             row.status = STATUS_ERROR
             row.last_error = message
+            # The build has settled, so the stepper must stop: a stage left
+            # behind on an `error` row would keep the UI showing work in flight.
+            clear_progress(row)
             db.commit()
     except Exception as inner:  # noqa: BLE001
         logger.error("Could not record a knowledge build failure: %s", inner)
@@ -441,7 +702,12 @@ def _record_failure(db: Session, row_id: int, exc: BaseException) -> None:
 
 
 def _build(db: Session, row_id: int) -> None:
-    """One build, start to finish. Raises on any failure; the worker records it."""
+    """One build, start to finish. Raises on any failure; the worker records it.
+
+    Each :meth:`BuildProgress.stage` call sits immediately **before** the work it
+    names, so the stage a client reads is the thing currently running — never a
+    step ticked off a timer (issue #68).
+    """
     from app.services import audit_service, project_config_service, repo_service
 
     row = db.get(ProjectKnowledge, row_id)
@@ -449,19 +715,29 @@ def _build(db: Session, row_id: int) -> None:
         logger.warning("Knowledge build %s: the row disappeared before it started", row_id)
         return
 
+    progress = BuildProgress(db, row_id)
+
+    progress.stage(BUILD_STAGE_RESOLVING)
     project_key = row.project_key or row.key
     # Pinned to the row's own namespace, never resolved own → shared: a shared
     # build must read the shared config, not a member's same-keyed copy.
     config = project_config_service.get_config_for_owner(db, project_key, row.owner_id)
+    clone_url = _clone_url(config, row)
 
+    progress.stage(
+        BUILD_STAGE_CLONING,
+        f"Cloning {row.repo}" if row.repo else BUILD_STAGE_LABELS[BUILD_STAGE_CLONING],
+    )
     clone = repo_service.ensure_clone(
         db,
         project_key=project_key,
         repo_name=row.repo,
-        repo_url=_clone_url(config, row),
+        repo_url=clone_url,
         owner_id=row.owner_id,
         bound_connection_id=getattr(config, "repository_connection_id", None),
     )
+
+    progress.stage(BUILD_STAGE_ANALYZING)
     payload = build_knowledge_payload(
         db,
         name=row.name or project_key,
@@ -471,8 +747,12 @@ def _build(db: Session, row_id: int) -> None:
         owner_id=row.owner_id,
         config=config,
         repo_path=clone,
+        on_event=progress.on_claude_event,
     )
+
+    progress.stage(BUILD_STAGE_WRITING)
     apply_build(row, payload, config=config)
+    clear_progress(row)
     db.commit()
     audit_service.record(
         category="knowledge",
@@ -594,8 +874,14 @@ def build_knowledge_payload(
     config: "ProjectConfig | None" = None,
     repo_path: str | Path | None = None,
     timeout: int | None = None,
+    on_event: Any = None,
 ) -> dict[str, Any]:
     """Run ``project-bootstrap`` against the clone and normalise the result.
+
+    ``on_event`` (issue #68) switches the CLI to ``stream-json --verbose`` and
+    receives each decoded event as it arrives, so the caller can show what the
+    model is doing during the several minutes this takes. Omitting it keeps the
+    original blocking invocation exactly as it was.
 
     ``owner_id`` is the *row's* owner, so the call resolves that member's own (or
     the shared) Claude credential and the usage row is stamped with whoever
@@ -617,6 +903,7 @@ def build_knowledge_payload(
         label=f"Build knowledge: {name}",
         cwd=repo_path,
         timeout=timeout or settings.claude_bootstrap_timeout_s,
+        on_event=on_event,
     )
     data = raw if isinstance(raw, dict) else {}
     try:
@@ -857,6 +1144,14 @@ def request_build(
         return row, False
     row.status = STATUS_INDEXING
     row.last_error = ""
+    # The response says *started*, never *built*: it carries `indexing` at stage
+    # `queued`, with no `last_indexed` and no version bump. Nothing in it can be
+    # mistaken for a finished build (issue #68, rule 2).
+    row.build_stage = BUILD_STAGE_QUEUED
+    row.build_step = build_step(BUILD_STAGE_QUEUED)
+    row.build_message = BUILD_STAGE_LABELS[BUILD_STAGE_QUEUED]
+    row.build_started_at = utcnow()
+    row.build_heartbeat_at = utcnow()
     db.commit()
     db.refresh(row)
     return row, start_build(row.id)

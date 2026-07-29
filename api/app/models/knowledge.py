@@ -43,6 +43,59 @@ STATUS_STALE = "stale"
 STATUS_ERROR = "error"
 
 
+#: The stages a hub-side build actually passes through, in order (issue #68).
+#:
+#: Every entry maps 1:1 onto work that really happens in
+#: ``knowledge_service._build`` — there is no cosmetic step, and no stage is
+#: entered before the work behind it starts. ``queued`` is a real state, not a
+#: courtesy: over ``EMEHUB_KNOWLEDGE_BUILD_CONCURRENCY`` a worker blocks on the
+#: semaphore with its row already ``indexing``, which from the outside is
+#: indistinguishable from a build that is running unless it is recorded.
+#:
+#: ``build_step`` is the **1-based** ordinal of the stage, so ``0`` is
+#: unambiguously "no build has ever recorded progress on this row".
+BUILD_STAGES: tuple[str, ...] = (
+    "queued",
+    "resolving",
+    "cloning",
+    "analyzing",
+    "writing",
+)
+
+BUILD_STAGE_QUEUED = "queued"
+BUILD_STAGE_RESOLVING = "resolving"
+BUILD_STAGE_CLONING = "cloning"
+BUILD_STAGE_ANALYZING = "analyzing"
+BUILD_STAGE_WRITING = "writing"
+
+#: Total number of stages, so a client can render "step 3 of 5" without
+#: hard-coding a number that would silently drift if a stage were added.
+BUILD_TOTAL_STEPS = len(BUILD_STAGES)
+
+#: The default human-readable line for each stage. A stage may replace it with
+#: something more specific — the Claude stage does, continuously, from the CLI's
+#: own event stream.
+BUILD_STAGE_LABELS: dict[str, str] = {
+    BUILD_STAGE_QUEUED: "Waiting for a build slot",
+    BUILD_STAGE_RESOLVING: "Resolving the project configuration",
+    BUILD_STAGE_CLONING: "Cloning the repository",
+    BUILD_STAGE_ANALYZING: "Reading the repository with Claude",
+    BUILD_STAGE_WRITING: "Writing the knowledge base",
+}
+
+#: How long a message may be once it reaches the column. The live message is
+#: derived from Claude's stream, so it is bounded here as well as scrubbed.
+BUILD_MESSAGE_LIMIT = 400
+
+
+def build_step(stage: str) -> int:
+    """1-based ordinal of ``stage``; ``0`` for anything unrecognised or blank."""
+    try:
+        return BUILD_STAGES.index(stage) + 1
+    except ValueError:
+        return 0
+
+
 def compose_key(project_key: str, repo: str = "") -> str:
     """Row key for a project's (optionally repo-scoped) knowledge base.
 
@@ -93,6 +146,28 @@ class ProjectKnowledge(Base):
     doc_path: Mapped[str] = mapped_column(String(600), default="")
     #: Last build error (when status == "error"); cleared on success.
     last_error: Mapped[str] = mapped_column(String(1000), default="")
+
+    # ── Build progress (issue #68) ─────────────────────────────────────────
+    # DB-backed rather than in-memory on purpose: progress has to survive a
+    # page reload, and it has to be readable by whichever worker answers the
+    # poll, not only the one running the build.
+    #: One of :data:`BUILD_STAGES`; "" when no build has recorded progress.
+    build_stage: Mapped[str] = mapped_column(String(32), default="")
+    #: 1-based ordinal of ``build_stage`` (0 = none), denormalised so a client
+    #: renders "3 of 5" without knowing the stage vocabulary.
+    build_step: Mapped[int] = mapped_column(Integer, default=0)
+    #: The live human-readable line. During ``analyzing`` this is derived from
+    #: the Claude CLI's event stream, so it is scrubbed and truncated before it
+    #: ever gets here.
+    build_message: Mapped[str] = mapped_column(String(BUILD_MESSAGE_LIMIT), default="")
+    #: When the current (or last) build started. The UI's elapsed clock, and
+    #: half of the orphan test.
+    build_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: Last time a live worker touched this row. The other half of the orphan
+    #: test: a row left ``indexing`` by a container that died stops being
+    #: refreshed, and after ``EMEHUB_KNOWLEDGE_BUILD_STALE_S`` it is provably
+    #: abandoned rather than merely slow.
+    build_heartbeat_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     created_at: Mapped[datetime] = timestamp_column()
     updated_at: Mapped[datetime] = timestamp_column(onupdate=utcnow)

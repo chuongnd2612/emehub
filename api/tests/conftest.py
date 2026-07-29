@@ -183,3 +183,71 @@ def api_routes(app) -> list:
 #: A floor, not an exact count — it only has to be high enough that a broken
 #: discovery pass (which yields 0) trips it.
 MIN_EXPECTED_ROUTES = 30
+
+
+# ---------------------------------------------------- the streaming Claude CLI
+class FakeClaudeProcess:
+    """A ``subprocess.Popen`` stand-in that replays a ``stream-json`` session.
+
+    The knowledge build's CLI call is ``--output-format stream-json --verbose``
+    (issue #68) and the reader consumes stdout line by line, so a fake has to be
+    *iterable* rather than a finished ``CompletedProcess``. It also exposes
+    ``stderr.read()``, ``wait()`` and ``kill()``, because the reader drains both
+    pipes and enforces its own deadline.
+    """
+
+    def __init__(self, lines, *, returncode: int = 0, stderr: str = "") -> None:
+        import io
+
+        self.stdout = io.StringIO("".join(f"{line}\n" for line in lines))
+        self.stderr = io.StringIO(stderr)
+        self.returncode = returncode
+        self.killed = False
+
+    def wait(self, timeout=None):  # noqa: ARG002 - the fake has already finished
+        return self.returncode
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+def stream_events(result_json: str, *, tools=("Read",), targets=None, **envelope):
+    """NDJSON lines for a plausible session ending in ``result_json``.
+
+    ``tools`` names the ``tool_use`` blocks emitted in between — a live-message
+    assertion needs something to assert on — and ``targets`` overrides the file
+    paths they act on, which is how the scrubbing tests get a credential into
+    the stream.
+    """
+    import json as _json
+
+    paths = list(targets or [f"/repo/src/module_{i}.py" for i in range(len(tools))])
+    lines = [_json.dumps({"type": "system", "subtype": "init", "session_id": "s1"})]
+    for tool, path in zip(tools, paths):
+        lines.append(
+            _json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "tool_use", "name": tool, "input": {"file_path": path}}
+                        ]
+                    },
+                }
+            )
+        )
+        lines.append(_json.dumps({"type": "user", "message": {"content": []}}))
+    lines.append(
+        _json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "result": result_json,
+                "usage": {"input_tokens": 1200, "output_tokens": 340},
+                "total_cost_usd": 0.0412,
+                "duration_ms": 8123,
+                **envelope,
+            }
+        )
+    )
+    return lines
