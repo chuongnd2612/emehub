@@ -129,23 +129,26 @@ def _resolve_from_adapters(
             "available in this deployment yet."
         ) from exc
 
-    owner_id = user.id if user else None
-    connection = connection_service.get_connection(db, connection_id, owner_id=owner_id)
+    # Wired to the connections slice. Its visibility argument is `viewer_id`
+    # (own + shared), and `adapter_for` takes the connection alone — it is the
+    # single PAT decryption site and needs no session.
+    viewer_id = user.id if user else None
+    connection = connection_service.get_connection(db, connection_id, viewer_id)
     if connection is None and provider_kind:
-        connection = connection_service.first_of_kind(db, provider_kind, owner_id=owner_id)
+        connection = connection_service.first_of_kind(db, provider_kind, viewer_id)
     if connection is None:
         raise LookupError(
             f"No work-item connection is configured for '{provider_kind or connection_id}'"
         )
     try:
-        adapter = connection_service.adapter_for(db, connection)
+        adapter = connection_service.adapter_for(connection)
     except Exception as exc:
         raise TicketSourceError(str(exc)) from exc
     return ResolvedSource(
         source=adapter,
         provider_kind=connection.kind,
         connection_id=connection.id,
-        label=getattr(connection, "name", "") or connection.kind,
+        label=connection.label or connection.kind,
     )
 
 

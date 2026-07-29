@@ -12,6 +12,9 @@ dependencies = [
     "sqlalchemy>=2.0.36",
     "alembic>=1.14.0",
     "psycopg[binary]>=3.2",
+    # The provider adapters call the real Azure DevOps / GitHub / Jira REST APIs
+    # over httpx — runtime, not just the test client.
+    "httpx>=0.28.1",
     # Fernet for EMEHUB_ENCRYPTION_KEY (app/crypto.py) — never the JWT secret.
     "cryptography>=44.0.0",
     "argon2-cffi>=23.1.0",
