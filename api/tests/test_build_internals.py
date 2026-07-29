@@ -197,6 +197,40 @@ def test_the_pat_lands_in_the_password_position_not_the_username():
     assert url.endswith("@dev.azure.com/org/proj/_git/r")
 
 
+def test_an_ado_url_with_a_bare_org_username_still_gets_the_pat():
+    """Issue #62, second failure — the one the first fix missed.
+
+    Azure DevOps hands out clone URLs shaped
+    ``https://<org>@dev.azure.com/<org>/<project>/_git/<repo>``: the org name
+    sits in the userinfo with **no password**. The first fix bailed on any
+    ``@`` ("never rewrite someone else's credential"), so every real ADO URL
+    still reached git as a username with no password and died with
+    ``could not read Password``. A bare username is not a credential — the
+    password is exactly what is missing.
+    """
+    from urllib.parse import urlparse
+
+    url = repo_service._authenticated_url(
+        "https://DDKS@dev.azure.com/DDKS/Surency/_git/surency-admin-hub", PAT
+    )
+
+    parsed = urlparse(url)
+    assert parsed.username == "DDKS", "the org username should be kept"
+    assert parsed.password == PAT, "the PAT belongs in the password half"
+    assert parsed.hostname == "dev.azure.com"
+    assert parsed.path == "/DDKS/Surency/_git/surency-admin-hub"
+    assert PAT not in repo_service.redact(url, PAT)
+
+
+def test_a_real_embedded_credential_is_still_never_overwritten():
+    """The guard that motivated the original bail-out is kept, narrowed to what
+    it was actually for: userinfo carrying a *password* is a credential someone
+    embedded deliberately, and quietly authenticating as somebody else would be
+    worse than failing."""
+    original = "https://someone:theirsecret@dev.azure.com/org/proj/_git/r"
+    assert repo_service._authenticated_url(original, PAT) == original
+
+
 def test_a_url_unsafe_pat_is_percent_encoded_rather_than_re_parsing_the_url():
     """An ADO PAT is opaque provider output and may hold ``/`` or ``@``; a raw
     one in the userinfo would silently move the host into the path."""
