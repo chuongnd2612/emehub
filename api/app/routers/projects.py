@@ -64,6 +64,23 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 # Declared here rather than in ``app/schemas.py``: three slices are landing in
 # parallel and the shared schema module is the one file they would all collide
 # on. Same ``ApiModel`` base, so the wire stays camelCase either way.
+class ProjectSummaryOut(ApiModel):
+    """Card figures, so the list screen costs one request instead of 3N+1.
+
+    Non-secret scalars only — deliberately **no test-account material of any
+    kind, not even ``hasPassword``**. See ``list_projects``.
+    """
+
+    repo: str = ""
+    repo_url: str = ""
+    branch: str = ""
+    repo_count: int = 0
+    provider: str = ""
+    knowledge_status: str = "not_indexed"
+    knowledge_confidence: int = 0
+    ticket_count: int = 0
+
+
 class ProjectOut(ApiModel):
     id: int
     key: str
@@ -71,6 +88,8 @@ class ProjectOut(ApiModel):
     shared: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    #: Present on list and detail reads; absent on a write response.
+    summary: ProjectSummaryOut | None = None
 
 
 class ProjectIn(ApiModel):
@@ -191,7 +210,7 @@ class KnowledgeMergeOut(ApiModel):
 
 
 # ---------------------------------------------------------------- helpers
-def _project_out(row: Project) -> ProjectOut:
+def _project_out(row: Project, summary: dict | None = None) -> ProjectOut:
     return ProjectOut(
         id=row.id,
         key=row.key,
@@ -199,6 +218,7 @@ def _project_out(row: Project) -> ProjectOut:
         shared=row.owner_id is None,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        summary=ProjectSummaryOut(**summary) if summary is not None else None,
     )
 
 
@@ -239,16 +259,20 @@ def list_projects(
 
     Own rows plus the shared namespace, never another member's. Deliberately no
     test-account material of any kind, not even ``hasPassword`` — a list
-    response is the easiest thing to log wholesale.
+    response is the easiest thing to log wholesale. ``summary`` carries only
+    non-secret card figures, batch-loaded in three queries for the whole list.
     """
-    return [_project_out(p) for p in project_service.list_projects(db, principal)]
+    rows = project_service.list_projects(db, principal)
+    summaries = project_service.summaries_for(db, rows, principal)
+    return [_project_out(p, summaries.get(p.key)) for p in rows]
 
 
 @router.get("/{key}", response_model=ProjectOut)
 def get_project(
     key: str, principal: User = Depends(require_principal), db: Session = Depends(get_db)
 ) -> ProjectOut:
-    return _project_out(_project_or_404(db, key, principal))
+    row = _project_or_404(db, key, principal)
+    return _project_out(row, project_service.summaries_for(db, [row], principal).get(row.key))
 
 
 @router.post("", response_model=ProjectOut, status_code=201)

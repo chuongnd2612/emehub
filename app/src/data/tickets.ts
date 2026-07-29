@@ -249,6 +249,22 @@ const toQueryParams = ({
   return params;
 };
 
+/**
+ * `GET /tickets` for a **count only** — `total`, nothing decoded.
+ *
+ * `getTicketPage` also fetches `/projects` to label the PROJECT column; a
+ * caller that only wants the number (the sidebar badge) should not pay for
+ * that second request.
+ */
+export const countTickets = async (
+  options: TicketQuery = {},
+): Promise<number> => {
+  const wire = await api.get<TicketPageWire>("/tickets", {
+    query: toQueryParams({ ...options, pageSize: 1 }),
+  });
+  return wire.total ?? 0;
+};
+
 /** GET /tickets — one page, filtered and paged by the hub. */
 export const getTicketPage = async (
   options: TicketQuery = {},

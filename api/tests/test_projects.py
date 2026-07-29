@@ -73,6 +73,59 @@ def test_list_returns_own_plus_shared_never_another_members(
     assert keys == {"alice-app", "shared-app"}
 
 
+def test_the_list_summary_reports_real_figures_and_no_secrets(
+    client, db_session, alice, auth_headers
+):
+    """``summary`` exists so the list screen costs one request, not 3N+1.
+
+    It must carry the card's real figures — and nothing credential-shaped,
+    since a list response is the easiest thing to log wholesale.
+    """
+    row = _project(db_session, "surveyor", alice.id, name="Surveyor Web")
+    db_session.add(
+        ProjectConfig(
+            key="surveyor",
+            owner_id=alice.id,
+            repos=[
+                {
+                    "name": "surveyor-web",
+                    "repo_url": "https://git/x",
+                    "default_branch": "main",
+                    "default": True,
+                },
+                {"name": "surveyor-api"},
+            ],
+            test_accounts=[
+                {
+                    "role": "admin",
+                    "username": "qa@x.io",
+                    "password": crypto.encrypt("hunter2"),
+                }
+            ],
+        )
+    )
+    db_session.commit()
+
+    body = client.get(
+        "/projects", headers=auth_headers("alice@emesoft.net", PASSWORD)
+    ).json()
+    listed = next(p for p in body if p["key"] == "surveyor")
+    summary = listed["summary"]
+
+    assert listed["id"] == row.id
+    assert summary["repo"] == "surveyor-web"
+    assert summary["branch"] == "main"
+    assert summary["repoCount"] == 2
+    assert summary["ticketCount"] == 0
+    assert summary["knowledgeStatus"] == "not_indexed"
+
+    # Nothing credential-shaped, at any depth.
+    serialised = str(body).lower()
+    assert "hunter2" not in serialised
+    assert "password" not in serialised
+    assert "testaccounts" not in serialised
+
+
 def test_a_key_in_both_namespaces_resolves_to_the_owned_row(
     client, db_session, alice, auth_headers
 ):

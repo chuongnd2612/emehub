@@ -183,10 +183,24 @@ export interface Project {
   shared: boolean;
   /** Work items mirrored — the `total` of `GET /tickets?projectId=…`. */
   tickets: number;
-  /** null when the project has no knowledge row (the hub answers 404). */
+  /**
+   * null when the project has no knowledge row (the hub answers 404) — and
+   * always null on a LIST read, which carries `knowledgeStatus` instead so
+   * the screen costs one request rather than 3N+1. The detail read fills it.
+   */
   knowledge: KnowledgeMeta | null;
-  /** null when the config read failed or the caller may not see it. */
+  /** null when the config read failed, the caller may not see it, or this
+   * came from a list read (the list response carries no config). */
   config: ProjectConfig | null;
+  /**
+   * Raw knowledge status from the hub's list summary (`indexed`, `stale`,
+   * `not_indexed`, …). Present on list rows, where `knowledge` is null.
+   */
+  knowledgeStatus?: string;
+  /** Confidence from the list summary, when `knowledge` is null. */
+  knowledgeConfidence?: number;
+  /** How many repositories are configured — list summary only. */
+  repoCount?: number;
 }
 
 /** Derived from the knowledge row for the status pill. */
@@ -342,35 +356,13 @@ export type ConnectionStatus = "Connected" | "Attention" | "Disconnected";
 
 export type ConnectionFieldType = "text" | "password";
 
-export interface ConnectionField {
-  key: string;
-  label: string;
-  value: string;
-  type: ConnectionFieldType;
-}
-
-export interface ProviderConnection {
-  id: string;
-  label: string;
-  /** Mono one-liner, e.g. `dev.azure.com/emesoft/Surveyor`. */
-  summary: string;
-  status: ConnectionStatus;
-  lastSync: string;
-  fields: ConnectionField[];
-}
-
-export interface ProviderConnectionGroup {
-  provider: ProviderKey;
-  /** "4 projects" | "6 repositories". */
-  projectsLabel: string;
-  connections: ProviderConnection[];
-}
-
-export interface ConnectionTestResult {
-  ok: boolean;
-  /** Round-trip in ms, e.g. 118. */
-  latencyMs: number;
-}
+// `ConnectionField`, `ProviderConnection`, `ProviderConnectionGroup` and
+// `ConnectionTestResult` used to live here, shaped for the fixture era. The
+// live wire shapes replaced them when Integrations was wired to the API and
+// are defined in `data/connections.ts` (`ConnectionFormField`, `Connection`,
+// `ConnectionGroup`, `ConnectionTestOutcome`) — the old ones were unreferenced
+// and are deleted rather than left as a second, wrong answer to "what is a
+// connection". `ConnectionFieldType` stays: `connections.ts` still uses it.
 
 /** Summary card on the Integrations page. */
 export interface Integration {

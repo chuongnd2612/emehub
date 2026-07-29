@@ -58,12 +58,22 @@ layer is the seam that makes that a per-file change rather than a rewrite.
 
 ## Phase 2 — Identity
 
+> **Hub side: done.** Agent cutover: **not started** — it edits `q-agent/`, which is out of
+> scope until that call is made. Every phase below splits the same way, so the two halves are
+> now listed separately.
+
 The hub becomes the login for the suite.
 
-- Port from QAgent: `services/auth_service.py`, `deps_auth.py`, `models/user.py`,
-  `models/session.py`, the `auth_guard` middleware, and the `/auth/*` router.
-- Port the UI: login, forgot/reset password, profile, 2FA, sessions, user management.
-- Add **audience-scoped token issue** (`aud`), which QAgent does not have today.
+**Hub side — done.**
+- ✅ Ported from QAgent: `services/auth_service.py`, `deps_auth.py`, `models/user.py`,
+  `models/session.py`, the auth guard, and the `/auth/*` router.
+- ✅ The UI: login, forgot/reset password, profile, 2FA, sessions, user management. Note the
+  design handoff contains **no** login screen — those were derived from QAgent's and restyled,
+  and still want a designer pass.
+- ✅ **Audience-scoped tokens** (`aud`), which QAgent does not have. `kid` is present from the
+  first token so the Phase-3 RS256/JWKS move is not breaking.
+
+**Agent cutover — not started.**
 - QAgent switches to validating hub tokens. Its own `/auth/*` becomes a thin proxy to the hub
   first (so nothing breaks in one step), then is deleted.
 
@@ -72,23 +82,35 @@ opaque strings and users keep their passwords. TOTP secrets are stored in plaint
 `users.totp_secret` and move as-is. Sessions do **not** migrate: everyone is logged out once,
 at a scheduled time.
 
-**Decide before writing the schema:** whether to introduce a real organisation/team entity or
-inherit QAgent's `owner_id` + `shared` convention. Retrofitting later is a migration across
-every table. See [INTEGRATION.md](INTEGRATION.md#open-items).
+**Decided:** inherit QAgent's `owner_id` + `shared` convention — nullable `owner_id`, NULL
+means the shared namespace. No organisation/team entity. Chosen so the eventual QAgent
+migration is a row copy rather than a backfill; revisit only with a migration across every
+scoped table.
 
-**Exit criteria:** a user logs in at the hub and lands in QAgent authenticated, without a
-second login. QAgent's `users` and `auth_sessions` tables are gone.
+**Exit criteria (cutover):** a user logs in at the hub and lands in QAgent authenticated,
+without a second login. QAgent's `users` and `auth_sessions` tables are gone.
 
 ---
 
 ## Phase 3 — Credentials
 
-- **Claude credentials** move: model, encryption, resolution precedence (own → shared →
-  none), the `prefer_shared` flag, usage/stat capture, and `GET /credentials/claude/resolve`.
-- **Provider connections** move: the connection model, capability binding, and connection
-  testing. Adapters (Azure DevOps, GitHub, Jira) move with them, or the hub proxies provider
-  calls — decided per provider, see [INTEGRATION.md §4](INTEGRATION.md#4-secrets-that-cross-the-boundary).
-- Upgrade token signing to RS256 + JWKS, retiring the shared secret.
+> **Hub side: done.** Agent cutover: **not started**.
+
+**Hub side — done.**
+- ✅ **Claude credentials**: model, encryption, resolution precedence (own → shared → none),
+  the `prefer_shared` flag, usage capture, and `GET /credentials/claude/resolve`. Only that
+  one endpoint ever returns credential material, asserted structurally and behaviourally.
+- ✅ **Provider connections**: the connection model, capability binding (`work_item` /
+  `repository`), connection testing, and the Azure DevOps / GitHub / Jira adapters. The PAT is
+  never returned — `GET /connections` says `hasPat` and nothing more.
+- ✅ The UI for both.
+
+**Not done.**
+- `POST /connections/{id}/proxy` — deliberately unbuilt; a generic forwarder is an SSRF and
+  header-leak surface that needs its own design
+  ([INTEGRATION.md §4](INTEGRATION.md#4-secrets-that-cross-the-boundary)).
+- RS256 + JWKS, retiring the shared secret. `kid` is already emitted so this is additive.
+- Agent cutover.
 
 **Data migration — this is the sharp edge.** Every encrypted value in QAgent
 (`claude_credentials.credentials`, provider PATs, test-account passwords) is Fernet-encrypted
@@ -104,18 +126,30 @@ available, be idempotent, and be rehearsed against a database copy first.
 
 ## Phase 4 — Projects, knowledge and tickets
 
-- Project registry, configuration, environments, test accounts, repositories.
-- Knowledge bases, including the write path so QAgent can contribute runtime-verified
-  selectors back.
-- Ticket sync.
+> **Hub side: done.** Agent cutover: **not started**.
 
-**The hard part is not the data, it is the filesystem.** QAgent's knowledge lives both in
-Postgres and in per-user workspace directories (`workspace/users/<id>/knowledge/…`), and repo
-clones live on the QAgent host. The hub owning the *metadata* while the *clone* stays on the
-agent host is likely the right split, but it needs deciding before this phase starts.
+**Hub side — done.**
+- ✅ Project registry, configuration, environments, encrypted test accounts, repositories —
+  including the full configuration UI (provider bindings, base URL, repository discovery from
+  the bound connection, manual add) ported from QAgent's `ProjectSettingsForm` / `ReposManager`.
+- ✅ Knowledge **metadata**, including the `PATCH` write path so an agent can contribute
+  runtime-verified selectors back without clobbering existing `verified_at_runtime` entries.
+- ✅ Ticket store, server-side filtering and paging, and sync through the adapters.
 
-**Exit criteria:** a project created at the hub is visible in QAgent, and a knowledge base
-built once serves both agents.
+**Decided — the filesystem split.** QAgent's knowledge lives both in Postgres *and* in per-user
+workspace directories, with repo clones on the QAgent host. **The hub owns the metadata only.**
+It does not clone repositories and does not run `project-bootstrap`; the agent builds on its own
+host and reports the result with `PUT /projects/{key}/repos/{repo}/knowledge`, passing `docPath`
+as an opaque agent-host string the hub stores and never resolves. Two commented seams in
+`knowledge_service.py` and `project_config_service.py` mark exactly where the agent's work
+begins.
+
+**Consequence, worth stating plainly:** there is no "Build knowledge" button on the hub, and
+there should not be one. The handoff drew one; it cannot do what it says, so it is a documented
+stub.
+
+**Exit criteria (cutover):** a project created at the hub is visible in QAgent, and a knowledge
+base built once serves both agents.
 
 ---
 

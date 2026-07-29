@@ -150,3 +150,36 @@ def auth_headers(login):
         return {"Authorization": f"Bearer {body['accessToken']}"}
 
     return _headers
+
+
+def api_routes(app) -> list:
+    """Every ``APIRoute`` in the app, flattened.
+
+    ``include_router`` nests routes under an ``_IncludedRouter`` in this
+    FastAPI version, so a flat pass over ``app.routes`` finds **nothing** —
+    which silently turns any "every route must ..." assertion into a no-op.
+    That is exactly the bug this helper exists to prevent, so every caller
+    should also assert a plausible route count (``MIN_EXPECTED_ROUTES``).
+    """
+    from fastapi.routing import APIRoute
+
+    found: list = []
+    stack = list(app.routes)
+    seen: set[int] = set()
+    while stack:
+        route = stack.pop()
+        if id(route) in seen:
+            continue
+        seen.add(id(route))
+        if isinstance(route, APIRoute):
+            found.append(route)
+        stack.extend(getattr(route, "routes", []))
+        included = getattr(route, "original_router", None)
+        if included is not None:
+            stack.extend(included.routes)
+    return found
+
+
+#: A floor, not an exact count — it only has to be high enough that a broken
+#: discovery pass (which yields 0) trips it.
+MIN_EXPECTED_ROUTES = 30
