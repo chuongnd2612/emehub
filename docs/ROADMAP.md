@@ -135,18 +135,34 @@ available, be idempotent, and be rehearsed against a database copy first.
 - ✅ Knowledge **metadata**, including the `PATCH` write path so an agent can contribute
   runtime-verified selectors back without clobbering existing `verified_at_runtime` entries.
 - ✅ Ticket store, server-side filtering and paging, and sync through the adapters.
+- ✅ **Knowledge builds, run on the hub** — see the reversal below.
 
-**Decided — the filesystem split.** QAgent's knowledge lives both in Postgres *and* in per-user
-workspace directories, with repo clones on the QAgent host. **The hub owns the metadata only.**
-It does not clone repositories and does not run `project-bootstrap`; the agent builds on its own
-host and reports the result with `PUT /projects/{key}/repos/{repo}/knowledge`, passing `docPath`
-as an opaque agent-host string the hub stores and never resolves. Two commented seams in
-`knowledge_service.py` and `project_config_service.py` mark exactly where the agent's work
-begins.
+**Reversed — the filesystem split.** This phase originally decided that the hub owns knowledge
+*metadata* only: no clones, no `project-bootstrap`, no "Build knowledge" button, with the agent
+building on its own host and reporting the result. That decision is **superseded by
+[ADR 0007](adr/0007-knowledge-builds-run-on-the-hub.md)**. What it produced in practice was a
+button that could not build anything, and it left D-Agent — which has no build capability and
+no plans for one — permanently unable to obtain a knowledge base.
 
-**Consequence, worth stating plainly:** there is no "Build knowledge" button on the hub, and
-there should not be one. The handoff drew one; it cannot do what it says, so it is a documented
-stub.
+**What is true now.** The hub clones the repository into a per-owner workspace, runs
+`project-bootstrap` through the Claude CLI against that clone, writes `knowledge.md` /
+`knowledge.json` and updates the row itself.
+`POST /projects/{key}/repos/{repo}/knowledge/build` starts the work in the background;
+`indexing` is both the in-flight guard and the thing the UI polls. Builds are
+concurrency-bounded (`EMEHUB_KNOWLEDGE_BUILD_CONCURRENCY`, default 2) and every failure mode
+lands the row in `error` with an actionable `lastError`.
+
+`PUT /projects/{key}/repos/{repo}/knowledge` **stays.** QAgent already builds its own knowledge
+and can still report it, `docPath` and all. The hub is *a* builder, not the only one.
+
+**Consequences to hold in view.** The API image now carries `git`, Node 20 and
+`@anthropic-ai/claude-code` — no chromium, which ADR 0007 explicitly excludes. The
+`emehub-workspace` volume holds a materialised Claude credential for the duration of a build
+and must be treated as sensitive. And the hub is now a place where money is spent; usage is
+attributed per owner in `claude_usage`.
+
+The seam in `project_config_service.py` is unchanged: `storageState.json` is a browser artifact
+and the hub still runs no browser.
 
 **Exit criteria (cutover):** a project created at the hub is visible in QAgent, and a knowledge
 base built once serves both agents.

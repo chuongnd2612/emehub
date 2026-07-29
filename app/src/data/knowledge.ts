@@ -1,31 +1,27 @@
 // Knowledge — per-project and per-repo knowledge METADATA.
 //
-//   GET /projects/{key}/knowledge              getProjectKnowledge
-//   GET /projects/{key}/repos/{repo}/knowledge getRepoKnowledge
+//   GET  /projects/{key}/knowledge                    getProjectKnowledge
+//   GET  /projects/{key}/repos/{repo}/knowledge       getRepoKnowledge
+//   POST /projects/{key}/repos/{repo}/knowledge/build buildKnowledge
 //
-// Both answer `KnowledgeOut`: the lifecycle row (status, confidence, version,
-// framework, lastIndexed) plus the `knowledge` blob the agent reported.
-// A project that has never been indexed has no row at all and the hub answers
-// **404** — that is the "Not indexed" state, not an error.
+// The reads answer `KnowledgeOut`: the lifecycle row (status, confidence,
+// version, framework, lastIndexed) plus the `knowledge` blob. A project that has
+// never been indexed has no row at all and the hub answers **404** — that is the
+// "Not indexed" state, not an error.
 //
-// ## What the hub will never do, and why two functions here stay stubs
+// ## Building
 //
-// ROADMAP.md Phase 4: the hub owns knowledge *metadata* only; building a
-// knowledge base is the agent's job. Building means cloning the repository and
-// running `project-bootstrap` through the Claude CLI, which needs a filesystem
-// and a credential on disk. The hub has neither, and handing out the repository
-// PAT to make it possible is exactly what CLAUDE.md forbids. The agent builds on
-// its own host and reports the outcome with
-// `PUT /projects/{key}/repos/{repo}/knowledge`.
+// ADR 0007 reversed the Phase 4 split: the hub clones the repository, runs
+// `project-bootstrap` through the Claude CLI and writes the artefacts itself.
+// `buildKnowledge` is therefore a real call now. It returns `202` with the row
+// already at `indexing`; the caller polls `getRepoKnowledge` until the status
+// leaves `indexing`, then reads `lastError` on `error`. Calling it twice while a
+// build is in flight is safe and returns the same `indexing` row.
 //
-//   • `buildKnowledge` — there is no build endpoint and there is not going to
-//     be one. It rejects with the reason; nothing in the UI calls it, and the
-//     knowledge tab says who does the building instead of offering a button
-//     that cannot work.
-//   • `getKnowledgeSources` — there is no knowledge-source resource. Nothing in
-//     the hub stores the handoff's source table (icon, title, type, size,
-//     chunks, scope, state). It resolves to `[]` and the tab renders a notice
-//     rather than a table of fixtures pretending to be live rows.
+// `getKnowledgeSources` is still a stub: there is no knowledge-source resource.
+// Nothing in the hub stores the handoff's source table (icon, title, type, size,
+// chunks, scope, state). It resolves to `[]` and the tab renders a notice rather
+// than a table of fixtures pretending to be live rows.
 //
 // `getKnowledgeSections` IS real: the blob carries `architecture`, `locator`,
 // `pageObjects` / `selectors` / `routes`, `environments` and `businessEntities`,
@@ -267,6 +263,33 @@ export const getKnowledgeSections = async (
 ): Promise<KnowledgeSection[]> =>
   knowledgeSections(await getRepoKnowledge(projectKey, repo));
 
+/* ── Building ────────────────────────────────────────────────────────────── */
+
+/**
+ * POST /projects/{key}/repos/{repo}/knowledge/build — start a build on the hub.
+ *
+ * Resolves as soon as the row is `indexing` (HTTP 202), not when the build
+ * finishes: a build clones the repository and runs the Claude CLI against it,
+ * which is minutes of work. Poll {@link getRepoKnowledge} until `status` leaves
+ * `indexing` — `indexed` carries the new blob, `error` carries `lastError`,
+ * written for a human and safe to display verbatim.
+ *
+ * Requesting a build that is already running is safe: the hub returns the same
+ * `indexing` row without starting a second one.
+ */
+export const buildKnowledge = (
+  projectKey: string,
+  repo: string,
+): Promise<KnowledgeMeta> =>
+  api
+    .post<KnowledgeWire>(
+      `/projects/${encodeURIComponent(projectKey)}/repos/${encodeURIComponent(
+        repo,
+      )}/knowledge/build`,
+      {},
+    )
+    .then(toMeta);
+
 /* ── Stubs the hub cannot honour ─────────────────────────────────────────── */
 
 /**
@@ -280,20 +303,3 @@ export const getKnowledgeSections = async (
 export const getKnowledgeSources = (
   _projectKey: string,
 ): Promise<KnowledgeSource[]> => Promise.resolve([]);
-
-/**
- * STUB (deliberate, not an oversight): the hub does not build knowledge bases.
- *
- * Cloning the repository and running `project-bootstrap` through the Claude CLI
- * happens on the agent host; the hub only records the result via
- * `PUT /projects/{key}/repos/{repo}/knowledge` (ROADMAP.md Phase 4). This
- * rejects with that reason so a future caller cannot mistake it for a no-op —
- * and nothing in the UI calls it today.
- */
-export const buildKnowledge = (_projectKey: string): Promise<never> =>
-  Promise.reject(
-    new Error(
-      "EmeHub records knowledge, it does not build it — the agent clones the " +
-        "repository on its own host and reports the result back.",
-    ),
-  );

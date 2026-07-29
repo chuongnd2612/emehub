@@ -23,10 +23,12 @@
 // the rest still resolves from `data/fixtures/` behind a `// STUB:` comment
 // naming the endpoint that will replace it.
 //
-// Two functions are stubs that will NEVER become endpoints, and both say so at
-// their definition: `getKnowledgeSources` (the hub has no knowledge-source
-// resource) and `buildKnowledge` (building is the agent's job — ROADMAP Phase
-// 4). Neither silently pretends to work.
+// One function is a stub that will never become an endpoint, and says so at its
+// definition: `getKnowledgeSources` — the hub has no knowledge-source resource.
+// It does not silently pretend to work.
+//
+// (`buildKnowledge` used to be the second. ADR 0007 made it real: the hub clones
+// the repository and runs `project-bootstrap` itself.)
 //
 // CLAUDE.md: "Where an endpoint does not exist, stub it behind the typed data
 // layer — and say so in your response. Never invent an API route silently."

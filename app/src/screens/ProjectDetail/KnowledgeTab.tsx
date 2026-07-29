@@ -5,26 +5,24 @@
 //    with a chevron that rotates 90° when open; then a source toolbar and a
 //    7-column source table."
 //
-// ## Two deliberate departures, both because the hub cannot honour the design
+// ## The `Build project knowledge` CTA is real (ADR 0007)
 //
-// 1. **There is no `Build project knowledge` button.** Building means cloning
-//    the repository and running `project-bootstrap` through the Claude CLI,
-//    which needs a filesystem and a credential on disk. EmeHub has neither, and
-//    handing out the repository PAT to make it possible is what CLAUDE.md
-//    forbids. The agent builds on its own host and reports the result with
-//    `PUT /projects/{key}/repos/{repo}/knowledge` (ROADMAP.md Phase 4). The
-//    empty state says exactly that and offers `Check again`, which really does
-//    re-read the row — the useful action when an agent has since reported one.
+// It used to be absent, because the hub could not clone a repository or run
+// `project-bootstrap`. ADR 0007 gave it both, so the handoff's primary CTA is
+// back and does what it says: `POST …/knowledge/build` returns `202` with the
+// row at `indexing`, and this tab polls until the status settles. A build needs
+// a repository to clone, so the CTA is disabled with an explanation when the
+// project has no configured repo.
 //
-// 2. **There is no source table.** Nothing in the hub models the handoff's
-//    source rows (icon, title, type, size, chunks, scope, state);
-//    `getKnowledgeSources` has no endpoint behind it and resolves to `[]`.
-//    Rendering the fixtures would be showing invented rows as live data, so the
-//    toolbar and table appear only if that call ever returns something, and a
-//    notice explains the gap until it does.
+// One departure remains. **There is no source table.** Nothing in the hub models
+// the handoff's source rows (icon, title, type, size, chunks, scope, state);
+// `getKnowledgeSources` has no endpoint behind it and resolves to `[]`.
+// Rendering the fixtures would be showing invented rows as live data, so the
+// toolbar and table appear only if that call ever returns something, and a
+// notice explains the gap until it does.
 //
-// The accordion IS real: it is rendered from the `knowledge` blob the agent
-// reported (`data/knowledge.ts › knowledgeSections`).
+// The accordion IS real: it is rendered from the `knowledge` blob
+// (`data/knowledge.ts › knowledgeSections`).
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -43,14 +41,66 @@ import {
   toast,
 } from "@/components/ui";
 import {
+  buildKnowledge,
   getKnowledgeSources,
   knowledgeSections,
   type KnowledgeSource,
   type KnowledgeSourceType,
   type Project,
 } from "@/data";
+import { ApiError } from "@/lib/api";
 import { useUi } from "@/store/ui";
 import { SOURCE_TYPE_CHIP, SOURCE_TYPES, chunkLabel, isBuilt } from "./shared";
+
+/**
+ * How often an in-flight build is re-checked. A build is minutes long and the
+ * hub caps how many run at once, so a tighter interval would only add load
+ * without telling the user anything sooner.
+ */
+const POLL_MS = 5000;
+
+/**
+ * Re-read the project while a build is in flight, so `indexing` settles into
+ * `indexed` or `error` without the user reaching for the button.
+ */
+function useBuildPolling(building: boolean, onReload: () => void) {
+  useEffect(() => {
+    if (!building) return;
+    const timer = window.setInterval(onReload, POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [building, onReload]);
+}
+
+/**
+ * Start a build and report it. Resolves when the row reaches `indexing`, not
+ * when the build finishes — the polling above carries it from there.
+ */
+function useStartBuild(project: Project, onReload: () => void) {
+  const [starting, setStarting] = useState(false);
+
+  const start = () => {
+    setStarting(true);
+    void buildKnowledge(project.id, project.repo)
+      .then(() => {
+        toast(
+          "Build started",
+          `EmeHub is indexing ${project.repo || project.id}. This takes a few minutes.`,
+          "info",
+        );
+        onReload();
+      })
+      .catch((error: unknown) => {
+        toast(
+          "Could not start the build",
+          error instanceof ApiError ? error.message : "The hub did not respond.",
+          "warn",
+        );
+      })
+      .finally(() => setStarting(false));
+  };
+
+  return { starting, start };
+}
 
 /** Handoff › source table — `34px | 2.6fr | 110 | 100 | 120 | 110 | 100`. */
 const COLUMNS = "34px minmax(0,2.6fr) 110px 100px 120px 110px 100px";
@@ -80,7 +130,7 @@ function TypeChip({
   );
 }
 
-/** Not indexed — the honest version of the handoff's dashed empty state. */
+/** Not indexed — the handoff's dashed empty state, with a CTA that works. */
 function NotIndexed({
   project,
   onReload,
@@ -91,6 +141,9 @@ function NotIndexed({
   const knowledge = project.knowledge;
   const failed = knowledge?.status === "error";
   const building = knowledge?.status === "indexing";
+  const { starting, start } = useStartBuild(project, onReload);
+
+  useBuildPolling(building, onReload);
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -103,17 +156,29 @@ function NotIndexed({
         </div>
         <p className="m-0 max-w-[440px] text-[12.5px] text-pretty text-muted">
           {building
-            ? "An agent is indexing this repository on its own host. The result lands here as soon as it reports back."
-            : "Once an agent indexes this repository, EmeHub keeps the versioned result here and every agent you launch inherits it."}
+            ? "EmeHub is cloning the repository and indexing it. This takes a few minutes; the result appears here on its own."
+            : "Index this repository once and every agent you launch inherits the versioned result."}
         </p>
-        <Button
-          variant="primary"
-          className="mt-[6px] h-auto rounded-button px-[22px] py-3 text-[13.5px]"
-          icon={<Icon name="refresh" size={15} strokeWidth={2.2} />}
-          onClick={onReload}
-        >
-          Check again
-        </Button>
+        {building ? (
+          <Button
+            variant="primary"
+            className="mt-[6px] h-auto rounded-button px-[22px] py-3 text-[13.5px]"
+            icon={<Icon name="refresh" size={15} strokeWidth={2.2} />}
+            onClick={onReload}
+          >
+            Check again
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            className="mt-[6px] h-auto rounded-button px-[22px] py-3 text-[13.5px]"
+            icon={<Icon name="book" size={15} strokeWidth={2.2} />}
+            onClick={start}
+            disabled={starting || !project.repo}
+          >
+            {starting ? "Starting…" : "Build project knowledge"}
+          </Button>
+        )}
       </div>
 
       {failed && knowledge?.lastError && (
@@ -122,12 +187,12 @@ function NotIndexed({
         </Notice>
       )}
 
-      <Notice tone="info">
-        EmeHub records knowledge, it does not build it. Cloning{" "}
-        {project.repo || "the repository"} and running the indexing skill needs
-        a checkout and a Claude credential on disk — both live on the agent
-        host, which reports the finished index back to the hub.
-      </Notice>
+      {!project.repo && (
+        <Notice tone="warn">
+          Add a repository under Settings before building — EmeHub clones it to
+          index the code.
+        </Notice>
+      )}
     </div>
   );
 }
@@ -140,6 +205,7 @@ export function KnowledgeTab({
   onReload: () => void;
 }) {
   const setModal = useUi((s) => s.setModal);
+  const { starting, start } = useStartBuild(project, onReload);
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
   const [openKeys, setOpenKeys] = useState<string[]>([]);
   const [query, setQuery] = useState("");
@@ -189,6 +255,16 @@ export function KnowledgeTab({
           <span className="rounded-pill border border-pb bg-pt px-[10px] py-1 font-mono text-[11px] font-semibold text-ps-text">
             {knowledge.version}
           </span>
+          {/* Rebuild, not "Re-index queued": this really starts one, and the
+              version increments when it lands (ADR 0007). */}
+          <Button
+            className="h-auto rounded-button px-[16px] py-[9px] text-[12.5px]"
+            icon={<Icon name="refresh" size={14} strokeWidth={2.2} />}
+            onClick={start}
+            disabled={starting || !project.repo}
+          >
+            {starting ? "Starting…" : "Rebuild"}
+          </Button>
         </div>
 
         <div className="mt-3 flex flex-col gap-2">

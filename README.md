@@ -33,20 +33,25 @@ It is also the front door: sign in once, see the suite, launch an agent.
 
 ## Status
 
-**Phase 1 complete — the UI runs, on stubbed data.** All eleven views from the design handoff
-are built and served by the Docker stack: Landing, Overview, Projects & Repositories (list +
-five detail tabs), Tickets, Import dialog, Claude Settings, Authentication, User Management,
-Integrations, Settings, and the overlays — in light and dark across four accents, with the
-WebGL constellation field.
+**The hub is built and running.** FastAPI + PostgreSQL behind nginx, ~408 backend tests, and
+all eleven views from the design handoff live against real endpoints — Landing, Overview,
+Projects & Repositories (list + five detail tabs), Tickets, Import dialog, Claude Settings,
+Authentication, User Management, Integrations, Settings and the overlays, in light and dark
+across four accents.
 
-**Nothing talks to a real backend yet.** Every screen reads from a typed stub layer
-(`app/src/data/`) shaped like the contract in
-[docs/INTEGRATION.md](docs/INTEGRATION.md#3-endpoints-agents-consume); the API is a
-`/health` endpoint and nothing more. Both agents still own their own authentication and
-credentials — no migration has started. Phases 2–5 replace the stubs one resource at a time;
-see [docs/ROADMAP.md](docs/ROADMAP.md).
+It owns identity (login, MFA, sessions, invites, roles), Claude credentials, provider
+connections with live Azure DevOps / GitHub / Jira adapters, projects and their configuration,
+knowledge bases — **which it now builds itself**
+([ADR 0007](docs/adr/0007-knowledge-builds-run-on-the-hub.md)) — and the ticket store.
 
-Known gaps: dark-mode contrast on two tokens ([#26](https://github.com/chuongnd2612/emehub/issues/26)).
+**What has not happened is the agent cutover.** Neither Q-Agent nor D-Agent validates a
+hub token or reads its configuration from here, so the hub currently runs *alongside* both
+rather than in front of them. That is the remaining work; see
+[docs/ROADMAP.md](docs/ROADMAP.md).
+
+Known gaps: [#50](https://github.com/chuongnd2612/emehub/issues/50) — a handful of designed
+screens (API keys, roles, invitations, Overview activity/KPIs) have no backend behind them
+and say so in the UI rather than showing fixtures as if they were real.
 
 ---
 
@@ -69,14 +74,17 @@ Further agents sketched in the design mockup: DataAgent, OpsAgent, DocAgent, Sec
 | **Identity & users** | One login for the whole suite. Users, roles (`admin` / `member`), invites, sessions, 2FA, password reset. The hub issues the access tokens the agents accept. |
 | **Claude credentials** | One place to add and rotate the Anthropic/Claude credential. Per-user credentials with an optional shared organisation account; agents resolve theirs from the hub instead of storing their own. |
 | **Provider connections** | Azure DevOps / GitHub / Jira org URLs and PATs, stored encrypted once and reused by every agent. |
-| **Projects & knowledge** | The project registry, its repositories, environments and test accounts — plus the per-repository knowledge base that agents read before they generate anything. |
+| **Projects & knowledge** | The project registry, its repositories, environments and test accounts — plus the per-repository knowledge base that agents read before they generate anything. The hub **builds** those knowledge bases too ([ADR 0007](docs/adr/0007-knowledge-builds-run-on-the-hub.md)), so an agent with no build capability of its own still gets one. |
 | **Tickets** | The synced ticket store, so a ticket looked at in QAgent is the same ticket DAgent implements. |
 | **Audit** | One audit trail across the suite. |
 
 ## What each agent keeps
 
-The hub is deliberately **not** a place for domain work. Each agent keeps everything specific
-to its discipline:
+The hub is deliberately **not** a place for domain work. The one narrow exception is that it
+builds the shared artefacts it already owns every input for — knowledge bases
+([ADR 0007](docs/adr/0007-knowledge-builds-run-on-the-hub.md)). It does not do an agent's job:
+no test generation, no code generation, no browser automation, no PR creation. Each agent keeps
+everything specific to its discipline:
 
 - **QAgent** — runs, the eight-stage pipeline, generated specs, execution, evidence,
   self-healing, publishing back to the provider, the paired Local Agent.
@@ -114,8 +122,10 @@ claude-projects/
 | Integration | REST + hub-issued JWT; no shared database | Clean service boundary. [ADR 0003](docs/adr/0003-integration-via-http-and-hub-issued-jwt.md) |
 | Design | Glassmorphic, light + dark, four accents (default EMESOFT Red) | The design handoff is binding. [ADR 0006](docs/adr/0006-implementing-the-emehub-design-handoff.md) |
 
-The frontend and the compose stack are built. The backend is a `/health` endpoint —
-Phases 2–4 fill it in.
+All three are built and running. The `api` image also carries `git`, Node 20 and the Claude
+CLI, because the hub builds knowledge bases itself
+([ADR 0007](docs/adr/0007-knowledge-builds-run-on-the-hub.md)) — deliberately no chromium,
+which would only be needed for browser automation the hub does not do.
 
 ---
 
@@ -140,6 +150,7 @@ Phases 2–4 fill it in.
 | [0004](docs/adr/0004-inherit-the-q-agent-design-system.md) | Inherit the QAgent design system. |
 | [0005](docs/adr/0005-secret-and-key-management.md) | Separate the signing secret from the encryption key. |
 | [0006](docs/adr/0006-implementing-the-emehub-design-handoff.md) | The design handoff is binding; supersedes 0004. |
+| [0007](docs/adr/0007-knowledge-builds-run-on-the-hub.md) | Knowledge builds run on the hub; narrows 0001 and supersedes the Phase 4 filesystem split. |
 
 ---
 
@@ -160,6 +171,30 @@ docker compose up -d --build
 
 Ports (5180 web, 8790 api, 5457 db) are chosen not to clash with QAgent's, so both stacks can
 run on one host during the migration.
+
+**The first `--build` takes a few minutes.** Since
+[ADR 0007](docs/adr/0007-knowledge-builds-run-on-the-hub.md) the hub builds knowledge bases
+itself, so the API image also installs `git`, the Node 20 runtime and
+`@anthropic-ai/claude-code` on top of the Python base. (No chromium — the hub runs no browser.)
+Confirm the three are present after a build:
+
+```bash
+docker compose exec api sh -c 'git --version && node --version && claude --version'
+```
+
+Two things a build needs at runtime, neither of which the stack can supply for you:
+
+- **a Claude credential** — upload one under *Claude settings*, or have an admin configure the
+  shared account;
+- **a repository connection with a PAT** — under *Integrations*, bound to the project whose
+  repository you want cloned.
+
+Without either, a build lands the knowledge row in `error` with a message saying which one is
+missing; it never fails the request.
+
+The `emehub-workspace` volume now holds repository clones and, for the duration of a build, a
+decrypted Claude credential. Treat it as sensitive: not a world-readable mount, not a volume
+to copy casually.
 
 ### Working on the frontend
 

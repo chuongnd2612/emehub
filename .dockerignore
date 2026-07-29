@@ -1,0 +1,32 @@
+# Build context is the REPO ROOT (docker-compose.yml), so this is the file
+# Docker actually reads — `api/.dockerignore` is never consulted for that
+# context and is kept only for a hand-rolled `docker build api/`.
+#
+# `COPY api/ ./` would otherwise bake `api/.env` and `api/workspace/` into the
+# image. Since ADR 0007 the workspace can hold a materialised Claude credential,
+# so that is a plaintext secret in a layer — excluded here, not by convention.
+
+.git
+.env
+.env.*
+!.env.example
+
+# --- python -----------------------------------------------------------------
+**/__pycache__
+**/*.py[cod]
+api/.venv
+api/workspace
+api/.pytest_cache
+api/.ruff_cache
+api/.mypy_cache
+
+# --- node -------------------------------------------------------------------
+**/node_modules
+app/dist
+
+# --- not needed in the API image --------------------------------------------
+design
+docs
+playwright-report
+test-results
+coverage

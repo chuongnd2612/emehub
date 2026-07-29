@@ -1,25 +1,39 @@
-"""Project knowledge — metadata persistence and the discovery merge.
+"""Project knowledge — the build, the metadata persistence and the discovery merge.
 
-Ported from QAgent's ``services/knowledge_service.py``, **metadata parts only**.
+## The hub builds (ADR 0007)
 
-## What is NOT here, and why
+This module used to be metadata-only, because the hub owned no workspace, ran no
+Claude CLI and cloned no repositories. [ADR 0007](../../../docs/adr/0007-knowledge-builds-run-on-the-hub.md)
+reversed that: the hub clones into a per-owner workspace, runs
+``project-bootstrap`` through the Claude CLI against the clone, writes
+``knowledge.md`` / ``knowledge.json`` and updates the row itself.
 
-QAgent's module is mostly a *builder*: it renders a prompt, runs the Claude CLI
-inside a repo clone (``run_json(..., cwd=repo_path)``), spawns a background
-thread per build, and writes ``knowledge.md`` + ``knowledge.json`` into a
-per-user workspace directory. Every one of those needs a filesystem, a clone and
-a Claude credential on disk, and the hub has none of the three
-(ROADMAP.md Phase 4; CLAUDE.md — the hub does no domain work). So:
+The build half is :func:`start_build` → :func:`_run_build` →
+:func:`build_knowledge_payload` / :func:`write_knowledge_files`, and it is
+governed by three rules that exist because a build is minutes long, spends money
+and runs untrusted-ish input through a subprocess:
 
-* ``build_knowledge_payload`` / ``_build_prompt`` / ``start_build`` — not ported.
-  Building stays on the agent host.
-* ``write_knowledge_files`` — not ported. See the *filesystem seams* note at the
-  bottom for exactly what the agent still owns.
-* ``apply_build`` — ported as :func:`apply_build_result`, minus the file write:
-  the agent builds and then *reports* the result through
-  ``PUT /projects/{key}/repos/{repo}/knowledge``.
+**Backgrounded, and ``indexing`` is committed first.** The endpoint sets the row
+to ``indexing`` and commits *before* the worker starts, so the UI reflects the
+state immediately and a second request finds a build already in flight rather
+than starting a duplicate.
 
-## What IS here
+**Bounded concurrency.** :data:`_semaphore` caps concurrent builds process-wide
+at ``settings.knowledge_build_concurrency``. Over the cap, a worker waits with
+its row still ``indexing`` — queued, never dropped, and never able to let one
+member's twenty repositories starve everyone else's one.
+
+**Failure is a status, not an exception.** Every failure mode — no clone URL, no
+repository connection, a clone that fails, a missing credential, a CLI timeout,
+non-JSON output — lands the row in ``error`` with a ``last_error`` a human can
+act on. Nothing propagates out of the worker thread, and nothing that reaches
+``last_error`` has been near a PAT (``repo_service`` scrubs; see there).
+
+``PUT .../knowledge`` **stays** (:func:`apply_build_result`). QAgent builds its
+own knowledge and reports it, and the hub becoming *a* builder does not make it
+the only one.
+
+## What IS still here from before
 
 The row lifecycle (:data:`app.models.knowledge.KNOWLEDGE_STATUSES`) and the
 write path in INTEGRATION.md §3 — :func:`merge_discovery`, the port of QAgent's
@@ -46,15 +60,22 @@ and ``source``; selectors additionally carry the ``strategy`` that worked.
 
 from __future__ import annotations
 
+import json
+import threading
 from datetime import datetime, timezone
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import utcnow
+from app.logging import logger
 from app.models.knowledge import (
     KNOWLEDGE_STATUSES,
+    STATUS_ERROR,
     STATUS_INDEXED,
+    STATUS_INDEXING,
     STATUS_NOT_INDEXED,
     ProjectKnowledge,
     compose_key,
@@ -62,6 +83,9 @@ from app.models.knowledge import (
 from app.models.user import User
 from app.services import project_service
 from app.services.ownership import stamp_owner
+
+if TYPE_CHECKING:  # pragma: no cover
+    from app.models.project_config import ProjectConfig
 
 
 # ------------------------------------------------------------------- reads
@@ -305,28 +329,534 @@ def _merge_entries(existing: list, incoming: list[dict], *, field: str, stamp) -
     return merged
 
 
-# ----------------------------------------------------------- filesystem seams
+# ------------------------------------------------------------------- build
 #
-# Three things QAgent's knowledge_service does that the hub deliberately does
-# NOT, and which the agent must therefore keep doing:
-#
-# 1. **Clone / pull the repository.** QAgent's ``_resolve_path_for_row`` resolves
-#    a checkout (using the row owner's own repository-connection PAT) before a
-#    build. The hub never clones: it holds no clone, and handing out the PAT to
-#    make one possible is exactly what CLAUDE.md forbids.
-#
-# 2. **Run ``project-bootstrap`` through the Claude CLI.** The build reads real
-#    source with the CLI's file tools, in the clone, with a credential on disk.
-#    The hub does no Claude invocation for end-user tasks (CLAUDE.md).
-#
-# 3. **Write ``knowledge.md`` + ``knowledge.json``.** These are the skill's
-#    artifacts, consumed by downstream skills running on the same host. The hub
-#    stores only ``doc_path``, an opaque agent-host string.
-#
-# The seam is the HTTP write path: the agent builds, writes its own artifacts,
-# then reports the outcome with
-# ``PUT  /projects/{key}/repos/{repo}/knowledge``   (status/knowledge/confidence/doc_path)
-# and contributes runtime discoveries with
-# ``PATCH /projects/{key}/repos/{repo}/knowledge``  (:func:`merge_discovery`).
-# A row moving to ``indexing`` and never coming back means the agent died
-# mid-build; the hub does not time it out, because only the agent knows.
+# Everything below this line arrived with ADR 0007. Above it is unchanged: the
+# hub still records what an agent reports, it has simply also become a builder.
+
+#: Guards :data:`_building`. Held only for the set operations, never across the
+#: build itself.
+_BUILD_LOCK = threading.Lock()
+
+#: ``ProjectKnowledge.id`` of every build in flight in this process. Keyed by id
+#: rather than by row key because the same key exists once per member and once
+#: shared — keying by string would let one member's build block another's.
+_building: set[int] = set()
+
+_SEMAPHORE_LOCK = threading.Lock()
+_semaphore: threading.BoundedSemaphore | None = None
+_semaphore_capacity = 0
+
+
+def _build_semaphore() -> threading.BoundedSemaphore:
+    """The process-wide concurrency cap, built lazily from settings.
+
+    Rebuilt when ``knowledge_build_concurrency`` changes so a test (or a config
+    reload) is not stuck with the first value the process ever saw. A capacity
+    below 1 is clamped: a cap of zero would silently disable building.
+    """
+    global _semaphore, _semaphore_capacity
+    capacity = max(1, int(settings.knowledge_build_concurrency or 1))
+    with _SEMAPHORE_LOCK:
+        if _semaphore is None or _semaphore_capacity != capacity:
+            _semaphore = threading.BoundedSemaphore(capacity)
+            _semaphore_capacity = capacity
+        return _semaphore
+
+
+def is_building(row_id: int) -> bool:
+    """True when a build for this row is already in flight in this process."""
+    with _BUILD_LOCK:
+        return row_id in _building
+
+
+def start_build(row_id: int) -> bool:
+    """Start a background build for ``row_id``; ``False`` if one is already running.
+
+    The check and the claim happen under one lock, so two requests racing on the
+    same row cannot both win.
+
+    The guard is deliberately **in-process**, not the ``indexing`` column. A row
+    left ``indexing`` by a container that died mid-build is not evidence that a
+    build is running — it is evidence that one is not — and a status-only guard
+    would wedge that row permanently. Asking again after a restart therefore
+    starts a fresh build, which is the behaviour a user pressing the button
+    twenty minutes later expects.
+    """
+    with _BUILD_LOCK:
+        if row_id in _building:
+            return False
+        _building.add(row_id)
+    threading.Thread(
+        target=_run_build, args=(row_id,), name=f"knowledge-build-{row_id}", daemon=True
+    ).start()
+    return True
+
+
+def _run_build(row_id: int) -> None:
+    """Worker body. Waits for a slot, builds, and can never raise.
+
+    The semaphore is acquired *before* the session is opened so a queued build
+    holds no database connection while it waits.
+    """
+    from app import db as db_module
+
+    semaphore = _build_semaphore()
+    semaphore.acquire()
+    try:
+        db = db_module.SessionLocal()
+        try:
+            _build(db, row_id)
+        except Exception as exc:  # noqa: BLE001 - a build failure is a row status
+            _record_failure(db, row_id, exc)
+        finally:
+            db.close()
+    finally:
+        semaphore.release()
+        with _BUILD_LOCK:
+            _building.discard(row_id)
+
+
+def _record_failure(db: Session, row_id: int, exc: BaseException) -> None:
+    """Land the failure on the row as ``error`` + ``last_error``. Never raises.
+
+    ``repo_service.redact`` runs over the message even though the clone path
+    already scrubbed its own: this is the last point before the text becomes a
+    database column and an API response, and a defence that only works when
+    every upstream caller remembered is not a defence.
+    """
+    from app.services.repo_service import redact
+
+    message = redact(str(exc) or exc.__class__.__name__)[:1000]
+    try:
+        db.rollback()
+        row = db.get(ProjectKnowledge, row_id)
+        if row is not None:
+            row.status = STATUS_ERROR
+            row.last_error = message
+            db.commit()
+    except Exception as inner:  # noqa: BLE001
+        logger.error("Could not record a knowledge build failure: %s", inner)
+    logger.error("Knowledge build %s failed: %s", row_id, message)
+
+
+def _build(db: Session, row_id: int) -> None:
+    """One build, start to finish. Raises on any failure; the worker records it."""
+    from app.services import audit_service, project_config_service, repo_service
+
+    row = db.get(ProjectKnowledge, row_id)
+    if row is None:
+        logger.warning("Knowledge build %s: the row disappeared before it started", row_id)
+        return
+
+    project_key = row.project_key or row.key
+    # Pinned to the row's own namespace, never resolved own → shared: a shared
+    # build must read the shared config, not a member's same-keyed copy.
+    config = project_config_service.get_config_for_owner(db, project_key, row.owner_id)
+
+    clone = repo_service.ensure_clone(
+        db,
+        project_key=project_key,
+        repo_name=row.repo,
+        repo_url=_clone_url(config, row),
+        owner_id=row.owner_id,
+        bound_connection_id=getattr(config, "repository_connection_id", None),
+    )
+    payload = build_knowledge_payload(
+        db,
+        name=row.name or project_key,
+        provider=row.provider,
+        repo=row.repo,
+        framework=row.framework,
+        owner_id=row.owner_id,
+        config=config,
+        repo_path=clone,
+    )
+    apply_build(row, payload, config=config)
+    db.commit()
+    audit_service.record(
+        category="knowledge",
+        actor_type="system",
+        action="Built project knowledge base",
+        target=row.key,
+        meta=f"{row.version} · {row.confidence}% confidence",
+        owner_id=row.owner_id,
+        db=db,
+    )
+
+
+def _clone_url(config: "ProjectConfig | None", row: ProjectKnowledge) -> str:
+    """The ``repo_url`` for the row's repository, from the project's config.
+
+    ``local_repo_path`` is deliberately ignored — it names a directory on an
+    *agent* host (``project_config_service.REPO_FIELDS``) and resolving it inside
+    the API container would either fail or, worse, traverse something unrelated
+    that happens to sit at that path.
+    """
+    from app.services import project_config_service
+
+    repos = project_config_service.get_repos(config)
+    if row.repo:
+        entry = next((r for r in repos if r.get("name") == row.repo), None)
+        if entry is None:
+            raise ValueError(
+                f"'{row.repo}' is not one of this project's repositories. Add it "
+                "under Project settings › Repositories, then build again."
+            )
+    else:
+        entry = project_config_service.default_repo(config)
+        if entry is None:
+            raise ValueError(
+                "This project has no repositories configured. Add one under "
+                "Project settings › Repositories, then build again."
+            )
+    return (entry.get("repo_url") or "").strip()
+
+
+# --------------------------------------------------------------- the prompt
+def _config_hints(config: "ProjectConfig | None") -> str:
+    """The user-authored configuration, rendered as grounding facts.
+
+    Roles and usernames only. **A test-account password is never written into a
+    prompt** — it is encrypted at rest precisely so it does not travel, and a
+    prompt is the least controllable place a secret can end up.
+
+    QAgent's version also advertises ``local_repo_path``; the hub's does not,
+    because the hub runs the CLI *inside* the clone (see
+    :func:`build_knowledge_payload`) and pointing Claude at an agent-host path
+    it cannot open would only invite it to invent one.
+    """
+    if config is None:
+        return "No project configuration has been provided yet.\n"
+    lines: list[str] = []
+    if config.base_url:
+        lines.append(f"- Application base URL: {config.base_url}")
+    for env in config.environments or []:
+        name, url = env.get("name", ""), env.get("base_url", "")
+        if name or url:
+            lines.append(f"- Environment '{name}': {url}")
+    roles = [a.get("role", "") for a in (config.test_accounts or []) if a.get("role")]
+    if roles:
+        lines.append(f"- Configured test-account roles: {', '.join(roles)}")
+    if not lines:
+        return "No project configuration has been provided yet.\n"
+    return "\n".join(lines) + "\n"
+
+
+def _build_prompt(
+    name: str, provider: str, repo: str, framework: str, config: "ProjectConfig | None"
+) -> str:
+    """The bootstrap prompt. Kept shape-identical to QAgent's so a knowledge base
+    built by either side answers the same keys."""
+    return (
+        "Build a Project Knowledge Base for this software project so a QA "
+        "automation agent can generate runnable Playwright tests with NO manual "
+        "placeholders. Discover concrete, reusable facts.\n\n"
+        "The repository is checked out in your working directory — traverse it "
+        "with your file tools to discover real routes, data-testids/selectors, "
+        "page objects, fixtures and the authentication flow.\n\n"
+        f"Project name: {name}\n"
+        f"Provider: {provider or 'unknown'}\n"
+        f"Repository: {repo or 'unknown'}\n"
+        f"Automation framework: {framework or 'Playwright'}\n\n"
+        "Known project configuration (treat as authoritative):\n"
+        f"{_config_hints(config)}\n"
+        "Return a JSON object with EXACTLY these keys:\n"
+        '{"branch": string, "stack": string[], "architecture": string, '
+        '"domain": string, "locator": string, "base_url": string, '
+        '"routes": [{"path": string, "description": string, "auth_required": boolean}], '
+        '"selectors": [{"screen": string, "element": string, "selector": string}], '
+        '"auth": {"login_flow": string, "login_url": string, "storage_state": string}, '
+        '"environments": [{"name": string, "base_url": string, "notes": string}], '
+        '"business_entities": string[], "assets": number, "pageObjects": number, '
+        '"page_object_names": string[], "fixtures": number, "fixture_names": string[], '
+        '"utilities": string[], "confidence": number (0-100)}\n'
+        "- base_url: the primary application URL (use the configured one if given).\n"
+        "- routes: real application routes/URL patterns a test would navigate to.\n"
+        "- selectors: real, stable selectors (prefer data-testid / role) found in the code.\n"
+        "- auth: how a test logs in — flow summary, the login URL, and any storageState path.\n"
+        "- architecture/domain: 1-2 sentences each.\n"
+        "- assets/pageObjects/fixtures: best-estimate COUNTS of existing Playwright assets.\n"
+        "- page_object_names/fixture_names: the actual names of reusable assets to reuse.\n"
+        "- confidence: how confident this knowledge base is (0-100). "
+        "Lower it for anything guessed."
+    )
+
+
+def build_knowledge_payload(
+    db: Session,
+    *,
+    name: str,
+    provider: str,
+    repo: str,
+    framework: str,
+    owner_id: int | None,
+    config: "ProjectConfig | None" = None,
+    repo_path: str | Path | None = None,
+    timeout: int | None = None,
+) -> dict[str, Any]:
+    """Run ``project-bootstrap`` against the clone and normalise the result.
+
+    ``owner_id`` is the *row's* owner, so the call resolves that member's own (or
+    the shared) Claude credential and the usage row is stamped with whoever
+    actually paid. ``repo_path`` becomes the CLI's working directory — that is
+    what turns inferred structure into discovered fact.
+
+    Every key is defaulted, so a model that omits one produces a thin knowledge
+    base rather than a ``KeyError`` that fails an otherwise fine build.
+    """
+    from app.services.claude_cli import run_json
+    from app.services.skills import PROJECT_BOOTSTRAP
+
+    raw = run_json(
+        _build_prompt(name, provider, repo, framework, config),
+        db=db,
+        owner_id=owner_id,
+        skill=PROJECT_BOOTSTRAP,
+        include_template=True,
+        label=f"Build knowledge: {name}",
+        cwd=repo_path,
+        timeout=timeout or settings.claude_bootstrap_timeout_s,
+    )
+    data = raw if isinstance(raw, dict) else {}
+    try:
+        confidence = int(data.get("confidence", 80) or 0)
+    except (TypeError, ValueError):
+        confidence = 0
+    return {
+        "knowledge": {
+            "branch": data.get("branch", "main"),
+            "stack": data.get("stack") or [],
+            "architecture": data.get("architecture", ""),
+            "domain": data.get("domain", ""),
+            "locator": data.get("locator", ""),
+            "base_url": data.get("base_url", ""),
+            "routes": data.get("routes") or [],
+            "selectors": data.get("selectors") or [],
+            "auth": data.get("auth") or {},
+            "environments": data.get("environments") or [],
+            "business_entities": data.get("business_entities") or [],
+            "assets": _as_int(data.get("assets")),
+            "pageObjects": _as_int(data.get("pageObjects")),
+            "page_object_names": data.get("page_object_names") or [],
+            "fixtures": _as_int(data.get("fixtures")),
+            "fixture_names": data.get("fixture_names") or [],
+            "utilities": data.get("utilities") or [],
+        },
+        "confidence": max(0, min(100, confidence)),
+    }
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def apply_build(
+    row: ProjectKnowledge, payload: dict[str, Any], *, config: "ProjectConfig | None" = None
+) -> None:
+    """Persist a hub-run build onto ``row``, artefacts included. Caller commits.
+
+    The metadata half is :func:`apply_build_result` — the same version, timestamp
+    and error-clearing semantics an agent's report gets, so a row cannot tell you
+    which side built it except by ``doc_path``. The difference is that here the
+    hub *wrote* those artefacts, so ``doc_path`` is a hub workspace path it can
+    resolve, rather than the opaque agent-host string a report carries.
+    """
+    apply_build_result(
+        row,
+        knowledge=payload["knowledge"],
+        confidence=payload["confidence"],
+        status=STATUS_INDEXED,
+    )
+    row.doc_path = str(write_knowledge_files(row, config))
+
+
+def write_knowledge_files(
+    row: ProjectKnowledge, config: "ProjectConfig | None" = None
+) -> Path:
+    """Emit ``knowledge.json`` + ``knowledge.md`` under the row owner's scope.
+
+    ``project-bootstrap``'s contract is to persist the knowledge base as files
+    that downstream skills read, so the row is mirrored into them and merged with
+    the user-authored configuration to make one consistent project context.
+
+    **Test-account passwords are never written.** Roles, usernames and notes
+    only — the same rule ``_config_hints`` applies to the prompt. Returns the
+    directory.
+    """
+    from app.services.workspace_scope import scoped_knowledge_dir, slug
+
+    kn = row.knowledge or {}
+    out_dir = scoped_knowledge_dir(row.owner_id) / slug(row.project_key or row.key)
+    if row.repo:
+        out_dir = out_dir / slug(row.repo)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    base_url = (config.base_url if config and config.base_url else "") or kn.get("base_url", "")
+    environments = (
+        config.environments if config and config.environments else None
+    ) or kn.get("environments", [])
+    accounts = (
+        [
+            {
+                "role": a.get("role", ""),
+                "username": a.get("username", ""),
+                "notes": a.get("notes", ""),
+            }
+            for a in (config.test_accounts or [])
+        ]
+        if config
+        else []
+    )
+
+    document = {
+        "project_name": row.name,
+        "repository": row.repo,
+        "branch": kn.get("branch", "main"),
+        "automation": row.framework,
+        "stack": kn.get("stack", []),
+        "architecture": kn.get("architecture", ""),
+        "business_domain": kn.get("domain", ""),
+        "business_entities": kn.get("business_entities", []),
+        "base_url": base_url,
+        "locator_strategy": kn.get("locator", ""),
+        "routes": kn.get("routes", []),
+        "selectors": kn.get("selectors", []),
+        "auth": kn.get("auth", {}),
+        "environments": environments,
+        "test_accounts": accounts,  # roles/usernames only — never a password
+        "existing_assets": {
+            "spec_files": kn.get("assets", 0),
+            "page_objects": kn.get("pageObjects", 0),
+            "page_object_names": kn.get("page_object_names", []),
+            "fixtures": kn.get("fixtures", 0),
+            "fixture_names": kn.get("fixture_names", []),
+        },
+        "reusable_utilities": kn.get("utilities", []),
+        "confidence": row.confidence,
+        "version": row.version,
+        "indexed_at": row.last_indexed.isoformat() if row.last_indexed else None,
+        "built_by": "emehub",
+    }
+    (out_dir / "knowledge.json").write_text(
+        json.dumps(document, indent=2), encoding="utf-8"
+    )
+    (out_dir / "knowledge.md").write_text(
+        _knowledge_markdown(row, kn, base_url, environments, accounts), encoding="utf-8"
+    )
+    return out_dir
+
+
+def _knowledge_markdown(
+    row: ProjectKnowledge,
+    kn: dict,
+    base_url: str,
+    environments: list,
+    accounts: list[dict],
+) -> str:
+    """The human-readable half of the artefact pair."""
+    stack = ", ".join(kn.get("stack", [])) or "—"
+    routes = "\n".join(
+        f"- `{r.get('path', '')}` — {r.get('description', '')}"
+        f"{' (auth required)' if r.get('auth_required') else ''}"
+        for r in kn.get("routes", [])
+    ) or "- _none discovered_"
+    selectors = "\n".join(
+        f"- {s.get('screen', '')}: {s.get('element', '')} → `{s.get('selector', '')}`"
+        for s in kn.get("selectors", [])
+    ) or "- _none discovered_"
+    envs = "\n".join(
+        f"- **{e.get('name', '')}**: {e.get('base_url', '')} {e.get('notes', '')}".rstrip()
+        for e in environments
+    ) or "- _none configured_"
+    accounts_md = "\n".join(
+        f"- **{a['role'] or 'account'}**: `{a['username']}` "
+        f"(password stored encrypted in EmeHub) {a['notes']}".rstrip()
+        for a in accounts
+    ) or "- _none configured_"
+    utilities = "\n".join(f"- `{u}`" for u in kn.get("utilities", [])) or "- _none discovered_"
+    auth = kn.get("auth", {}) or {}
+
+    return f"""# Project Knowledge Base — {row.name}
+
+- **Repository:** {row.repo or "—"}
+- **Branch:** {kn.get("branch", "main")}
+- **Automation framework:** {row.framework}
+- **Base URL:** {base_url or "—"}
+- **Confidence:** {row.confidence}%  ·  **Version:** {row.version}
+- **Built by:** EmeHub
+
+## Technology stack
+{stack}
+
+## Application architecture
+{kn.get("architecture", "—")}
+
+## Business domain
+{kn.get("domain", "—")}
+
+## Business entities
+{", ".join(kn.get("business_entities", [])) or "—"}
+
+## Locator strategy
+{kn.get("locator", "—")}
+
+## Application routes
+{routes}
+
+## Known selectors
+{selectors}
+
+## Authentication
+- **Login flow:** {auth.get("login_flow", "—")}
+- **Login URL:** {auth.get("login_url", "—")}
+- **storageState:** {auth.get("storage_state", "—")}
+
+## Environments
+{envs}
+
+## Test accounts
+{accounts_md}
+
+## Existing Playwright assets
+- Spec files: {kn.get("assets", 0)}
+- Page objects: {kn.get("pageObjects", 0)} {", ".join(kn.get("page_object_names", []))}
+- Shared fixtures: {kn.get("fixtures", 0)} {", ".join(kn.get("fixture_names", []))}
+
+## Reusable test utilities
+{utilities}
+
+## AI Context Summary
+{row.name} ({stack}) at base URL {base_url or "(unset)"}. {kn.get("architecture", "")}
+Domain: {kn.get("domain", "")} Prefer the locator strategy above and the listed routes,
+selectors, auth flow and reusable assets. Test-account credentials are supplied by EmeHub's
+encrypted store — reference them by role, never by value.
+"""
+
+
+def request_build(
+    db: Session, project_key: str, repo: str, user: User
+) -> tuple[ProjectKnowledge, bool]:
+    """Move the row to ``indexing``, commit, then start the worker.
+
+    Returns ``(row, started)``. ``started`` is ``False`` when a build for this
+    row was already in flight — the caller still answers with the ``indexing``
+    row, because from the requester's point of view the outcome is identical:
+    a build is running and the status is the thing to poll.
+
+    The commit happens **before** :func:`start_build` deliberately. If it did
+    not, the worker could open its own session, read a row that is still
+    ``not_indexed``, and race the request transaction that was about to say
+    otherwise.
+    """
+    row = write_target(db, project_key, repo, user)
+    if row.id is not None and is_building(row.id):
+        return row, False
+    row.status = STATUS_INDEXING
+    row.last_error = ""
+    db.commit()
+    db.refresh(row)
+    return row, start_build(row.id)

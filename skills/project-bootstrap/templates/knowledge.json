@@ -1,0 +1,49 @@
+{
+  "project_name": "",
+  "repository": "",
+  "branch": "",
+  "commit": "",
+  "purpose": "",
+  "framework": "",
+  "backend": "",
+  "database": "",
+  "automation": "Playwright",
+  "language": "TypeScript",
+  "base_url": "",
+  "locator_strategy": ["data-testid", "getByRole", "getByLabel", "css", "xpath"],
+  "selectors": [
+    { "screen": "", "element": "", "selector": "" }
+  ],
+  "test_accounts": [
+    { "role": "", "username": "", "notes": "" }
+  ],
+  "page_objects": [
+    { "name": "", "path": "", "purpose": "", "key_methods": [] }
+  ],
+  "fixtures": [
+    { "name": "", "path": "", "purpose": "" }
+  ],
+  "helpers": [
+    { "name": "", "path": "", "purpose": "" }
+  ],
+  "auth": { "login_flow": "", "login_url": "", "storage_state": "", "helpers": [] },
+  "routes": [
+    { "path": "", "description": "", "auth_required": false }
+  ],
+  "business_entities": [],
+  "user_roles": [],
+  "business_workflows": [],
+  "business_rules": [],
+  "glossary": [
+    { "term": "", "definition": "" }
+  ],
+  "environments": [
+    { "name": "", "base_url": "", "notes": "" }
+  ],
+  "external_integrations": [],
+  "reusable_patterns": [],
+  "things_to_reuse": [],
+  "things_to_avoid": [],
+  "risks": [],
+  "missing_information": []
+}

@@ -1,10 +1,18 @@
 """Projects, project configuration and project knowledge.
 
 Ported from QAgent's ``routers/projects.py``, minus everything that needs a
-browser, a repo clone or the Claude CLI (``/refresh``, ``/knowledge/build``,
-``/auth/capture``, ``/explore``) — those stay on the agent host
-(ROADMAP.md Phase 4). What remains is the registry, the configuration and the
-knowledge **metadata**, which is what INTEGRATION.md §3 promises agents.
+browser (``/auth/capture``, ``/explore``) — that stays on the agent host. What
+remains is the registry, the configuration, the knowledge metadata, and — since
+[ADR 0007](../../../docs/adr/0007-knowledge-builds-run-on-the-hub.md) — the
+knowledge **build**.
+
+## The build endpoint
+
+``POST /{key}/repos/{repo}/knowledge/build`` is ``require_user``: hub audience
+only. A build clones a repository, runs a Claude CLI process for minutes and
+spends money, and none of those are things an agent's token should be able to
+trigger on the hub's behalf. It returns ``202`` with the row already at
+``indexing``; the UI polls ``GET …/knowledge`` for the outcome.
 
 ## Auth posture — CONTRACT, with hub-only writes
 
@@ -417,11 +425,11 @@ def report_repo_knowledge(
 ) -> KnowledgeOut:
     """Record a build outcome the **agent** produced on its own host.
 
-    This is the seam the hub could not cross: cloning the repo and running
-    ``project-bootstrap`` through the Claude CLI needs a filesystem and a
-    credential on disk, which the hub does not have. The agent builds and posts
-    the result here — status, the knowledge blob, confidence, and the
-    agent-host ``docPath`` of its own ``knowledge.md``/``.json`` artifacts.
+    This stays after ADR 0007. The hub having become *a* builder does not make
+    it the only one: QAgent already builds its own knowledge, and an agent that
+    did the work should be able to report it — status, the knowledge blob,
+    confidence, and the agent-host ``docPath`` of its own artifacts, which the
+    hub stores and never resolves.
 
     Agent audience is accepted (this is an agent's job). Ownership follows
     ``knowledge_service.write_target``: the caller's own row, the shared row when
@@ -442,6 +450,53 @@ def report_repo_knowledge(
     )
     db.commit()
     db.refresh(row)
+    return _knowledge_out(row)
+
+
+@router.post(
+    "/{key}/repos/{repo}/knowledge/build", response_model=KnowledgeOut, status_code=202
+)
+def build_repo_knowledge(
+    key: str,
+    repo: str,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> KnowledgeOut:
+    """**Build** a knowledge base on the hub (ADR 0007). Hub audience only.
+
+    The hub clones the repository into the caller's workspace scope, runs
+    ``project-bootstrap`` through the Claude CLI against that clone, writes
+    ``knowledge.md``/``knowledge.json`` and updates the row. That is minutes of
+    work, so the endpoint does none of it: it moves the row to ``indexing``,
+    commits, hands off to a background worker and returns ``202`` immediately.
+
+    **What the client does next.** Poll ``GET /projects/{key}/repos/{repo}/knowledge``
+    until ``status`` leaves ``indexing``. ``indexed`` carries the new blob,
+    confidence and version; ``error`` carries ``lastError``, which is written for
+    a human and is safe to display verbatim (never a token — see
+    ``services/repo_service.py``).
+
+    **Requesting twice is safe.** A second call while a build is in flight
+    returns the same ``indexing`` row without starting anything; the response is
+    identical, which is the point. Builds beyond
+    ``EMEHUB_KNOWLEDGE_BUILD_CONCURRENCY`` queue rather than run.
+
+    Ownership follows ``knowledge_service.write_target`` — the caller's own row,
+    the shared row when they are an admin, else a new row owned by them. The
+    clone, the artefacts and the Claude spend all land in that same scope.
+    """
+    _project_or_404(db, key, user)
+    row, started = knowledge_service.request_build(db, key, repo, user)
+    if started:
+        audit_service.record(
+            category="knowledge",
+            action="Requested a knowledge build",
+            target=row.key,
+            actor=user.email,
+            actor_id=user.id,
+            owner_id=row.owner_id,
+            db=db,
+        )
     return _knowledge_out(row)
 
 
