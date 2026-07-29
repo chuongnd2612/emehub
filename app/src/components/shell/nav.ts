@@ -11,8 +11,6 @@ export interface NavItem {
   to: string;
   label: string;
   icon: IconName;
-  /** Optional mono badge, e.g. "6" / "128" / "3". */
-  badge?: string;
   /** Exact match only — used by the index route. */
   end?: boolean;
 }
@@ -23,19 +21,20 @@ export interface NavGroup {
   items: NavItem[];
 }
 
-/** One flat list under two group headings. Order is the handoff's. */
+/**
+ * One flat list under two group headings. Order is the handoff's.
+ *
+ * Badges are NOT declared here — the prototype hardcoded "6" / "128" / "3",
+ * which drifts from reality the moment a project or ticket is added. They're
+ * computed live in `Sidebar.tsx` via `useSidebarStats()` and keyed by `to`.
+ */
 export const NAV_GROUPS: NavGroup[] = [
   {
     label: "WORKSPACE",
     items: [
       { to: "/app", label: "Overview", icon: "grid", end: true },
-      {
-        to: "/app/projects",
-        label: "Projects & Repositories",
-        icon: "folder",
-        badge: "6",
-      },
-      { to: "/app/tickets", label: "Tickets", icon: "ticket", badge: "128" },
+      { to: "/app/projects", label: "Projects & Repositories", icon: "folder" },
+      { to: "/app/tickets", label: "Tickets", icon: "ticket" },
     ],
   },
   {
@@ -44,7 +43,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: "/app/claude", label: "Claude Settings", icon: "cpu" },
       { to: "/app/auth", label: "Authentication", icon: "shield" },
       { to: "/app/users", label: "User Management", icon: "users" },
-      { to: "/app/integrations", label: "Integrations", icon: "plug", badge: "3" },
+      { to: "/app/integrations", label: "Integrations", icon: "plug" },
       { to: "/app/settings", label: "Settings", icon: "gear" },
     ],
   },
