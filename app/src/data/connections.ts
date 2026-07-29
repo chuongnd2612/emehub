@@ -285,6 +285,64 @@ export const getConnections = async (): Promise<ConnectionGroup[]> => {
 };
 
 /**
+ * `GET /connections` flattened and filtered to one capability — the shape a
+ * project-config picker wants (Q-Agent's "Work Item Provider" / "Repository
+ * Provider" dropdowns, `ProjectSettingsForm.tsx`). `"<Provider name> ·
+ * <connection label>"` matches Q-Agent's option label exactly.
+ */
+export const getConnectionsWithCapability = async (
+  capability: "work_item" | "repository",
+): Promise<{ id: number; label: string }[]> => {
+  const groups = await getConnections();
+  return groups.flatMap((g) =>
+    g.connections
+      .filter((c) => c.capabilities.includes(capability))
+      .map((c) => ({
+        id: c.id,
+        label: `${PROVIDERS[g.provider].name} · ${c.label}`,
+      })),
+  );
+};
+
+/** One project as `GET /connections/{id}/projects` reports it. */
+export interface DiscoveredProject {
+  externalId: string;
+  name: string;
+  state: string;
+}
+
+/**
+ * `GET /connections/{id}/projects` — the work-item connection's picker list,
+ * the discovery half of Q-Agent's `POST /projects/refresh`. The hub's
+ * `Project` row is deliberately a bare registry entry (no `provider_kind` /
+ * `external_id` — see `api/app/models/project.py`), so there is no bulk
+ * upsert-by-external-id to port; this is the read a "New project" flow uses
+ * to let someone pick a REAL project name instead of typing an arbitrary key.
+ */
+export const discoverConnectionProjects = (
+  connectionId: number,
+): Promise<DiscoveredProject[]> =>
+  api.get<DiscoveredProject[]>(`/connections/${connectionId}/projects`);
+
+/** One repo as `GET /connections/{id}/repos` reports it. */
+export interface DiscoveredRepo {
+  name: string;
+  cloneUrl: string;
+  webUrl: string;
+  defaultBranch: string;
+}
+
+/**
+ * `GET /connections/{id}/repos` — the `{provider, repos, error}` wrapper the
+ * backend returns so a picker can say *why* it's empty rather than rendering
+ * a blank list (`api/app/routers/connections.py::list_repos`).
+ */
+export const discoverConnectionRepos = (
+  connectionId: number,
+): Promise<{ provider: string; repos: DiscoveredRepo[]; error: string }> =>
+  api.get(`/connections/${connectionId}/repos`);
+
+/**
  * The Overview page's per-provider summary cards, derived from the same
  * `GET /connections` response — the hub has no separate integrations resource.
  *

@@ -3,15 +3,19 @@
 //    counters (indexed assets, page objects, fixtures, default branch)."
 //
 // Two sources, and they are different things:
-//   • the CONFIGURED repositories come from `GET /projects/{key}/config` — what
-//     the workspace registered;
+//   • the CONFIGURED repositories are now EDITABLE here (`RepositoryEditor.tsx`
+//     — discover from the bound Repository Provider connection, or add a
+//     clone URL manually, matching Q-Agent's `ReposManager.tsx`). The handoff
+//     only drew this as a read-only list; there was previously no way to add
+//     a repository anywhere in the product.
 //   • the detected stack, utilities and counters come from the knowledge blob
 //     an agent reported. Without a knowledge base there is nothing detected,
 //     and the counters say so rather than showing four zeroes as if they were
 //     measurements.
 
-import { EmptyState, GlassCard, Icon, Notice, Pill } from "@/components/ui";
+import { GlassCard, Icon, Notice } from "@/components/ui";
 import type { Project } from "@/data";
+import { RepositoryEditor } from "./RepositoryEditor";
 
 function Counter({
   label,
@@ -30,52 +34,18 @@ function Counter({
   );
 }
 
-export function RepositoryTab({ project }: { project: Project }) {
+export function RepositoryTab({
+  project,
+  onReload,
+}: {
+  project: Project;
+  onReload: () => void;
+}) {
   const body = project.knowledge?.body ?? null;
-  const repos = project.config?.repos ?? [];
 
   return (
     <div className="flex flex-col gap-[14px]">
-      <GlassCard className="rounded-[20px] p-[22px]">
-        <div className="text-[15px] font-extrabold tracking-[-.01em]">
-          Configured repositories
-        </div>
-        <div className="mt-1 text-[12.5px] text-muted">
-          Every agent clones from this list. The hub stores the address, never a
-          checkout.
-        </div>
-
-        {repos.length === 0 ? (
-          <EmptyState
-            icon="git"
-            title="No repository connected"
-            body="Add one in the project configuration and the agents will know where to clone from."
-            className="py-8"
-          />
-        ) : (
-          <div className="mt-4 flex flex-col gap-2">
-            {repos.map((repo) => (
-              <div
-                key={repo.name || repo.repoUrl}
-                className="flex flex-wrap items-center gap-[10px] rounded-button border border-bd3 bg-inset px-[14px] py-[11px]"
-              >
-                <span className="flex shrink-0 text-ps-text">
-                  <Icon name="git" size={14} strokeWidth={2.2} />
-                </span>
-                <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-txt2">
-                  {repo.name || repo.repoUrl}
-                </span>
-                {repo.default && <Pill tone="accent" size="sm">Default</Pill>}
-                {repo.defaultBranch && (
-                  <span className="font-mono text-[11px] text-label">
-                    {repo.defaultBranch}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </GlassCard>
+      <RepositoryEditor project={project} onReload={onReload} />
 
       {!body ? (
         <Notice tone="info">

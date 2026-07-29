@@ -231,13 +231,14 @@ export default function ProjectDetailScreen() {
       {tab === "knowledge" && (
         <KnowledgeTab project={project} onReload={load} />
       )}
-      {tab === "repos" && <RepositoryTab project={project} />}
+      {tab === "repos" && <RepositoryTab project={project} onReload={load} />}
       {tab === "agents" && <AgentsTab project={project} />}
       {tab === "settings" && (
         <SettingsTab
           project={project}
           knowledgeStatusLabel={label}
           onOpenKnowledge={() => setTab("knowledge")}
+          onReload={load}
         />
       )}
     </div>

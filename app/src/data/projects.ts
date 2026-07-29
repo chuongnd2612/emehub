@@ -5,6 +5,15 @@
 //   GET    /projects/{key}           getProject
 //   PATCH  /projects/{key}           renameProject
 //   GET    /projects/{key}/config    getProjectConfig  (folded into getProject)
+//   PUT    /projects/{key}/config    saveProjectConfig
+//
+// `saveProjectConfig` is the functional core of Q-Agent's "Project Settings"
+// screen (`ProjectSettingsForm.tsx`) ported to the hub: the work-item and
+// repository provider bindings, base URL, repositories, environments and test
+// accounts all live on this one row and all save together — nothing here
+// autosaves, matching Q-Agent's "nothing persists until Save" behaviour.
+// `ApiModel` on the backend accepts and returns camelCase (`alias_generator=
+// to_camel`), so the patch is sent exactly as typed — no snake_case step.
 //
 // ## A card is a join, not a row
 //
@@ -310,6 +319,59 @@ export const renameProject = async (
   );
   return assemble(wire);
 };
+
+/**
+ * A partial `ProjectConfigIn`. Every field is optional — an omitted field
+ * (`undefined`) is left untouched by the hub (`exclude_unset=True`); an
+ * explicit `null` on a connection id un-binds it. `repos`/`environments`/
+ * `testAccounts`, when present, REPLACE the stored array wholesale — the hub
+ * has no per-row patch semantics for them, matching Q-Agent's one-shot Save.
+ *
+ * A blank `password` on a `ProjectTestAccountInput` preserves the stored
+ * secret (the backend's rule) — never send a masked placeholder back as if
+ * it were a real password.
+ */
+export interface ProjectConfigPatch {
+  name?: string;
+  workItemConnectionId?: number | null;
+  repositoryConnectionId?: number | null;
+  baseUrl?: string;
+  repos?: {
+    name: string;
+    repoUrl?: string;
+    defaultBranch?: string;
+    localRepoPath?: string;
+    default?: boolean;
+  }[];
+  environments?: { name?: string; baseUrl?: string; notes?: string }[];
+  testAccounts?: {
+    role?: string;
+    username?: string;
+    /** Blank keeps the stored password. */
+    password?: string;
+    notes?: string;
+  }[];
+  manualAuth?: boolean;
+}
+
+/**
+ * PUT /projects/{key}/config. Hub audience only (`require_user`) — an agent
+ * reads and PATCHes knowledge, but does not configure a project.
+ *
+ * The response re-reads through the same owner-masking rule as the GET, so
+ * this always returns the config as the caller may see it, not the
+ * unmasked patch that was sent.
+ */
+export const saveProjectConfig = async (
+  key: string,
+  patch: ProjectConfigPatch,
+): Promise<ProjectConfig> =>
+  toConfig(
+    await api.put<ProjectConfigWire>(
+      `/projects/${encodeURIComponent(key)}/config`,
+      patch,
+    ),
+  );
 
 /**
  * Slugify a display name into a registry key: `Atlas Reporting` →
