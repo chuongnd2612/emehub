@@ -76,6 +76,9 @@ class CredentialMetaOut(ApiModel):
     subscription_type: str | None = None
     last_refreshed: datetime | None = None
     prefer_shared: bool = False
+    #: Whether the stored file carries a refresh token, so the SPA can derive
+    #: the same status the hub did (issue #63). The presence, never the token.
+    has_refresh_token: bool = False
     #: Shared row only — active users with no credential of their own.
     assigned_users: int | None = None
 

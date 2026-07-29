@@ -31,6 +31,10 @@ export const STATUS_TONE = {
   Disconnected: "danger",
   // #a5f3fc on rgba(34,211,238,.13)
   "In review": "info",
+  // Issue #63 — an elapsed Claude access token that has a refresh token beside
+  // it. Informational, not green: the token on file really has lapsed, the CLI
+  // just renews it on the next run. Nothing is wrong and nothing is verified.
+  Refreshes: "info",
   // #c3cad6 / #8b8b9e on rgba(255,255,255,.07)
   New: "neutral",
   Paused: "neutral",

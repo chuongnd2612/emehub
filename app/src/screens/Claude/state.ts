@@ -25,6 +25,7 @@ import {
   getClaudeUsage,
   getCredentialState,
   setCredentialMode,
+  statusOfCredential,
   testCredential,
   uploadOwnCredential,
   uploadSharedCredential,
@@ -58,12 +59,42 @@ export const THINKING_NOTES: string[] = [
   "Deep reasoning on every step — slowest.",
 ];
 
-/** `active | expiring | expired` -> the StatusPill label. */
-export function statusLabel(
-  daysLeft: number | null,
-): "Active" | "Expiring" | "Expired" {
-  const s: CredentialStatus = credentialStatus(daysLeft);
-  return s === "active" ? "Active" : s === "expiring" ? "Expiring" : "Expired";
+export type CredentialStatusLabel =
+  | "Active"
+  | "Expiring"
+  | "Refreshes"
+  | "Expired";
+
+const STATUS_LABEL: Record<CredentialStatus, CredentialStatusLabel> = {
+  active: "Active",
+  expiring: "Expiring",
+  // Issue #63. Not "Active" — the access token on file really has lapsed. Not
+  // "Expired" — nothing is broken and there is nothing for the user to do.
+  refreshable: "Refreshes",
+  expired: "Expired",
+};
+
+/** `active | expiring | refreshable | expired` -> the StatusPill label. */
+export function statusLabel(daysLeft: number | null): CredentialStatusLabel {
+  return STATUS_LABEL[credentialStatus(daysLeft)];
+}
+
+/**
+ * The pill for one stored credential. Prefer this over {@link statusLabel}
+ * wherever the whole `ClaudeCredentialMeta` is in hand: `daysLeft` alone cannot
+ * express "elapsed, but it refreshes itself" (issue #63), and it rounds, so an
+ * access token that lapsed three hours ago looks merely *expiring* through it.
+ */
+export function metaStatusLabel(
+  meta: ClaudeCredentialMeta,
+): CredentialStatusLabel {
+  return STATUS_LABEL[statusOfCredential(meta)];
+}
+
+/** One line explaining a `Refreshes` pill, or null when there is nothing to say. */
+export function statusNote(meta: ClaudeCredentialMeta): string | null {
+  if (statusOfCredential(meta) !== "refreshable") return null;
+  return "The access token has expired — the Claude CLI renews it from the refresh token on the next run.";
 }
 
 /** The hub's message when it has one, the exception's otherwise. */

@@ -100,7 +100,8 @@ so an agent token is refused. Listed so the surface is not mistaken for undocume
 `PUT /credentials/claude/mode`, `POST /credentials/claude/test`,
 `GET|POST /credentials/claude/usage` · `POST|PATCH|DELETE /connections`,
 `POST /connections/{id}/test`, `GET /connections/{id}/{projects|repos|sprints|work-item-metadata}`
-· `POST /projects`, `PATCH /projects/{key}`, `PUT /projects/{key}/config`,
+· `POST /projects`, `PATCH /projects/{key}`, `DELETE /projects/{key}`,
+`PUT /projects/{key}/config`,
 `POST /projects/{key}/repos/{repo}/knowledge/build` ·
 `POST /tickets/sync`, `DELETE /tickets/{external_id}` · all of `/auth/*`.
 
@@ -114,6 +115,21 @@ second one. Builds beyond `EMEHUB_KNOWLEDGE_BUILD_CONCURRENCY` queue rather than
 
 An agent that builds its own knowledge is unaffected: `PUT …/knowledge` above is still how to
 report one, and the hub becoming *a* builder does not make it the only one.
+
+`DELETE /projects/{key}` (issue #64) removes the registry row, its `project_config` — the
+encrypted test-account passwords included — every `project_knowledge` row for the key, and
+the project's directories in the workspace volume. It is scoped own → shared → **404** like
+every other project read, and a shared project additionally needs an admin (a real `403` —
+the caller can see the row, they just may not delete it).
+
+**Mirrored work items block the delete rather than being cascaded.** A ticket is the hub's
+only record that a work item was ever synced, and the hub cannot restore one without the
+connection the project was bound to, so deleting a batch as a side effect of tidying up the
+registry destroys more than was asked for. Orphaning them — leaving `project_id` pointing at a
+row that no longer exists — is not on the table either. The endpoint answers `409` naming the
+count; `DELETE /tickets/{external_id}` is the explicit second step. **Agents are unaffected:
+a project an agent has cached simply starts answering 404**, exactly as it would for a key
+that never existed.
 
 Two exceptions read by agents with their own audience:
 `PUT /credentials/claude/refreshed` (the CLI rotated its token; the hub stays authoritative)
@@ -138,6 +154,24 @@ audited on every call.
 > `EMEHUB_WORKSPACE_DIR`, to run a knowledge build. That does **not** change this section:
 > nothing crosses the boundary to an agent. It does mean the workspace volume holds plaintext
 > credential material for the duration of a build, and must be treated accordingly.
+
+**Credential metadata gained one field** (issue #63). Every credential metadata payload —
+including the one `GET /credentials/claude/resolve` returns alongside the material — now
+carries `hasRefreshToken: boolean`, and `status` has a fourth value, `refreshable`.
+
+A Claude OAuth *access* token lives hours, so a real `.credentials.json` is past its
+`expiresAt` almost immediately; the refresh token beside it means the CLI renews the access
+token on its next run. The hub used to derive `expired` from the timestamp alone, which turned
+essentially every stored credential red. It now derives `expired` from the timestamp **only
+when there is no refresh token**, and reports `refreshable` otherwise. The authoritative
+"this credential does not work" signal is unchanged: the stored `expired` status, set when the
+CLI actually rejects it, and it still wins over everything derived.
+
+Both changes are additive — the field is new and the status value is new, so a consumer that
+does not know about either keeps working, but one that special-cases `status === "expired"`
+should be aware it will now see `refreshable` where it used to see `expired`. **The refresh
+token itself is not exposed**: the hub stores only the boolean, and the token stays inside the
+encrypted blob that `/resolve` already returns whole.
 
 **Provider PAT.** Deliberately *not* returned. Agents that need a provider call get one of:
 

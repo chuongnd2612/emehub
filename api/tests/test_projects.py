@@ -425,3 +425,232 @@ def test_the_connection_bindings_round_trip_without_a_connections_table(
     cleared = _save_config(client, headers, "shop", workItemConnectionId=None)
     assert cleared["workItemConnectionId"] is None
     assert cleared["repositoryConnectionId"] == 9
+
+
+# ---------------------------------------------------------------- deletion
+def _ticket(db, *, project_id, owner_id, external_id="SUR-1"):
+    from app.models.ticket import Ticket
+
+    row = Ticket(
+        external_id=external_id,
+        provider_kind="ado",
+        project_id=project_id,
+        title="A mirrored work item",
+        owner_id=owner_id,
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_delete_removes_the_project_and_it_stops_resolving(client, alice, auth_headers):
+    headers = auth_headers("alice@emesoft.net", PASSWORD)
+    client.post("/projects", json={"key": "doomed"}, headers=headers)
+    assert client.get("/projects/doomed", headers=headers).status_code == 200
+
+    assert client.delete("/projects/doomed", headers=headers).status_code == 204
+    assert client.get("/projects/doomed", headers=headers).status_code == 404
+    assert client.delete("/projects/doomed", headers=headers).status_code == 404
+
+
+def test_delete_takes_the_config_and_knowledge_rows_with_it(
+    client, db_session, alice, auth_headers
+):
+    from app.models.knowledge import ProjectKnowledge
+
+    headers = auth_headers("alice@emesoft.net", PASSWORD)
+    client.post("/projects", json={"key": "shop"}, headers=headers)
+    _save_config(
+        client,
+        headers,
+        "shop",
+        baseUrl="https://shop.test",
+        testAccounts=[{"role": "qa", "username": "qa@x", "password": PASSWORD}],
+    )
+    db_session.add(
+        ProjectKnowledge(key="shop::web", project_key="shop", repo="web", owner_id=alice.id)
+    )
+    db_session.add(ProjectKnowledge(key="shop", project_key="shop", owner_id=alice.id))
+    db_session.commit()
+
+    # Non-vacuous: they exist before the delete.
+    assert db_session.query(ProjectConfig).filter_by(key="shop").count() == 1
+    assert db_session.query(ProjectKnowledge).filter_by(project_key="shop").count() == 2
+
+    assert client.delete("/projects/shop", headers=headers).status_code == 204
+
+    assert db_session.query(ProjectConfig).filter_by(key="shop").count() == 0
+    assert db_session.query(ProjectKnowledge).filter_by(project_key="shop").count() == 0
+    assert db_session.query(Project).filter_by(key="shop").count() == 0
+
+
+def test_delete_never_touches_another_namespaces_same_key(
+    client, db_session, alice, bob, admin, auth_headers
+):
+    """Alice deleting her own `shop` must leave Bob and the shared one standing."""
+    from app.models.knowledge import ProjectKnowledge
+
+    for owner in (alice.id, bob.id, None):
+        _project(db_session, "shop", owner)
+        db_session.add(ProjectConfig(key="shop", owner_id=owner))
+        db_session.add(ProjectKnowledge(key="shop", project_key="shop", owner_id=owner))
+    db_session.commit()
+
+    headers = auth_headers("alice@emesoft.net", PASSWORD)
+    assert client.delete("/projects/shop", headers=headers).status_code == 204
+
+    assert {p.owner_id for p in db_session.query(Project).filter_by(key="shop")} == {
+        bob.id,
+        None,
+    }
+    assert {c.owner_id for c in db_session.query(ProjectConfig).filter_by(key="shop")} == {
+        bob.id,
+        None,
+    }
+    assert {
+        k.owner_id for k in db_session.query(ProjectKnowledge).filter_by(project_key="shop")
+    } == {bob.id, None}
+
+
+def test_a_member_cannot_delete_another_members_project(
+    client, db_session, alice, bob, auth_headers
+):
+    """404, never 403 - a 403 would confirm the other member has that project."""
+    _project(db_session, "bob-only", bob.id)
+    response = client.delete(
+        "/projects/bob-only", headers=auth_headers("alice@emesoft.net", PASSWORD)
+    )
+    assert response.status_code == 404
+    assert db_session.query(Project).filter_by(key="bob-only").count() == 1
+
+
+def test_a_non_admin_cannot_delete_a_shared_project(client, db_session, alice, auth_headers):
+    """Visible, so this one IS a 403 rather than a 404."""
+    _project(db_session, "shared-app", None)
+    response = client.delete(
+        "/projects/shared-app", headers=auth_headers("alice@emesoft.net", PASSWORD)
+    )
+    assert response.status_code == 403
+    assert db_session.query(Project).filter_by(key="shared-app").count() == 1
+
+
+def test_an_admin_can_delete_a_shared_project(client, db_session, admin, auth_headers):
+    _project(db_session, "shared-app", None)
+    response = client.delete(
+        "/projects/shared-app", headers=auth_headers("admin@emesoft.net", PASSWORD)
+    )
+    assert response.status_code == 204
+    assert db_session.query(Project).filter_by(key="shared-app").count() == 0
+
+
+def test_delete_refuses_while_work_items_still_reference_the_project(
+    client, db_session, alice, auth_headers
+):
+    """Chosen behaviour: refuse. Do not orphan, and do not silently delete a
+    mirror of real work items as a side effect of tidying the registry."""
+    headers = auth_headers("alice@emesoft.net", PASSWORD)
+    row = _project(db_session, "shop", alice.id)
+    _ticket(db_session, project_id=row.id, owner_id=alice.id, external_id="SUR-1")
+    _ticket(db_session, project_id=row.id, owner_id=alice.id, external_id="SUR-2")
+
+    response = client.delete("/projects/shop", headers=headers)
+    assert response.status_code == 409
+    assert "2 work items" in response.json()["detail"]
+    # Nothing was destroyed on the way to refusing.
+    assert db_session.query(Project).filter_by(key="shop").count() == 1
+
+    # Remove the blockers and it goes through.
+    for external_id in ("SUR-1", "SUR-2"):
+        assert client.delete(f"/tickets/{external_id}", headers=headers).status_code == 204
+    assert client.delete("/projects/shop", headers=headers).status_code == 204
+
+
+def test_another_members_tickets_do_not_block_a_delete(
+    client, db_session, alice, bob, auth_headers
+):
+    """The count is namespace-scoped, like everything else in the slice."""
+    alice_project = _project(db_session, "shop", alice.id)
+    _ticket(db_session, project_id=alice_project.id, owner_id=bob.id, external_id="SUR-9")
+
+    headers = auth_headers("alice@emesoft.net", PASSWORD)
+    assert client.delete("/projects/shop", headers=headers).status_code == 204
+
+
+def test_delete_removes_the_workspace_directories(
+    client, db_session, alice, auth_headers, workspace_dir
+):
+    from app.services.workspace_scope import scoped_knowledge_dir, scoped_repos_dir
+
+    headers = auth_headers("alice@emesoft.net", PASSWORD)
+    client.post("/projects", json={"key": "shop"}, headers=headers)
+
+    clone = scoped_repos_dir(alice.id) / "shop" / "web"
+    clone.mkdir(parents=True)
+    (clone / "README.md").write_text("cloned", encoding="utf-8")
+    artefacts = scoped_knowledge_dir(alice.id) / "shop"
+    artefacts.mkdir(parents=True)
+    (artefacts / "knowledge.md").write_text("built", encoding="utf-8")
+
+    assert client.delete("/projects/shop", headers=headers).status_code == 204
+
+    assert not (scoped_repos_dir(alice.id) / "shop").exists()
+    assert not artefacts.exists()
+    # The scope directories themselves survive - only the project directory went.
+    assert scoped_repos_dir(alice.id).is_dir()
+    assert scoped_knowledge_dir(alice.id).is_dir()
+
+
+def test_a_crafted_key_cannot_delete_outside_its_scope(
+    client, db_session, alice, auth_headers, workspace_dir
+):
+    """`slug()` is the boundary; this asserts it holds for a key built to climb
+    out of the scope directory."""
+    from app.services import project_service
+    from app.services.workspace_scope import scoped_repos_dir
+
+    hostile = "../../../shared"
+    row = _project(db_session, hostile, alice.id)
+
+    victim = workspace_dir / "shared" / "repos" / "someone-elses"
+    victim.mkdir(parents=True)
+    (victim / "keep.txt").write_text("do not delete me", encoding="utf-8")
+    # The scope the key is trying to climb out of, with a sibling to protect.
+    scoped_repos_dir(alice.id).mkdir(parents=True, exist_ok=True)
+    (scoped_repos_dir(alice.id) / "unrelated").mkdir()
+
+    # Straight at the service, because the hostile key cannot survive a URL path.
+    project_service.delete_project(db_session, row)
+    db_session.commit()
+
+    assert victim.is_dir()
+    assert (victim / "keep.txt").read_text(encoding="utf-8") == "do not delete me"
+    assert scoped_repos_dir(alice.id).is_dir()
+    assert (scoped_repos_dir(alice.id) / "unrelated").is_dir()
+    # It stayed inside the scope: the slugged name is what would have gone.
+    assert not (scoped_repos_dir(alice.id) / "shared").exists()
+
+
+def test_delete_is_hub_audience_only(client, db_session, alice, agent_headers):
+    _project(db_session, "alice-app", alice.id)
+    response = client.delete(
+        "/projects/alice-app", headers=agent_headers("alice@emesoft.net")
+    )
+    assert response.status_code == 401
+    assert db_session.query(Project).filter_by(key="alice-app").count() == 1
+
+
+def test_delete_writes_an_audit_line_with_no_secrets(client, alice, auth_headers):
+    headers = auth_headers("alice@emesoft.net", PASSWORD)
+    client.post("/projects", json={"key": "shop"}, headers=headers)
+    _save_config(
+        client,
+        headers,
+        "shop",
+        testAccounts=[{"role": "qa", "username": "qa@x", "password": PASSWORD}],
+    )
+    assert client.delete("/projects/shop", headers=headers).status_code == 204
+
+    logs = client.get("/audit/events", headers=headers)
+    assert logs.status_code == 200
+    assert "Deleted project" in logs.text
+    assert PASSWORD not in logs.text

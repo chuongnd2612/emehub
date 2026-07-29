@@ -140,7 +140,10 @@ def test_test_endpoint_reports_storage_health_without_the_token(client, hub):
 
 
 def test_test_endpoint_can_target_the_shared_account(client, hub):
-    upload_shared(client, hub["admin"], creds_file(OTHER_TOKEN, days=-4))
+    # `refresh=False` on the shared one: an elapsed access token WITH a refresh
+    # token is `refreshable`, not `expired` (issue #63), so the genuinely dead
+    # case now has to be constructed deliberately.
+    upload_shared(client, hub["admin"], creds_file(OTHER_TOKEN, days=-4, refresh=False))
     upload_own(client, hub["admin"], creds_file(TOKEN, days=30))
     results = {
         scope: client.post(
@@ -149,6 +152,43 @@ def test_test_endpoint_can_target_the_shared_account(client, hub):
         for scope in ("own", "shared", "effective")
     }
     assert results == {"own": "ok", "shared": "expired", "effective": "ok"}
+
+
+def test_the_state_endpoint_reports_a_real_stale_file_as_refreshable(client, hub):
+    """End to end over HTTP: exactly what a user uploading their real
+    ``~/.claude/.credentials.json`` sees. Before issue #63 this was ``expired``
+    for essentially every credential anyone attached."""
+    upload_own(client, hub["a"], creds_file(TOKEN, days=-3))
+    own = client.get("/credentials/claude", headers=hub["a"]).json()["own"]
+
+    assert own["status"] == "refreshable"
+    assert own["hasRefreshToken"] is True
+    assert own["storedStatus"] == "active"
+
+
+def test_the_state_endpoint_still_reports_a_truly_dead_file_as_expired(client, hub):
+    upload_own(client, hub["a"], creds_file(TOKEN, days=-3, refresh=False))
+    own = client.get("/credentials/claude", headers=hub["a"]).json()["own"]
+
+    assert own["status"] == "expired"
+    assert own["hasRefreshToken"] is False
+
+
+def test_no_credential_response_carries_the_refresh_token(client, hub):
+    """`hasRefreshToken` is a boolean and stays one — the token behind it never
+    reaches a response body."""
+    upload_own(client, hub["a"], creds_file(TOKEN, days=-3))
+    refresh_token = "sk-ant-ort01-refresh"
+
+    for response in (
+        client.get("/credentials/claude", headers=hub["a"]),
+        client.post("/credentials/claude/test", headers=hub["a"]),
+    ):
+        assert refresh_token not in response.text
+
+    # ...but /resolve, the one documented exception, does hand over the file.
+    material = client.get("/credentials/claude/resolve", headers=hub["a"])
+    assert refresh_token in material.text
 
 
 # ------------------------------------------------------------ shared is admin-only

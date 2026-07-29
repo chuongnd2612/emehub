@@ -169,13 +169,146 @@ def test_redact_strips_userinfo_even_for_a_credential_we_never_saw():
 
 def test_the_pat_is_injected_only_into_a_credential_free_https_url():
     inject = repo_service._authenticated_url
-    assert inject("https://github.com/a/b.git", PAT) == f"https://{PAT}@github.com/a/b.git"
+    assert (
+        inject("https://github.com/a/b.git", PAT)
+        == f"https://x-access-token:{PAT}@github.com/a/b.git"
+    )
     # Already carries credentials — never rewritten.
     assert inject("https://u:p@github.com/a/b.git", PAT) == "https://u:p@github.com/a/b.git"
     # Not HTTPS — nothing to inject into.
     assert inject("git@github.com:a/b.git", PAT) == "git@github.com:a/b.git"
     # No PAT — a public clone stays anonymous.
     assert inject("https://github.com/a/b.git", "") == "https://github.com/a/b.git"
+
+
+def test_the_pat_lands_in_the_password_position_not_the_username():
+    """Issue #62. A PAT as the bare username is a username whose password is
+    still missing, so git asks for one — ``could not read Password for
+    'https://***@dev.azure.com'`` on every private clone, because the container
+    has no TTY to ask on."""
+    url = repo_service._authenticated_url("https://dev.azure.com/org/proj/_git/r", PAT)
+
+    userinfo = url.split("//", 1)[1].split("@", 1)[0]
+    assert ":" in userinfo, url
+    username, _, password = userinfo.partition(":")
+    assert password == PAT
+    assert username and username != PAT
+    # And the host survived intact — the PAT did not re-parse the authority.
+    assert url.endswith("@dev.azure.com/org/proj/_git/r")
+
+
+def test_a_url_unsafe_pat_is_percent_encoded_rather_than_re_parsing_the_url():
+    """An ADO PAT is opaque provider output and may hold ``/`` or ``@``; a raw
+    one in the userinfo would silently move the host into the path."""
+    from urllib.parse import unquote, urlparse
+
+    awkward = "pat/with+odd:chars@and#hash"
+    url = repo_service._authenticated_url("https://dev.azure.com/org/_git/r", awkward)
+
+    parsed = urlparse(url)
+    assert parsed.hostname == "dev.azure.com"
+    assert parsed.path == "/org/_git/r"
+    # git percent-decodes the userinfo before sending it, so the PAT arrives whole.
+    assert unquote(parsed.password or "") == awkward
+    assert awkward not in url  # ...but the literal never appears on the wire
+
+
+@pytest.fixture
+def alice_with_pat(db_session, make_user):
+    """A user holding a GitHub connection whose PAT is :data:`PAT`."""
+    from app.models.provider_connection import ProviderConnection
+    from app.services import connection_service
+
+    alice = make_user("alice@emesoft.net", PASSWORD)
+    db_session.add(
+        ProviderConnection(
+            kind="github",
+            label="GitHub",
+            pat_encrypted=crypto.encrypt(PAT),
+            capabilities=connection_service.default_capabilities("github"),
+            owner_id=alice.id,
+        )
+    )
+    db_session.commit()
+    return alice
+
+
+def test_git_runs_with_prompting_switched_off(db_session, alice_with_pat, monkeypatch):
+    """Issue #62, the other half: with no askpass neutralisation a bad PAT is
+    either a prompt (instant, illegible) or a hang until ``clone_timeout_s``."""
+    # A hostile ambient environment — exactly what must not survive into git.
+    monkeypatch.setenv("GIT_ASKPASS", "/usr/bin/some-gui-prompt")
+    monkeypatch.setenv("SSH_ASKPASS", "/usr/bin/some-gui-prompt")
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "1")
+    monkeypatch.setenv("GCM_INTERACTIVE", "always")
+
+    seen: dict = {}
+
+    def capture(argv, **kwargs):
+        seen["argv"] = argv
+        seen["env"] = kwargs.get("env")
+        return _Completed("", returncode=128, stderr="fatal: repository not found")
+
+    monkeypatch.setattr(subprocess, "run", capture)
+
+    with pytest.raises(repo_service.CloneError):
+        repo_service.ensure_clone(
+            db_session,
+            project_key="p",
+            repo_name="web",
+            repo_url="https://github.com/a/b.git",
+            owner_id=alice_with_pat.id,
+            bound_connection_id=None,
+        )
+
+    env = seen["env"]
+    assert env is not None, "git must be given an explicit environment"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert not env["GIT_ASKPASS"]
+    assert not env["SSH_ASKPASS"]
+    assert env["GCM_INTERACTIVE"] == "never"
+    # Inherited, because git cannot resolve a host or a certificate without it.
+    assert env.get("PATH") == os.environ.get("PATH")
+
+
+def test_the_pat_reaches_git_but_never_the_error_or_the_log(
+    db_session, alice_with_pat, monkeypatch, caplog
+):
+    """Non-vacuous by construction: assert the PAT *was* in the argv first."""
+    seen: dict = {}
+
+    def capture(argv, **kwargs):
+        seen["argv"] = argv
+        # git reflecting the whole authenticated URL back at us — a real message.
+        return _Completed(
+            "",
+            returncode=128,
+            stderr=(
+                f"fatal: Authentication failed for "
+                f"'https://x-access-token:{PAT}@github.com/a/b.git'"
+            ),
+        )
+
+    monkeypatch.setattr(subprocess, "run", capture)
+
+    with caplog.at_level("INFO"):
+        with pytest.raises(repo_service.CloneError) as raised:
+            repo_service.ensure_clone(
+                db_session,
+                project_key="p",
+                repo_name="web",
+                repo_url="https://github.com/a/b.git",
+                owner_id=alice_with_pat.id,
+                bound_connection_id=None,
+            )
+
+    # The PAT really did go to git — otherwise everything below is vacuous.
+    assert any(PAT in arg for arg in seen["argv"]), seen["argv"]
+
+    message = str(raised.value)
+    assert PAT not in message
+    assert "Authentication failed" in message  # the useful part survives
+    assert PAT not in caplog.text
 
 
 def test_a_clone_url_is_required_and_says_what_to_do(db_session):

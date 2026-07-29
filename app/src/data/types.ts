@@ -313,7 +313,20 @@ export interface ImportResult {
 
 /* ── Claude credentials ──────────────────────────────────────────────────── */
 
-export type CredentialStatus = "active" | "expiring" | "expired";
+/**
+ * `refreshable` is not in the original handoff — it arrived with issue #63. A
+ * Claude OAuth *access* token lives hours, so a real `.credentials.json` is
+ * past its `expiresAt` almost immediately; the refresh token beside it means
+ * the CLI renews it on the next run. Calling that `expired` turned every
+ * uploaded credential red, and calling it `active` would overstate its health,
+ * so it is its own state. Mirrors `derived_status` in
+ * `api/app/services/claude_credentials.py`.
+ */
+export type CredentialStatus =
+  | "active"
+  | "expiring"
+  | "refreshable"
+  | "expired";
 
 /** Parsed from a `.credentials.json` and stored per workspace. */
 export interface SharedCredential {
@@ -326,6 +339,12 @@ export interface SharedCredential {
   expiresDisplay: string;
   /** Days until expiry; null when the token has no expiry. */
   daysLeft: number | null;
+  /** Expiry as epoch ms — `daysLeft` rounds, the status rule must not. */
+  expiresAtEpochMs: number | null;
+  /** Whether a refresh token sits beside the access token (issue #63). */
+  hasRefreshToken: boolean;
+  /** The hub's stored status column — `expired` here is the CLI's verdict. */
+  storedStatus: string;
   scopes: string[];
   lastRefreshed: string;
   /** Number of members assigned to this credential. */

@@ -32,15 +32,27 @@ trusted to callers:
 
 :func:`ensure_clone` therefore raises :class:`CloneError` whose ``str()`` is
 already safe to write into ``ProjectKnowledge.last_error``.
+
+## The second hardening change: git may never ask a human
+
+The PAT is a *password*, so it goes in the password half of the userinfo
+(:func:`_authenticated_url`). A PAT in the *username* half with nothing after
+the colon is not "authenticated" to git — it is a username whose password is
+still missing, so git goes looking for one. In a container with no TTY that is
+``fatal: could not read Password for 'https://***@dev.azure.com': No such
+device or address``, and with an inherited askpass helper it is a hang until
+``clone_timeout_s``. :func:`_git_env` closes both doors, so a wrong credential
+fails immediately with a message that says which.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlunparse
 
 from sqlalchemy.orm import Session
 
@@ -58,6 +70,27 @@ _USERINFO = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^@\s/]+@")
 #: How much git output reaches a message. Enough to identify the failure,
 #: bounded so a verbose git cannot fill the ``last_error`` column.
 _DETAIL_LIMIT = 400
+
+#: The username half of ``https://<user>:<pat>@host``. A PAT is a *password*, so
+#: something has to sit in the username position. Azure DevOps ignores it
+#: entirely; GitHub accepts any username when the password is a PAT. This is the
+#: name GitHub's own Actions checkout uses, so it is also the least surprising
+#: thing to see in a log line that somehow escaped redaction.
+_PAT_USERNAME = "x-access-token"
+
+#: Environment variables that can turn a credential failure into a *prompt* —
+#: either an interactive one (no TTY in the container, hence
+#: ``No such device or address``) or a GUI helper that hangs until
+#: ``clone_timeout_s``. Dropped from the inherited environment and then pinned
+#: to their inert values by :func:`_git_env`.
+_INTERACTIVE_VARS = (
+    "GIT_ASKPASS",
+    "SSH_ASKPASS",
+    "GCM_INTERACTIVE",
+    "GIT_TERMINAL_PROMPT",
+    "DISPLAY",
+    "SSH_ASKPASS_REQUIRE",
+)
 
 
 class CloneError(RuntimeError):
@@ -78,6 +111,17 @@ def redact(text: str, *secrets: str | None) -> str:
 def _authenticated_url(url: str, pat: str) -> str:
     """Inject ``pat`` into an HTTPS URL that carries no credentials of its own.
 
+    The PAT goes in the **password** position — ``https://<user>:<pat>@host``.
+    Putting it in the *username* position with no password (which this function
+    used to do) is what made every private clone fail: git reads a bare username
+    as "the password is still missing", asks for it, finds no TTY in the
+    container, and dies with ``could not read Password for
+    'https://***@dev.azure.com': No such device or address``.
+
+    Both halves are percent-encoded. A PAT is opaque provider output and may
+    legally contain ``/``, ``@``, ``:`` or ``#``, every one of which would
+    otherwise re-parse the URL into a different host or path.
+
     Non-HTTPS URLs and URLs that already have userinfo are returned untouched —
     the hub never rewrites a credential someone else put there.
     """
@@ -86,7 +130,41 @@ def _authenticated_url(url: str, pat: str) -> str:
     parsed = urlparse(url)
     if "@" in parsed.netloc:
         return url
-    return urlunparse(parsed._replace(netloc=f"{pat}@{parsed.netloc}"))
+    userinfo = f"{quote(_PAT_USERNAME, safe='')}:{quote(pat, safe='')}"
+    return urlunparse(parsed._replace(netloc=f"{userinfo}@{parsed.netloc}"))
+
+
+def _secrets(pat: str) -> tuple[str, str]:
+    """The PAT in both the forms that can appear in git's output.
+
+    :func:`_authenticated_url` percent-encodes what it injects, so a PAT with a
+    URL-unsafe character reaches git — and comes back in its error text — in a
+    form the raw literal would not match.
+    """
+    return (pat, quote(pat, safe="") if pat else "")
+
+
+def _git_env() -> dict[str, str]:
+    """The environment every git subprocess runs under.
+
+    Built explicitly rather than inherited: git resolves missing credentials
+    through whatever helper the ambient environment names, so an inherited
+    ``GIT_ASKPASS`` or ``SSH_ASKPASS`` turns "this PAT is wrong" into a hang
+    until ``clone_timeout_s``, and no helper at all turns it into the
+    ``No such device or address`` prompt failure. ``GIT_TERMINAL_PROMPT=0``
+    closes the last door, so a bad credential fails in milliseconds with a
+    message that says so.
+
+    The rest of the process environment is carried through — git needs ``PATH``,
+    ``HOME`` and the TLS trust store to work at all.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in _INTERACTIVE_VARS}
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    # Empty, not absent: git falls straight through an empty askpass program.
+    env["GIT_ASKPASS"] = ""
+    env["SSH_ASKPASS"] = ""
+    env["GCM_INTERACTIVE"] = "never"
+    return env
 
 
 def _run_git(args: list[str], *, pat: str) -> tuple[bool, str]:
@@ -104,15 +182,18 @@ def _run_git(args: list[str], *, pat: str) -> tuple[bool, str]:
             errors="replace",
             timeout=settings.clone_timeout_s,
             check=False,
+            env=_git_env(),
         )
     except FileNotFoundError:
         return False, "git is not installed in the API image"
     except subprocess.TimeoutExpired:
         return False, f"git timed out after {settings.clone_timeout_s}s"
     except OSError as exc:
-        return False, redact(str(exc), pat)[:_DETAIL_LIMIT]
+        return False, redact(str(exc), *_secrets(pat))[:_DETAIL_LIMIT]
     if proc.returncode != 0:
-        detail = redact((proc.stderr or proc.stdout or "").strip(), pat)[:_DETAIL_LIMIT]
+        detail = redact(
+            (proc.stderr or proc.stdout or "").strip(), *_secrets(pat)
+        )[:_DETAIL_LIMIT]
         return False, detail or f"git exited {proc.returncode}"
     return True, ""
 
@@ -174,19 +255,19 @@ def ensure_clone(
         dest = dest / slug(repo_name)
 
     if (dest / ".git").is_dir():
-        logger.info("Refreshing %s in %s", redact(url, pat), dest)
+        logger.info("Refreshing %s in %s", redact(url, *_secrets(pat)), dest)
         ok, _detail = _run_git(["-C", str(dest), "fetch", "--depth", "1", "origin"], pat=pat)
         if ok:
             ok, _detail = _run_git(["-C", str(dest), "reset", "--hard", "FETCH_HEAD"], pat=pat)
         if ok:
             return dest
-        logger.info("Refresh failed for %s — re-cloning", redact(url, pat))
+        logger.info("Refresh failed for %s — re-cloning", redact(url, *_secrets(pat)))
         _rmtree(dest)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    logger.info("Cloning %s into %s", redact(url, pat), dest)
+    logger.info("Cloning %s into %s", redact(url, *_secrets(pat)), dest)
     ok, detail = _run_git(["clone", "--depth", "1", authed, str(dest)], pat=pat)
     if not ok:
         _rmtree(dest)
-        raise CloneError(f"Could not clone {redact(url, pat)}: {detail}")
+        raise CloneError(f"Could not clone {redact(url, *_secrets(pat))}: {detail}")
     return dest

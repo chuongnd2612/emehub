@@ -18,6 +18,8 @@ a 404, never a 403 (a 403 would confirm it exists).
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
 from typing import TypeVar
 
 from sqlalchemy import func
@@ -26,6 +28,7 @@ from sqlalchemy.orm import Session
 from app.models.project import Project
 from app.models.user import User
 from app.services.ownership import can_write_shared, stamp_owner
+from app.services.workspace_scope import slug
 
 ModelT = TypeVar("ModelT")
 
@@ -168,6 +171,116 @@ def write_target_owner(user: User | None, *, shared: bool) -> int | None:
     if shared and can_write_shared(user):
         return None
     return user.id if user is not None else None
+
+
+class ProjectHasTickets(Exception):
+    """A delete was refused because work items still point at the project.
+
+    Carries the count so the router can say how many without re-querying.
+    """
+
+    def __init__(self, count: int) -> None:
+        self.count = count
+        super().__init__(f"{count} ticket(s) still reference this project")
+
+
+def _scoped_project_dir(base: Path, key: str) -> Path | None:
+    """``base/slug(key)``, but only if it really is inside ``base``.
+
+    ``slug`` already collapses ``/`` and ``..`` into ``-``, so this cannot
+    currently fail — which is the point of checking it here rather than trusting
+    that it stays true. The argument is a user-supplied project key and the
+    consequence of being wrong is ``rmtree`` on a directory outside the scope,
+    so the containment is asserted at the point of deletion, not inferred.
+    """
+    resolved_base = base.resolve()
+    candidate = (base / slug(key)).resolve()
+    if candidate == resolved_base or resolved_base not in candidate.parents:
+        return None
+    return candidate
+
+
+def delete_project(db: Session, row: Project) -> dict[str, int]:
+    """Delete ``row`` and everything the hub owns *about* it. Caller commits.
+
+    Cascades, all pinned to the project's own namespace (``row.owner_id``) so
+    deleting a private project can never touch the shared one of the same key,
+    or another member's:
+
+    * ``project_config`` — the connection bindings, base URL, environments and
+      the encrypted test-account passwords;
+    * ``project_knowledge`` — every row for the project, per-repo rows included
+      (they are keyed by ``project_key``, not by the composed ``key``);
+    * the workspace directories — the shallow clone under ``repos/`` and the
+      built ``knowledge.md``/``knowledge.json`` under ``knowledge/``.
+
+    **Tickets are not cascaded.** Raises :class:`ProjectHasTickets` instead when
+    any still reference the row. A ticket is a mirror of a real work item in
+    Azure DevOps or Jira, and it is the only hub-side record that a work item
+    was ever synced; deleting a batch of them as a side effect of tidying up the
+    registry destroys strictly more than the user asked to destroy, and it is
+    not undoable from the hub (a re-sync needs the connection that was bound to
+    the project being deleted). Detaching them is worse — ``project_id`` would
+    dangle at a row that no longer exists, which is the orphaning this is meant
+    to avoid. So the delete refuses, says how many are in the way, and
+    ``DELETE /tickets/{external_id}`` is the deliberate second step.
+
+    The directories go before the caller commits, so a failed commit leaves
+    them removed while the rows survive. That is the harmless direction: both
+    trees are derived artefacts the hub regenerates on the next build (the clone
+    is shallow and re-cloned on demand), whereas deleting rows first and then
+    failing would leave plaintext-adjacent clones behind with nothing pointing
+    at them.
+
+    Returns the counts that were removed, for the audit line.
+    """
+    from app.models.knowledge import ProjectKnowledge
+    from app.models.project_config import ProjectConfig
+    from app.models.ticket import Ticket
+    from app.services.workspace_scope import scoped_knowledge_dir, scoped_repos_dir
+
+    def _own_scope(model):
+        """The project's own namespace — never a fallback to shared.
+
+        ``owner_id == None`` renders as ``owner_id = NULL``, which is never
+        true, so the shared namespace has to be matched with ``IS NULL``. Get
+        this wrong on the ticket count and a shared project deletes silently
+        with its work items still pointing at a row that is gone.
+        """
+        return (
+            model.owner_id.is_(None)
+            if row.owner_id is None
+            else model.owner_id == row.owner_id
+        )
+
+    tickets = (
+        db.query(Ticket)
+        .filter(Ticket.project_id == row.id, _own_scope(Ticket))
+        .count()
+    )
+    if tickets:
+        raise ProjectHasTickets(tickets)
+
+    configs = (
+        db.query(ProjectConfig)
+        .filter(ProjectConfig.key == row.key, _own_scope(ProjectConfig))
+        .delete(synchronize_session=False)
+    )
+    knowledge = (
+        db.query(ProjectKnowledge)
+        .filter(
+            ProjectKnowledge.project_key == row.key, _own_scope(ProjectKnowledge)
+        )
+        .delete(synchronize_session=False)
+    )
+    db.delete(row)
+
+    for base in (scoped_repos_dir(row.owner_id), scoped_knowledge_dir(row.owner_id)):
+        target = _scoped_project_dir(base, row.key)
+        if target is not None and target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+
+    return {"configs": configs, "knowledge": knowledge}
 
 
 def upsert_project(

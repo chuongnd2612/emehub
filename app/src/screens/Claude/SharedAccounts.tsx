@@ -30,7 +30,7 @@ import {
   ScopeChips,
   StoredSecretRow,
 } from "./parts";
-import { statusLabel, type ClaudeSettings } from "./state";
+import { metaStatusLabel, type ClaudeSettings } from "./state";
 
 export function SharedAccounts({ s }: { s: ClaudeSettings }) {
   return (
@@ -88,8 +88,10 @@ function SharedCredentialCard({
   meta: ClaudeCredentialMeta;
   s: ClaudeSettings;
 }) {
-  const status = statusLabel(meta.daysLeft);
-  const needsRotation = status !== "Active";
+  const status = metaStatusLabel(meta);
+  // `Refreshes` is not a problem to escalate — the CLI renews it unprompted
+  // (issue #63). Only a real lapse or an imminent one warrants the rotate banner.
+  const needsRotation = status === "Expiring" || status === "Expired";
   const assigned = meta.assignedUsers ?? 0;
 
   return (

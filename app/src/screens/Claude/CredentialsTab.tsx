@@ -47,7 +47,7 @@ import {
   StoredSecretRow,
 } from "./parts";
 import { SharedAccounts } from "./SharedAccounts";
-import { statusLabel, type ClaudeSettings } from "./state";
+import { metaStatusLabel, statusNote, type ClaudeSettings } from "./state";
 
 /**
  * The one literal rgba in this screen. Handoff § 6 specifies the explainer
@@ -176,8 +176,10 @@ export function CredentialsTab({ s }: { s: ClaudeSettings }) {
                       Your personal Claude account
                     </div>
                   </div>
-                  <StatusPill status={statusLabel(s.own.daysLeft)} />
+                  <StatusPill status={metaStatusLabel(s.own)} />
                 </div>
+
+                <StatusNote meta={s.own} />
 
                 <div className="mt-4 grid grid-cols-3 gap-3">
                   <Meta
@@ -293,6 +295,27 @@ export function CredentialsTab({ s }: { s: ClaudeSettings }) {
   );
 }
 
+/* ── "Refreshes" explainer ───────────────────────────────────────────────── */
+
+/**
+ * One line under a `Refreshes` pill. A Claude access token lives hours, so this
+ * is the state a real `.credentials.json` spends most of its life in — the pill
+ * alone is too terse to stop it reading as a problem (issue #63). Renders
+ * nothing for every other status.
+ */
+function StatusNote({ meta }: { meta: ClaudeCredentialMeta }) {
+  const note = statusNote(meta);
+  if (!note) return null;
+  return (
+    <div className="mt-3 flex items-start gap-2 text-[11.5px] leading-[1.5] text-muted text-pretty">
+      <span className="mt-px shrink-0 text-cyan-soft">
+        <Icon name="refresh" size={13} strokeWidth={2.2} />
+      </span>
+      {note}
+    </div>
+  );
+}
+
 /* ── Shared account summary ──────────────────────────────────────────────── */
 
 function SharedSummary({ meta }: { meta: ClaudeCredentialMeta }) {
@@ -308,8 +331,10 @@ function SharedSummary({ meta }: { meta: ClaudeCredentialMeta }) {
             {meta.subscriptionType ?? "Claude account"}
           </div>
         </div>
-        <StatusPill status={statusLabel(meta.daysLeft)} />
+        <StatusPill status={metaStatusLabel(meta)} />
       </div>
+
+      <StatusNote meta={meta} />
 
       <div className="mt-4 grid grid-cols-3 gap-3">
         <Meta
@@ -375,12 +400,24 @@ function HealthCard({ s }: { s: ClaudeSettings }) {
     line = verdict.message;
     code = verdict.result;
   } else if (effective) {
-    const label = statusLabel(effective.daysLeft);
-    tone = label === "Active" ? "ok" : label === "Expiring" ? "warn" : "danger";
+    const label = metaStatusLabel(effective);
+    // `Refreshes` is a ready credential: the access token has lapsed but the
+    // CLI renews it on the next run (issue #63), so it is neither a warning
+    // nor a failure — it reads ready, with the reason spelled out.
+    tone =
+      label === "Active" || label === "Refreshes"
+        ? "ok"
+        : label === "Expiring"
+          ? "warn"
+          : "danger";
     line =
-      s.mode === "own"
-        ? "Ready · your own account"
-        : "Ready · the shared account";
+      label === "Refreshes"
+        ? s.mode === "own"
+          ? "Ready · your own account, renews on next run"
+          : "Ready · the shared account, renews on next run"
+        : s.mode === "own"
+          ? "Ready · your own account"
+          : "Ready · the shared account";
     code = s.mode;
   }
 
@@ -421,8 +458,9 @@ function HealthCard({ s }: { s: ClaudeSettings }) {
         {s.testing ? "Testing…" : "Test connection"}
       </button>
       <div className="mt-[9px] text-[11px] leading-[1.5] text-faint text-pretty">
-        The hub checks the stored credential decrypts, parses and has not
-        expired. It never calls Claude on your behalf.
+        The hub checks the stored credential decrypts, parses, and either has
+        not expired or carries a refresh token. It never calls Claude on your
+        behalf.
       </div>
     </GlassCard>
   );

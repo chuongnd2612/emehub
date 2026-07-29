@@ -20,6 +20,7 @@ from app.models.claude_credentials import (
     STATUS_ACTIVE,
     STATUS_EXPIRED,
     STATUS_EXPIRING,
+    STATUS_REFRESHABLE,
     ClaudeCredentials,
 )
 from app.services import claude_credentials as svc
@@ -40,9 +41,19 @@ def creds_file(
     scopes: list | None = None,
     subscription: str | None = "max",
     wrapper: str = "claudeAiOauth",
+    refresh: bool = True,
 ) -> str:
-    """A realistic ``.credentials.json``. ``wrapper=""`` produces a bare object."""
-    oauth: dict = {"accessToken": token, "refreshToken": "sk-ant-ort01-refresh"}
+    """A realistic ``.credentials.json``. ``wrapper=""`` produces a bare object.
+
+    ``refresh=True`` is the default because a real file written by the Claude
+    CLI always carries a refresh token — which is precisely why an elapsed
+    ``expiresAt`` must not read as ``expired`` (issue #63). Pass
+    ``refresh=False`` for the genuinely dead case: an access token past its
+    expiry with nothing to renew it from.
+    """
+    oauth: dict = {"accessToken": token}
+    if refresh:
+        oauth["refreshToken"] = "sk-ant-ort01-refresh"
     if days is not None:
         oauth["expiresAt"] = epoch_ms(days)
     if scopes is not None:
@@ -164,9 +175,10 @@ def test_upload_derives_status_and_metadata_from_the_file(db_session, make_user)
     assert row.label == "laptop"
 
 
-def test_an_expired_file_derives_expired(db_session, make_user):
+def test_an_expired_file_with_no_refresh_token_derives_expired(db_session, make_user):
     user = make_user("stale@emesoft.net")
-    row = svc.upsert_own(db_session, user.id, creds_file(days=-3))
+    row = svc.upsert_own(db_session, user.id, creds_file(days=-3, refresh=False))
+    assert row.has_refresh_token is False
     assert svc.derived_status(row) == STATUS_EXPIRED
 
 
@@ -179,6 +191,169 @@ def test_a_stored_expired_flag_wins_over_a_future_expiry(db_session, make_user):
     assert svc.derived_status(row) == STATUS_EXPIRED
     # Idempotent, and one-way: nothing here can declare a credential healthy.
     assert svc.mark_expired(db_session, row) is False
+
+
+# ------------------------------------------------- refresh tokens (issue #63)
+def test_an_elapsed_expiry_with_a_refresh_token_is_not_expired(db_session, make_user):
+    """The bug: an access token lives hours, so a real `.credentials.json` is
+    stale almost immediately — but the CLI renews it from the refresh token
+    beside it. Every credential anyone uploaded went red within an afternoon."""
+    user = make_user("realfile@emesoft.net")
+    row = svc.upsert_own(db_session, user.id, creds_file(days=-3))
+
+    assert row.has_refresh_token is True
+    status = svc.derived_status(row)
+    assert status != STATUS_EXPIRED
+    assert status == STATUS_REFRESHABLE
+
+
+@pytest.mark.parametrize("elapsed_days", [-0.125, -1, -400])
+def test_the_refresh_rule_holds_however_long_ago_it_lapsed(
+    db_session, make_user, elapsed_days
+):
+    """Including the -3h case, where `daysLeft` rounds to 0 and the old rule
+    would have said `expiring` rather than either honest answer."""
+    user = make_user(f"lapsed{abs(elapsed_days)}@emesoft.net")
+    row = svc.upsert_own(db_session, user.id, creds_file(days=elapsed_days))
+    assert svc.derived_status(row) == STATUS_REFRESHABLE
+
+
+@pytest.mark.parametrize("elapsed_days", [-1, -400])
+def test_without_a_refresh_token_an_elapsed_expiry_is_still_expired(
+    db_session, make_user, elapsed_days
+):
+    user = make_user(f"dead{abs(elapsed_days)}@emesoft.net")
+    row = svc.upsert_own(db_session, user.id, creds_file(days=elapsed_days, refresh=False))
+    assert svc.derived_status(row) == STATUS_EXPIRED
+
+
+def test_a_few_hours_past_expiry_with_no_refresh_token_stays_the_handoffs_answer(
+    db_session, make_user
+):
+    """`status_of` is the handoff's rule and is left verbatim: it rounds, so
+    three hours past expiry is `daysLeft == 0` and reads `expiring`. Recorded
+    here so the boundary is a decision rather than an accident — issue #63
+    changes only what happens when a refresh token IS present."""
+    user = make_user("hours@emesoft.net")
+    row = svc.upsert_own(db_session, user.id, creds_file(days=-0.125, refresh=False))
+    assert svc.derived_status(row) == STATUS_EXPIRING
+
+
+def test_a_future_expiry_is_unaffected_by_the_refresh_token(db_session, make_user):
+    """The refresh rule applies only once the expiry has actually elapsed —
+    it must not paper over the `expiring` warning."""
+    user = make_user("future@emesoft.net")
+    assert (
+        svc.derived_status(svc.upsert_own(db_session, user.id, creds_file(days=90)))
+        == STATUS_ACTIVE
+    )
+    assert (
+        svc.derived_status(svc.upsert_own(db_session, user.id, creds_file(days=1)))
+        == STATUS_EXPIRING
+    )
+
+
+def test_the_cli_verdict_still_wins_over_a_refresh_token(db_session, make_user):
+    """`_mark_credential_invalid` is the only signal that a credential truly does
+    not work. A refresh token on file must not be able to argue with it."""
+    user = make_user("rejected@emesoft.net")
+    row = svc.upsert_own(db_session, user.id, creds_file(days=-3))
+    assert svc.derived_status(row) == STATUS_REFRESHABLE
+
+    from app.services import claude_cli
+
+    claude_cli._mark_credential_invalid(db_session, user.id)
+    db_session.refresh(row)
+
+    assert row.status == STATUS_EXPIRED
+    assert row.has_refresh_token is True  # still true — it just does not matter
+    assert svc.derived_status(row) == STATUS_EXPIRED
+
+
+def test_the_refresh_token_itself_is_never_stored_outside_the_blob(
+    db_session, make_user
+):
+    user = make_user("nostore@emesoft.net")
+    row = svc.upsert_own(db_session, user.id, creds_file(days=-3))
+    db_session.refresh(row)
+
+    refresh_token = "sk-ant-ort01-refresh"
+    # It IS in the encrypted blob — otherwise the assertion below is vacuous.
+    assert refresh_token in (crypto.decrypt(row.credentials) or "")
+    # ...and nowhere else on the row, nor in anything the row hands out.
+    for column in row.__table__.columns:
+        if column.name == "credentials":
+            continue
+        assert refresh_token not in str(getattr(row, column.name))
+    assert refresh_token not in json.dumps(svc.meta_for(row), default=str)
+    assert refresh_token not in json.dumps(svc.status_for(db_session, user.id), default=str)
+
+
+def test_the_null_flag_is_backfilled_lazily_exactly_once(db_session, make_user):
+    """Rows predating the column carry NULL. The first read resolves it from
+    the blob; nothing after that decrypts again."""
+    user = make_user("legacy@emesoft.net")
+    row = svc.upsert_own(db_session, user.id, creds_file(days=-3))
+
+    # Rewind to the pre-migration state.
+    row.has_refresh_token = None
+    db_session.commit()
+    assert svc.derived_status(row) == STATUS_EXPIRED  # NULL reads as "no refresh"
+
+    decrypts = {"n": 0}
+    real_decrypt = crypto.decrypt
+
+    def counting(value):
+        decrypts["n"] += 1
+        return real_decrypt(value)
+
+    import app.services.claude_credentials as module
+
+    original = module.crypto.decrypt
+    module.crypto.decrypt = counting
+    try:
+        assert svc.backfill_refresh_flag(db_session, row) is True
+        assert decrypts["n"] == 1
+        # Every later call short-circuits before touching crypto at all.
+        assert svc.backfill_refresh_flag(db_session, row) is True
+        assert svc.backfill_refresh_flag(db_session, row) is True
+        assert decrypts["n"] == 1
+    finally:
+        module.crypto.decrypt = original
+
+    db_session.refresh(row)
+    assert row.has_refresh_token is True
+    assert svc.derived_status(row) == STATUS_REFRESHABLE
+    # The backfill wrote a boolean and nothing else.
+    assert row.has_refresh_token is not None
+    assert "sk-ant-ort01-refresh" not in str(row.label) + str(row.subscription_type)
+
+
+def test_status_for_backfills_a_null_flag_before_deriving(db_session, make_user):
+    """The read path the settings screen uses: a legacy row must not report
+    `expired` even once."""
+    user = make_user("legacyread@emesoft.net")
+    row = svc.upsert_own(db_session, user.id, creds_file(days=-3))
+    row.has_refresh_token = None
+    db_session.commit()
+
+    state = svc.status_for(db_session, user.id)
+    assert state["own"]["status"] == STATUS_REFRESHABLE
+    assert state["own"]["hasRefreshToken"] is True
+
+    db_session.refresh(row)
+    assert row.has_refresh_token is True  # settled on disk, not just in the response
+
+
+def test_verify_reports_a_refreshable_credential_as_usable(db_session, make_user):
+    user = make_user("verifyrefresh@emesoft.net")
+    svc.upsert_own(db_session, user.id, creds_file(days=-3))
+
+    outcome = svc.verify(db_session, user.id)
+    assert outcome["result"] == "refreshable"
+    assert outcome["ok"] is True
+    # ...and it did NOT flag the row, unlike the genuinely-expired path.
+    assert svc.get_own(db_session, user.id).status == STATUS_ACTIVE
 
 
 # ------------------------------------------------------- encryption at rest
@@ -440,7 +615,8 @@ def test_verify_passes_a_healthy_credential(db_session, people):
 
 def test_verify_flags_and_records_an_expired_credential(db_session, people):
     alice = people["alice"]
-    svc.upsert_own(db_session, alice.id, creds_file(days=-1))
+    # No refresh token: the one case where an elapsed expiry really is death.
+    svc.upsert_own(db_session, alice.id, creds_file(days=-1, refresh=False))
     assert svc.verify(db_session, alice.id)["result"] == "expired"
     assert svc.get_own(db_session, alice.id).status == STATUS_EXPIRED
 
@@ -456,7 +632,7 @@ def test_verify_reports_an_undecryptable_credential(db_session, people, monkeypa
 def test_verify_can_target_the_shared_account_explicitly(db_session, people):
     alice = people["alice"]
     svc.upsert_own(db_session, alice.id, creds_file(days=30))
-    svc.upsert_shared(db_session, creds_file(OTHER_TOKEN, days=-5))
+    svc.upsert_shared(db_session, creds_file(OTHER_TOKEN, days=-5, refresh=False))
 
     assert svc.verify(db_session, alice.id, "own")["result"] == "ok"
     assert svc.verify(db_session, alice.id, "effective")["result"] == "ok"

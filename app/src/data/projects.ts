@@ -378,6 +378,21 @@ export const renameProject = async (
 };
 
 /**
+ * `DELETE /projects/{key}` — remove the project and everything the hub owns
+ * about it: its configuration (test-account passwords included), every
+ * knowledge row for the key, and its directories in the workspace volume.
+ * Hub audience only, and irreversible.
+ *
+ * **Mirrored work items block it.** The hub answers `409` naming how many
+ * still reference the project rather than deleting or orphaning them; the
+ * caller should surface `ApiError.message` verbatim, because it says what to do
+ * next. Another member's project is a `404`, a shared one without admin a `403`.
+ */
+export const deleteProject = async (key: string): Promise<void> => {
+  await api.delete(`/projects/${encodeURIComponent(key)}`);
+};
+
+/**
  * A partial `ProjectConfigIn`. Every field is optional — an omitted field
  * (`undefined`) is left untouched by the hub (`exclude_unset=True`); an
  * explicit `null` on a connection id un-binds it. `repos`/`environments`/

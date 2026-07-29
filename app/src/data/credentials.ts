@@ -55,6 +55,13 @@ export interface ParsedCredential {
   scopes: string[];
   subscription: string;
   filename: string;
+  /**
+   * Whether the file carried a `refreshToken`. **The presence, not the token**
+   * — nothing here lifts the refresh token out of the file, so there is no
+   * field anywhere that could be logged or posted by accident. Drives
+   * {@link derivedCredentialStatus}; see issue #63.
+   */
+  hasRefreshToken: boolean;
 }
 
 export class InvalidCredentialFileError extends Error {
@@ -122,12 +129,18 @@ export function parseCredentialJson(
     asString(o["subscription"]) ??
     "Claude account";
 
+  // Presence only — converted straight to a boolean, the string dropped.
+  const hasRefreshToken = Boolean(
+    asString(o["refreshToken"]) ?? asString(o["refresh_token"]),
+  );
+
   return {
     token,
     expiresAtEpochMs,
     scopes: scopes.length > 0 ? scopes : ["user:inference"],
     subscription,
     filename,
+    hasRefreshToken,
   };
 }
 
@@ -165,6 +178,47 @@ export function credentialStatus(daysLeft: number | null): CredentialStatus {
   if (daysLeft < 0) return "expired";
   if (daysLeft <= 2) return "expiring";
   return "active";
+}
+
+/** One stored credential, reduced to what the status rule needs. */
+export interface CredentialStatusInput {
+  /** Epoch ms, or null when the token never expires. */
+  expiresAtEpochMs: number | null;
+  /** Whether a refresh token sits beside the access token in the file. */
+  hasRefreshToken: boolean;
+  /**
+   * The hub's *stored* status column. `"expired"` here means the Claude CLI
+   * actually rejected the credential (`_mark_credential_invalid`), which is the
+   * one authoritative "does not work" signal and wins over everything derived.
+   */
+  storedStatus?: string;
+}
+
+/**
+ * The effective status, mirroring `derived_status` in
+ * `api/app/services/claude_credentials.py` so the client-side parse of a
+ * dropped file and the hub's own answer never disagree. Precedence:
+ *
+ *   1. a stored `expired` — the CLI's verdict, authoritative;
+ *   2. elapsed expiry **with** a refresh token -> `refreshable` (the CLI renews
+ *      it on the next run; issue #63);
+ *   3. otherwise {@link credentialStatus}, the handoff's rule, verbatim — so
+ *      `expired` is derived from the clock only when there is no refresh token.
+ *
+ * Step 2 tests the timestamp directly rather than `daysLeft < 0`, because
+ * `daysLeft` rounds: a token that lapsed three hours ago reports `0` days, and
+ * three-hours-past-expiry is the state a real `.credentials.json` is usually in.
+ */
+export function derivedCredentialStatus(
+  input: CredentialStatusInput,
+  now: number = Date.now(),
+): CredentialStatus {
+  if (input.storedStatus === "expired") return "expired";
+  const expiry = input.expiresAtEpochMs;
+  if (input.hasRefreshToken && expiry != null && expiry < now) {
+    return "refreshable";
+  }
+  return credentialStatus(daysLeftFrom(expiry, now));
 }
 
 /** "12 Oct 2026" — the expiry format used across the credential cards. */
@@ -254,9 +308,33 @@ export interface ClaudeCredentialMeta {
   /** ISO timestamp of the last write, including agent token rotation. */
   lastRefreshed: string | null;
   preferShared: boolean;
+  /**
+   * Whether the stored file carries a refresh token — the presence, never the
+   * token. Feeds {@link statusOfCredential}; see issue #63.
+   */
+  hasRefreshToken: boolean;
   /** Shared row only — active users running on it because they have no own. */
   assignedUsers: number | null;
 }
+
+/**
+ * The effective status of a stored credential, applying the same rule the hub
+ * just applied server-side. `meta.status` already carries the hub's answer;
+ * this recomputes it locally so a stale payload, or a file parsed in the
+ * browser before it has been uploaded, still agrees with the server.
+ */
+export const statusOfCredential = (
+  meta: ClaudeCredentialMeta,
+  now: number = Date.now(),
+): CredentialStatus =>
+  derivedCredentialStatus(
+    {
+      expiresAtEpochMs: meta.expiresAt ? Date.parse(meta.expiresAt) : null,
+      hasRefreshToken: meta.hasRefreshToken,
+      storedStatus: meta.storedStatus,
+    },
+    now,
+  );
 
 /** `GET /credentials/claude` — what is configured and what will be used. */
 export interface ClaudeCredentialState {
@@ -396,6 +474,9 @@ export const getSharedCredentials = async (): Promise<SharedCredential[]> => {
       subscription: meta.subscriptionType ?? "Claude account",
       expiresDisplay: formatExpiryIso(meta.expiresAt),
       daysLeft: meta.daysLeft,
+      expiresAtEpochMs: meta.expiresAt ? Date.parse(meta.expiresAt) : null,
+      hasRefreshToken: meta.hasRefreshToken,
+      storedStatus: meta.storedStatus,
       scopes: meta.scopes,
       lastRefreshed: relativeTime(meta.lastRefreshed),
       members: meta.assignedUsers ?? 0,
