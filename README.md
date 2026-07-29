@@ -33,12 +33,20 @@ It is also the front door: sign in once, see the suite, launch an agent.
 
 ## Status
 
-**Phase 0 — scaffold.** This repository currently contains documentation and architecture
-decisions only. There is no application code yet.
+**Phase 1 complete — the UI runs, on stubbed data.** All eleven views from the design handoff
+are built and served by the Docker stack: Landing, Overview, Projects & Repositories (list +
+five detail tabs), Tickets, Import dialog, Claude Settings, Authentication, User Management,
+Integrations, Settings, and the overlays — in light and dark across four accents, with the
+WebGL constellation field.
 
-Both agents still own their own authentication and credentials today; nothing has been
-migrated. See [docs/ROADMAP.md](docs/ROADMAP.md) for the phased plan and
-[docs/INTEGRATION.md](docs/INTEGRATION.md) for the contract the agents will implement.
+**Nothing talks to a real backend yet.** Every screen reads from a typed stub layer
+(`app/src/data/`) shaped like the contract in
+[docs/INTEGRATION.md](docs/INTEGRATION.md#3-endpoints-agents-consume); the API is a
+`/health` endpoint and nothing more. Both agents still own their own authentication and
+credentials — no migration has started. Phases 2–5 replace the stubs one resource at a time;
+see [docs/ROADMAP.md](docs/ROADMAP.md).
+
+Known gaps: dark-mode contrast on two tokens ([#26](https://github.com/chuongnd2612/emehub/issues/26)).
 
 ---
 
@@ -104,9 +112,10 @@ claude-projects/
 | Database | PostgreSQL 16 | Same as both agents. |
 | Deployment | Docker Compose — `api` + `db` + `web` (nginx) | Same shape as QAgent's compose file. |
 | Integration | REST + hub-issued JWT; no shared database | Clean service boundary. [ADR 0003](docs/adr/0003-integration-via-http-and-hub-issued-jwt.md) |
-| Design | Dark, glassmorphic, purple→indigo | Inherited wholesale. [ADR 0004](docs/adr/0004-inherit-the-q-agent-design-system.md) |
+| Design | Glassmorphic, light + dark, four accents (default EMESOFT Red) | The design handoff is binding. [ADR 0006](docs/adr/0006-implementing-the-emehub-design-handoff.md) |
 
-Nothing in the table above is built yet — it is the target that Phase 1 implements.
+The frontend and the compose stack are built. The backend is a `/health` endpoint —
+Phases 2–4 fill it in.
 
 ---
 
@@ -136,17 +145,34 @@ Nothing in the table above is built yet — it is the target that Phase 1 implem
 
 ## Getting started
 
-*Planned — there is nothing to run yet.* Once Phase 1 lands, this section will read roughly:
-
 ```bash
-cp .env.example .env      # fill in EMEHUB_JWT_SECRET and EMEHUB_ENCRYPTION_KEY
+cp .env.example .env
+# Generate the two secrets — they must be different values (ADR 0005).
+# The API refuses to start if either is missing; there is no generated fallback.
+python -c "import secrets; print(secrets.token_urlsafe(48))"   # -> EMEHUB_JWT_SECRET
+python -c "import secrets; print(secrets.token_urlsafe(48))"   # -> EMEHUB_ENCRYPTION_KEY
+
 docker compose up -d --build
-# hub UI  → http://localhost:5180
-# hub API → http://localhost:8790/health
 ```
 
-Until then, this repository is documentation. Start with
-[docs/ROADMAP.md](docs/ROADMAP.md).
+- Hub UI — <http://localhost:5180>
+- Health — <http://localhost:5180/api/health>
+
+Ports (5180 web, 8790 api, 5457 db) are chosen not to clash with QAgent's, so both stacks can
+run on one host during the migration.
+
+### Working on the frontend
+
+```bash
+cd app
+npm install
+npm run dev          # Vite on 5180, proxying /api to 127.0.0.1:8790
+npm run typecheck    # tsc -b --noEmit
+npm run build
+```
+
+`typecheck` + `build` are the gate. There is **no** unit-test harness — don't run `npm test`.
+Verify UI behaviour at runtime with Playwright. See [CLAUDE.md](CLAUDE.md).
 
 ---
 
