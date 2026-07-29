@@ -37,15 +37,22 @@ function Counter({
 export function RepositoryTab({
   project,
   onReload,
+  onOpenSettings,
 }: {
   project: Project;
   onReload: () => void;
+  /** Where "bind a connection first" sends the user. */
+  onOpenSettings: () => void;
 }) {
   const body = project.knowledge?.body ?? null;
 
   return (
     <div className="flex flex-col gap-[14px]">
-      <RepositoryEditor project={project} onReload={onReload} />
+      <RepositoryEditor
+        project={project}
+        onReload={onReload}
+        onOpenSettings={onOpenSettings}
+      />
 
       {!body ? (
         <Notice tone="info">

@@ -51,17 +51,17 @@ export function Sidebar({ onNavigate }: SidebarProps) {
         <div
           ref={logo.ref}
           className={cn(
-            "relative overflow-hidden rounded-lg [transform-style:preserve-3d] will-change-transform",
+            "relative rounded-lg [transform-style:preserve-3d] will-change-transform",
             "[filter:drop-shadow(0_12px_20px_var(--shadow))]",
           )}
         >
+          {/* The handoff's diagonal `metalFlash` sheen was removed here and on
+              the landing header — it read as an animation glitch, not a shine. */}
           <img
             src="/assets/eme-3d-logo-cut.png"
             alt="EMESOFT"
             className="pointer-events-none block h-auto w-full"
           />
-          {/* The 60%-wide diagonal sheen sweeping the logo. */}
-          <span className="metal-flash absolute top-0 left-0 h-full w-[60%]" />
         </div>
       </button>
 

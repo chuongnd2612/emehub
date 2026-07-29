@@ -46,9 +46,11 @@ const emptyRepo = (): ProjectRepo => ({
 export function RepositoryEditor({
   project,
   onReload,
+  onOpenSettings,
 }: {
   project: Project;
   onReload: () => void;
+  onOpenSettings: () => void;
 }) {
   const config = project.config;
   const [repos, setRepos] = useState<ProjectRepo[]>(config?.repos ?? []);
@@ -187,6 +189,27 @@ export function RepositoryEditor({
           </Button>
         </div>
       </div>
+
+      {/* Q-Agent disables Discover the same way — until a Repository
+          Provider connection is bound, there is nothing to discover from.
+          A disabled button with only a hover title is easy to miss, so the
+          reason and the fix are also spelled out inline. */}
+      {repositoryConnectionId === null && (
+        <Notice tone="info" className="mt-3">
+          <span className="flex flex-wrap items-center gap-x-1">
+            Discover is disabled until a Repository Provider connection is
+            bound.
+            <button
+              type="button"
+              data-surface
+              onClick={onOpenSettings}
+              className="cursor-pointer font-bold text-ps-text underline decoration-dotted underline-offset-2"
+            >
+              Bind one in Settings →
+            </button>
+          </span>
+        </Notice>
+      )}
 
       {discoverError && (
         <Notice tone="warn" className="mt-3">
