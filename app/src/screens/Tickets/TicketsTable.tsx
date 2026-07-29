@@ -1,18 +1,27 @@
 // Handoff § 4. Tickets › Table — glass container, columns
 // `110px | 2.4fr | 1fr | 120px | 120px | 110px | 110px` with gap 12, a
-// 9.5px/700/.11em header row (ID · WORK ITEM · PROJECT · STATUS · AGENT ·
-// IMPORT · OWNER), 14px/20px rows on a 1px var(--bd3) divider, var(--card3) on
-// hover and a "read-only mirror" toast on click.
+// 9.5px/700/.11em header row, 14px/20px rows on a 1px var(--bd3) divider,
+// var(--card3) on hover and a "read-only mirror" toast on click.
+//
+// ## Two of the handoff's seven columns have no source
+//
+// AGENT — the hub does not assign an agent to a work item; there is no such
+// field on `Ticket`. IMPORT — every stored row is imported by definition (it
+// exists because a sync put it there), so a per-row import status would always
+// read "Imported".
+//
+// They are replaced by two columns the hub genuinely knows: TYPE (the provider
+// work-item type) and SYNCED (when the mirror last saw the row). Widths and the
+// column count are unchanged.
 
-import type { AgentKey, Ticket } from "@/data";
+import type { Ticket } from "@/data";
 import {
   Pill,
-  StatusPill,
   Table,
   TableCell,
   TableEmpty,
   TableRow,
-  type StatusName,
+  statusTone,
 } from "@/components/ui";
 
 /** The one inline style the rules allow: a computed grid template. */
@@ -23,15 +32,10 @@ const HEADINGS = [
   "WORK ITEM",
   "PROJECT",
   "STATUS",
-  "AGENT",
-  "IMPORT",
-  "OWNER",
+  "TYPE",
+  "SYNCED",
+  "ASSIGNEE",
 ];
-
-const AGENT_NAME: Record<AgentKey, string> = {
-  q: "Q-Agent",
-  d: "D-Agent",
-};
 
 export interface TicketsTableProps {
   tickets: Ticket[];
@@ -55,7 +59,7 @@ export function TicketsTable({
 
       {tickets.map((t) => (
         <TableRow
-          key={t.id}
+          key={`${t.provider ?? ""}-${t.id}`}
           columns={COLUMNS}
           interactive
           onClick={() => onRowClick(t)}
@@ -66,23 +70,23 @@ export function TicketsTable({
           <TableCell className="text-[13px] font-semibold text-txt2">
             {t.title}
           </TableCell>
-          <TableCell className="text-[12px] text-txt4">{t.project}</TableCell>
-          <TableCell>
-            <StatusPill status={t.status as StatusName} />
+          <TableCell className="text-[12px] text-txt4">
+            {t.project || "—"}
           </TableCell>
           <TableCell>
-            {t.agent ? (
-              <Pill tone={t.agent === "q" ? "qagent" : "dagent"}>
-                {AGENT_NAME[t.agent]}
-              </Pill>
+            {t.status ? (
+              <Pill tone={statusTone(t.status)}>{t.status}</Pill>
             ) : (
-              <Pill tone="neutral">Unassigned</Pill>
+              <span className="text-[12px] text-faint">—</span>
             )}
           </TableCell>
-          <TableCell>
-            <StatusPill status={t.sync as StatusName} />
+          <TableCell className="text-[12px] text-txt4">
+            {t.type || "—"}
           </TableCell>
-          <TableCell className="text-[12px] text-muted">{t.owner}</TableCell>
+          <TableCell className="text-[11.5px] text-muted">{t.synced}</TableCell>
+          <TableCell className="text-[12px] text-muted">
+            {t.owner || "Unassigned"}
+          </TableCell>
         </TableRow>
       ))}
 

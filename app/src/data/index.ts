@@ -12,16 +12,21 @@
 //   auth.ts         sessions, API keys
 //   credentials.ts  real .credentials.json parsing + the credential stubs
 //   connections.ts  provider connections, integrations, PROVIDERS
-//   projects.ts     the project registry
-//   knowledge.ts    per-project knowledge sources and sections
-//   tickets.ts      tickets, the filter schema, import
+//   projects.ts     LIVE — the registry + project configuration
+//   knowledge.ts    LIVE — knowledge metadata + the learned sections
+//   tickets.ts      LIVE — tickets (server-side filtered), the schema, sync
 //   people.ts       members, roles, invitations
 //   overview.ts     activity feed, KPI tiles, product cards
 //
 // The split exists so later slices can each own one module without colliding.
-// Most functions are still STUBS resolving from `data/fixtures/` — each carries
-// a `// STUB:` comment naming the endpoint that will replace it. Swapping a stub
-// for a real call (through `@/lib/api`) is deliberately a later slice.
+// Identity, projects, knowledge and tickets are real calls through `@/lib/api`;
+// the rest still resolves from `data/fixtures/` behind a `// STUB:` comment
+// naming the endpoint that will replace it.
+//
+// Two functions are stubs that will NEVER become endpoints, and both say so at
+// their definition: `getKnowledgeSources` (the hub has no knowledge-source
+// resource) and `buildKnowledge` (building is the agent's job — ROADMAP Phase
+// 4). Neither silently pretends to work.
 //
 // CLAUDE.md: "Where an endpoint does not exist, stub it behind the typed data
 // layer — and say so in your response. Never invent an API route silently."

@@ -2,21 +2,35 @@
 //
 //   "3-up card grid (gap 14) + a dashed 'Connect a repository' tile:
 //    38px initials tile in the project gradient, name 15px/800, mono repo path
-//    10.5px var(--faint); 3-up mini stats (cases / coverage / branch) in
-//    var(--inset) boxes with mono values; agent tag pills, provider name
-//    right-aligned, `Configure` ghost button + 'updated' timestamp.
-//    Card hover: translateY(-3px), border → var(--pb), background → var(--card3)."
+//    10.5px var(--faint); 3-up mini stats in var(--inset) boxes with mono
+//    values; agent tag pills, provider name right-aligned, `Configure` ghost
+//    button + 'updated' timestamp."
 //
-// `Configure` navigates to /app/projects/:projectId — the URL is the source of
-// truth for navigation (CLAUDE.md). ProjectDetail resets the scroll region on
-// mount, which is the other half of the handoff's "sets projectId, tab
-// overview, resets scroll".
+// `Configure` navigates to /app/projects/:projectKey — the URL is the source of
+// truth for navigation (CLAUDE.md).
+//
+// ## The three mini stats
+//
+// The handoff's are CASES / COVERAGE / BRANCH. Cases and coverage are QAgent's
+// test-suite figures; the hub stores no runs and no suites (ADR 0001), so they
+// are replaced with two facts the hub does own — mirrored work items and
+// knowledge confidence — rather than rendered as a plausible-looking number.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { Button, GlassCard, Glyph, Icon, Pill } from "@/components/ui";
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  GlassCard,
+  Glyph,
+  Icon,
+  LoadingState,
+  Pill,
+} from "@/components/ui";
 import { getProjects, type AgentKey, type Project } from "@/data";
+import { ApiError } from "@/lib/api";
 import { useUi } from "@/store/ui";
 
 /** Agent display names — Handoff › "Agent tag pills (Q-Agent, D-Agent)". */
@@ -39,7 +53,7 @@ function MiniStat({
       <div
         className={
           small
-            ? "pt-[3px] font-mono text-[11px] font-semibold text-txt2"
+            ? "truncate pt-[3px] font-mono text-[11px] font-semibold text-txt2"
             : "font-mono text-[14px] font-semibold text-txt2"
         }
       >
@@ -58,6 +72,8 @@ function MiniStat({
 
 function ProjectCard({ project }: { project: Project }) {
   const navigate = useNavigate();
+  const knowledge = project.knowledge;
+
   return (
     <GlassCard
       hoverable
@@ -70,15 +86,18 @@ function ProjectCard({ project }: { project: Project }) {
             {project.name}
           </div>
           <div className="mt-[3px] truncate font-mono text-[10.5px] text-faint">
-            {project.repo}
+            {project.repo || project.id}
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-3 gap-2">
-        <MiniStat value={String(project.tests)} label="CASES" />
-        <MiniStat value={project.coverage} label="COVERAGE" />
-        <MiniStat value={project.branch} label="BRANCH" small />
+        <MiniStat value={String(project.tickets)} label="WORK ITEMS" />
+        <MiniStat
+          value={knowledge ? `${knowledge.confidence}%` : "—"}
+          label="CONFIDENCE"
+        />
+        <MiniStat value={project.branch || "—"} label="BRANCH" small />
       </div>
 
       <div className="flex flex-wrap items-center gap-[7px]">
@@ -100,7 +119,9 @@ function ProjectCard({ project }: { project: Project }) {
       <div className="flex items-center gap-[9px] pt-[2px]">
         <Button
           className="flex-1"
-          onClick={() => navigate(`/app/projects/${project.id}`)}
+          onClick={() =>
+            navigate(`/app/projects/${encodeURIComponent(project.id)}`)
+          }
         >
           Configure
         </Button>
@@ -114,49 +135,106 @@ function ProjectCard({ project }: { project: Project }) {
 
 export default function ProjectsScreen() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [error, setError] = useState("");
   const setModal = useUi((s) => s.setModal);
+  const modal = useUi((s) => s.modal);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     let live = true;
-    void getProjects().then((rows) => {
-      if (live) setProjects(rows);
-    });
+    setStatus("loading");
+    void getProjects()
+      .then((rows) => {
+        if (!live) return;
+        setProjects(rows);
+        setStatus("ready");
+      })
+      .catch((err: unknown) => {
+        if (!live) return;
+        setError(
+          err instanceof ApiError ? err.message : "The hub did not respond.",
+        );
+        setStatus("error");
+      });
     return () => {
       live = false;
     };
   }, []);
 
+  // The New project modal is mounted globally, so reload whenever it closes —
+  // a project created there appears without a manual refresh.
+  useEffect(() => {
+    if (modal === "project") return;
+    return load();
+  }, [modal, load]);
+
+  const newProject = (
+    <Button
+      variant="primary"
+      className="h-auto rounded-button px-[18px] py-[11px] text-[13px]"
+      icon={<Icon name="plus" size={15} strokeWidth={2.6} />}
+      onClick={() => setModal("project")}
+    >
+      New project
+    </Button>
+  );
+
+  const repos = projects.filter((p) => Boolean(p.repo)).length;
+  const indexed = projects.filter(
+    (p) => p.knowledge?.status === "indexed",
+  ).length;
+
   return (
     <div className="flex animate-fade-in-up flex-col gap-[14px]">
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-[12.5px] font-semibold text-muted">
-          {projects.length} projects · 5 repositories connected · 2 agents wired
+          {projects.length} project{projects.length === 1 ? "" : "s"} · {repos}{" "}
+          repositor{repos === 1 ? "y" : "ies"} connected · {indexed} knowledge
+          base{indexed === 1 ? "" : "s"}
         </span>
-        <Button
-          variant="primary"
-          className="ml-auto h-auto rounded-button px-[18px] py-[11px] text-[13px]"
-          icon={<Icon name="plus" size={15} strokeWidth={2.6} />}
-          onClick={() => setModal("project")}
-        >
-          New project
-        </Button>
+        <span className="ml-auto">{newProject}</span>
       </div>
 
-      <div className="grid grid-cols-3 gap-[14px]">
-        {projects.map((p) => (
-          <ProjectCard key={p.id} project={p} />
-        ))}
+      {status === "loading" && <LoadingState label="Loading projects…" />}
 
-        <button
-          type="button"
-          data-surface
-          onClick={() => setModal("project")}
-          className="flex min-h-[180px] cursor-pointer flex-col items-center justify-center gap-[10px] rounded-[20px] border border-dashed border-bd2 bg-transparent text-faint transition-[background-color,border-color,color] duration-200 hover:border-pb hover:bg-inset hover:text-ps-text"
-        >
-          <Icon name="plus" size={22} strokeWidth={2.2} />
-          <span className="text-[13px] font-bold">Connect a repository</span>
-        </button>
-      </div>
+      {status === "error" && (
+        <GlassCard className="rounded-[20px]">
+          <ErrorState
+            title="Could not load your projects"
+            detail={error}
+            onRetry={load}
+          />
+        </GlassCard>
+      )}
+
+      {status === "ready" && projects.length === 0 && (
+        <GlassCard className="rounded-[20px]">
+          <EmptyState
+            icon="folder"
+            title="No projects yet"
+            body="A project is what every agent inherits — its repositories, environments, test accounts and knowledge base. Register the first one and the rest hangs off it."
+            action={newProject}
+          />
+        </GlassCard>
+      )}
+
+      {status === "ready" && projects.length > 0 && (
+        <div className="grid grid-cols-3 gap-[14px]">
+          {projects.map((p) => (
+            <ProjectCard key={p.id} project={p} />
+          ))}
+
+          <button
+            type="button"
+            data-surface
+            onClick={() => setModal("project")}
+            className="flex min-h-[180px] cursor-pointer flex-col items-center justify-center gap-[10px] rounded-[20px] border border-dashed border-bd2 bg-transparent text-faint transition-[background-color,border-color,color] duration-200 hover:border-pb hover:bg-inset hover:text-ps-text"
+          >
+            <Icon name="plus" size={22} strokeWidth={2.2} />
+            <span className="text-[13px] font-bold">Connect a repository</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

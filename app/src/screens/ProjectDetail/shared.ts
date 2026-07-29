@@ -1,8 +1,10 @@
 // Small helpers shared by the ProjectDetail tabs. Nothing here is a design
-// decision — it is the handoff's derivation rules, typed.
+// decision — it is the handoff's derivation rules, typed against the hub's
+// actual knowledge lifecycle.
 
 import type { GlyphFill } from "@/components/ui";
-import type { AgentKey, KnowledgeSourceType, Project, ProviderKey } from "@/data";
+import type { KnowledgeMeta, KnowledgeSourceType, ProviderKey } from "@/data";
+import type { AgentKey } from "@/data";
 
 /** Handoff › 3. Projects — the five detail tabs, in order. */
 export const PROJECT_TABS = [
@@ -29,16 +31,51 @@ export const agentTone = (agent: AgentKey): "qagent" | "dagent" =>
 
 /**
  * Handoff › 3. Projects — "knowledge status pill (Indexed green / Needs
- * refresh amber / Not indexed neutral)". `built` folds in a knowledge base
- * created during this session by the empty-state CTA.
+ * refresh amber / Not indexed neutral)".
+ *
+ * The hub's lifecycle has two states the handoff never drew — `indexing` (an
+ * agent is mid-build) and `error` (a build failed). Neither is flattened into
+ * one of the three, because showing "Not indexed" for a failed build hides the
+ * failure; both get their own label and tone.
  */
-export type KnowledgeStatusLabel = "Indexed" | "Needs refresh" | "Not indexed";
+export type KnowledgeStatusLabel =
+  | "Indexed"
+  | "Needs refresh"
+  | "Not indexed"
+  | "Indexing"
+  | "Build failed";
 
 export const knowledgeStatus = (
-  project: Project,
-  built: boolean,
-): KnowledgeStatusLabel =>
-  built ? (project.needsRefresh ? "Needs refresh" : "Indexed") : "Not indexed";
+  knowledge: KnowledgeMeta | null,
+): KnowledgeStatusLabel => {
+  if (!knowledge) return "Not indexed";
+  switch (knowledge.status) {
+    case "indexed":
+      return knowledge.needsRefresh ? "Needs refresh" : "Indexed";
+    case "stale":
+      return "Needs refresh";
+    case "indexing":
+      return "Indexing";
+    case "error":
+      return "Build failed";
+    default:
+      return "Not indexed";
+  }
+};
+
+/** Tone for the labels above. `statusTone` knows the first three already. */
+export const knowledgeStatusTone = (
+  label: KnowledgeStatusLabel,
+): "ok" | "warn" | "danger" | "neutral" => {
+  if (label === "Indexed") return "ok";
+  if (label === "Needs refresh" || label === "Indexing") return "warn";
+  if (label === "Build failed") return "danger";
+  return "neutral";
+};
+
+/** A knowledge base exists and carries something worth rendering. */
+export const isBuilt = (knowledge: KnowledgeMeta | null): boolean =>
+  knowledge != null && knowledge.status === "indexed";
 
 /**
  * Handoff › 3. Projects › Overview — the confidence figure switches colour at
@@ -48,16 +85,25 @@ export const confidenceToneClass = (confidence: number): string =>
   confidence >= 85 ? "text-ok" : confidence >= 70 ? "text-warn" : "text-danger";
 
 /** Provider glyph fill — Azure "A", Jira "J", GitHub "G" on --githubGlyph. */
-export const PROVIDER_GLYPH: Record<ProviderKey, { fill: GlyphFill; letter: string }> = {
+export const PROVIDER_GLYPH: Record<
+  ProviderKey,
+  { fill: GlyphFill; letter: string }
+> = {
   ado: { fill: "azure", letter: "A" },
   jira: { fill: "jira", letter: "J" },
   gh: { fill: "github", letter: "G" },
 };
 
+/** No connected provider — a neutral tile rather than a guessed brand. */
+export const UNKNOWN_GLYPH: { fill: GlyphFill; letter: string } = {
+  fill: "neutral",
+  letter: "?",
+};
+
 /**
- * Knowledge source type → icon + tinted chip classes. The prototype's per-type
- * hexes map onto existing tokens: Markdown purple, Document amber, URL cyan,
- * File neutral.
+ * Knowledge source type → icon + tinted chip classes. Retained for the day the
+ * hub grows a knowledge-source resource; nothing renders it today (see
+ * `data/knowledge.ts › getKnowledgeSources`).
  */
 export const SOURCE_TYPE_CHIP: Record<
   KnowledgeSourceType,

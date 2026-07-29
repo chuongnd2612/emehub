@@ -4,10 +4,16 @@
 //    <branch>, Publish evidence back to <provider>, Block runs on a stale
 //    index; then a 3-up read-only meta grid (provider, repository, knowledge
 //    scope)."
+//
+// The three toggles have no storage: `ProjectConfigIn` has `name`, connections,
+// `baseUrl`, repos, environments, test accounts, `manualAuth` and `extra` —
+// nothing that carries a re-index-on-merge or block-on-stale policy. They stay
+// local UI state and the notice says the setting is not persisted, rather than
+// leaving a switch that silently forgets.
 
 import { useState } from "react";
 
-import { Button, GlassCard, Icon, Toggle } from "@/components/ui";
+import { Button, GlassCard, Icon, Notice, Toggle } from "@/components/ui";
 import type { Project } from "@/data";
 import type { KnowledgeStatusLabel } from "./shared";
 
@@ -32,10 +38,13 @@ export function SettingsTab({
   onOpenKnowledge: () => void;
 }) {
   // Handoff › State Management › Projects: pjAutoIndex, pjEvidence,
-  // pjBlockUnindexed. UI-only, scoped to this screen.
+  // pjBlockUnindexed. UI-only, scoped to this screen — see the header comment.
   const [autoIndex, setAutoIndex] = useState(true);
   const [evidence, setEvidence] = useState(true);
   const [blockStale, setBlockStale] = useState(false);
+
+  const knowledge = project.knowledge;
+  const branch = project.branch || "the default branch";
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -49,8 +58,8 @@ export function SettingsTab({
               Project knowledge
             </div>
             <div className="mt-[3px] text-[12.5px] text-muted">
-              {knowledgeStatusLabel} · {project.knowledgeVersion} · last indexed{" "}
-              {project.lastIndexed}
+              {knowledgeStatusLabel} · {knowledge?.version ?? "no version"} ·
+              last indexed {knowledge?.lastIndexedLabel ?? "never"}
             </div>
           </div>
           <Button
@@ -67,7 +76,7 @@ export function SettingsTab({
             <Toggle
               checked={autoIndex}
               onChange={setAutoIndex}
-              label={`Re-index on every merge to ${project.branch}`}
+              label={`Re-index on every merge to ${branch}`}
               description="Keeps the knowledge base in step with the default branch without manual runs."
             />
           </div>
@@ -88,6 +97,12 @@ export function SettingsTab({
             />
           </div>
         </div>
+
+        <Notice tone="warn" className="mt-3">
+          These three policies are not stored yet — the project configuration
+          the hub persists covers connections, repositories, environments and
+          test accounts. Changing a switch here affects this page only.
+        </Notice>
       </GlassCard>
 
       <div className="grid grid-cols-3 gap-[14px]">
@@ -98,12 +113,12 @@ export function SettingsTab({
         </MetaCard>
         <MetaCard label="REPOSITORY">
           <div className="mt-[6px] truncate font-mono text-[12px] text-txt2">
-            {project.repo}
+            {project.repo || "none connected"}
           </div>
         </MetaCard>
         <MetaCard label="KNOWLEDGE SCOPE">
           <div className="mt-[6px] text-[13px] font-bold text-txt2">
-            This project only
+            {project.shared ? "Shared workspace" : "This project only"}
           </div>
         </MetaCard>
       </div>

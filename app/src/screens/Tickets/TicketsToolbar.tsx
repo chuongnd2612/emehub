@@ -5,6 +5,10 @@
 // The behavioural rule that governs the whole screen: exactly one provider is
 // active at a time and the filter set changes with it, so switching source
 // clears every field filter.
+//
+// "last import 4 minutes ago" was a hard-coded string in the prototype. It is
+// now the newest `syncedAt` across the mirrored rows — the only import time the
+// hub actually knows — and reads "never imported" when there are none.
 
 import {
   PROVIDERS,
@@ -34,8 +38,13 @@ export interface TicketsToolbarProps {
   /** Picking the same value again clears the field. */
   onFilterPick: (key: string, value: string) => void;
   onClear: () => void;
-  /** True while an import run is in flight — 1500 ms. */
+  /** True while `POST /tickets/sync` is in flight. */
   importing: boolean;
+  /**
+   * Already-humanised `Ticket.synced` of the newest mirrored row (the data
+   * layer owns the wire-to-display translation), or null when there are none.
+   */
+  lastImport: string | null;
   onImport: () => void;
 }
 
@@ -89,6 +98,7 @@ export function TicketsToolbar({
   onFilterPick,
   onClear,
   importing,
+  lastImport,
   onImport,
 }: TicketsToolbarProps) {
   const meta = PROVIDERS[provider];
@@ -176,7 +186,11 @@ export function TicketsToolbar({
       {/* 5. Import status + the primary Import button. */}
       <div className="ml-auto flex shrink-0 items-center gap-[11px]">
         <span className="text-[11px] whitespace-nowrap text-label">
-          {importing ? "pulling now…" : "last import 4 minutes ago"}
+          {importing
+            ? "pulling now…"
+            : lastImport
+              ? `last import ${lastImport}`
+              : "never imported"}
         </span>
         <Button
           variant="primary"
