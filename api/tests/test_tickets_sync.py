@@ -88,13 +88,21 @@ def test_the_seam_is_resolved_at_call_time_not_import_time(client, member):
     assert ticket_service._resolver is ticket_service._resolve_from_adapters
 
 
-def test_without_an_adapter_layer_sync_is_503_never_a_silent_zero(client, member):
-    """The real resolver cannot import ``app.services.adapters`` on this branch,
-    so sync must say "not wired", not return an empty success."""
+def test_the_default_resolver_reaches_the_real_connections_layer(client, member):
+    """The seam is wired to the adapters.
+
+    This test used to assert a 503, because ``app.services.adapters`` did not
+    exist while tickets and connections were built in parallel. It does now, so
+    the default resolver imports cleanly and gets as far as looking for a
+    connection — and with none configured that is a 404, not a 503 ("the layer
+    is missing") and never a 200 with zero tickets.
+    """
     _, headers = member
     response = client.post("/tickets/sync", json={"providerKind": "ado"}, headers=headers)
-    assert response.status_code == 503
-    assert "connections" in response.json()["detail"]
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert "connection" in detail.lower()
+    assert "not available in this deployment" not in detail
 
 
 def test_the_selection_is_passed_through_to_the_source(client, member):

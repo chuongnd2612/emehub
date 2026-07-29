@@ -10,6 +10,7 @@ from app.models.claude_usage import ClaudeUsage  # noqa: F401
 from app.models.knowledge import ProjectKnowledge  # noqa: F401
 from app.models.project import Project  # noqa: F401
 from app.models.project_config import ProjectConfig  # noqa: F401
+from app.models.provider_connection import ProviderConnection  # noqa: F401
 from app.models.session import Session  # noqa: F401
 from app.models.ticket import Ticket  # noqa: F401
 from app.models.user import User  # noqa: F401
@@ -21,6 +22,7 @@ __all__ = [
     "Project",
     "ProjectConfig",
     "ProjectKnowledge",
+    "ProviderConnection",
     "Session",
     "Ticket",
     "User",
