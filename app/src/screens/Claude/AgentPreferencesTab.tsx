@@ -3,13 +3,18 @@
 // reasoning) + Q‑Agent (`Inherited`) and D‑Agent (`Locked`) override cards".
 
 import type { ReactNode } from "react";
-import { GlassCard, Icon, Pill, Toggle } from "@/components/ui";
+import { GlassCard, Icon, Notice, Pill, Toggle } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import type { ClaudeSettings } from "./state";
 
 export function AgentPreferencesTab({ s }: { s: ClaudeSettings }) {
   return (
     <div className="flex flex-col gap-[14px]">
+      {/* No settings endpoint exists, so these toggles are screen-local. */}
+      <Notice tone="info">
+        Preview data. The hub has no agent-preferences endpoint yet, so these
+        toggles are not saved.
+      </Notice>
       <GlassCard radius="panel" className="p-[22px]">
         <div className="text-[14.5px] font-extrabold tracking-[-.01em] text-txt">
           Agent behaviour

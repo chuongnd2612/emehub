@@ -1,59 +1,101 @@
-// Handoff § 9. Integrations — the provider-connection manager.
+// Handoff § 9. Integrations — the provider-connection manager, wired to
+// `GET|POST /connections`, `PATCH|DELETE /connections/{id}` and
+// `POST /connections/{id}/test`.
 //
-// Mirrors Q-Agent's provider settings: a summary strip, then one block per
-// provider (Azure DevOps, Jira Cloud, GitHub) listing its connections. A
-// connection expands into its credential form; `Test connection` runs for
-// ~1300 ms and then marks it Connected / just now.
+// A summary strip, then one block per provider (Azure DevOps, Jira Cloud,
+// GitHub) listing its connections. A connection expands into its credential
+// form; `Test connection` really calls the provider, so it takes as long as
+// the provider takes and can genuinely fail — the row shows the hub's message
+// either way.
 //
-// Data comes from the typed stub layer (`@/data`) — there is no API yet.
 // Intra-screen selection (which connection is open) lives in a query param,
 // per CLAUDE.md › "The URL is the source of truth for navigation".
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { GlassCard, Icon, toast } from "@/components/ui";
+import {
+  ErrorState,
+  GlassCard,
+  Icon,
+  LoadingState,
+  Notice,
+  toast,
+} from "@/components/ui";
 import {
   PROVIDERS,
+  createConnection,
   getConnections,
-  getIntegrations,
   removeConnection,
   saveConnection,
   testConnection,
-  type Integration,
-  type ProviderConnection,
-  type ProviderConnectionGroup,
+  type Connection,
+  type ConnectionGroup,
+  type ProviderKey,
 } from "@/data";
+import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { ProviderGroup } from "./ProviderGroup";
 
+/** The hub's message when it has one, the exception's otherwise. */
+function errorMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) return err.message || fallback;
+  if (err instanceof Error) return err.message || fallback;
+  return fallback;
+}
+
 export default function IntegrationsScreen() {
-  const [groups, setGroups] = useState<ProviderConnectionGroup[]>([]);
-  const [integrations, setIntegrations] = useState<Integration[]>([]);
-  const [testingId, setTestingId] = useState<string | null>(null);
+  const [groups, setGroups] = useState<ConnectionGroup[]>([]);
+  const [load, setLoad] = useState<"loading" | "ready" | "error">("loading");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [testingId, setTestingId] = useState<number | null>(null);
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const [addingProvider, setAddingProvider] = useState<ProviderKey | null>(null);
   const [params, setParams] = useSearchParams();
 
   const expandedId = params.get("conn");
 
+  const reload = useCallback(() => setReloadKey((n) => n + 1), []);
+
   useEffect(() => {
-    void getConnections().then(setGroups);
-    void getIntegrations().then(setIntegrations);
-  }, []);
+    let live = true;
+    setLoad("loading");
+    setLoadError(null);
+    getConnections()
+      .then((next) => {
+        if (!live) return;
+        setGroups(next);
+        setLoad("ready");
+      })
+      .catch((err: unknown) => {
+        if (!live) return;
+        setLoadError(errorMessage(err, "Could not reach the hub"));
+        setLoad("error");
+      });
+    return () => {
+      live = false;
+    };
+  }, [reloadKey]);
 
-  const providerCount = groups.length;
   const connectionCount = groups.reduce((n, g) => n + g.connections.length, 0);
+  const providerCount = groups.filter((g) => g.connections.length > 0).length;
+  const verifiedCount = groups.reduce(
+    (n, g) => n + g.connections.filter((c) => c.status === "Connected").length,
+    0,
+  );
 
-  const setExpanded = (connectionId: string) => {
+  const setExpanded = (connectionId: number) => {
     const next = new URLSearchParams(params);
-    if (expandedId === connectionId) next.delete("conn");
-    else next.set("conn", connectionId);
+    if (expandedId === String(connectionId)) next.delete("conn");
+    else next.set("conn", String(connectionId));
     setParams(next, { replace: true });
   };
 
   /** Apply a change to one connection, leaving every other group untouched. */
   const patchConnection = (
-    connectionId: string,
-    patch: (c: ProviderConnection) => ProviderConnection,
+    connectionId: number,
+    patch: (c: Connection) => Connection,
   ) =>
     setGroups((prev) =>
       prev.map((g) => ({
@@ -65,7 +107,7 @@ export default function IntegrationsScreen() {
     );
 
   const handleFieldChange = (
-    connectionId: string,
+    connectionId: number,
     fieldKey: string,
     value: string,
   ) =>
@@ -74,44 +116,77 @@ export default function IntegrationsScreen() {
       fields: c.fields.map((f) => (f.key === fieldKey ? { ...f, value } : f)),
     }));
 
-  const handleTest = async (connection: ProviderConnection) => {
+  const handleLabelChange = (connectionId: number, value: string) =>
+    patchConnection(connectionId, (c) => ({ ...c, label: value }));
+
+  const handleTest = async (connection: Connection) => {
     // One test in flight at a time, as in the prototype.
     if (testingId) return;
     setTestingId(connection.id);
-    const result = await testConnection(connection.id);
-    setTestingId(null);
-    if (!result.ok) {
-      toast("Connection failed", `${connection.label} did not respond`, "warn");
+    try {
+      const result = await testConnection(connection.id);
+      patchConnection(connection.id, (c) => ({
+        ...c,
+        status: result.ok ? "Connected" : "Attention",
+        lastTested: "active now",
+      }));
+      if (result.ok) {
+        toast(
+          "Connection verified",
+          `${connection.label} responded in ${result.latencyMs} ms`,
+        );
+      } else {
+        toast("Connection failed", result.message, "warn");
+      }
+    } catch (err) {
+      toast(
+        "Connection failed",
+        errorMessage(err, `${connection.label} did not respond`),
+        "warn",
+      );
+    } finally {
+      setTestingId(null);
+    }
+  };
+
+  const handleSave = async (connection: Connection) => {
+    setSavingId(connection.id);
+    try {
+      const saved = await saveConnection(connection);
+      patchConnection(connection.id, () => saved);
+      toast(
+        "Connection saved",
+        `${saved.label} credentials encrypted and stored`,
+      );
+    } catch (err) {
+      toast(
+        "Could not save the connection",
+        errorMessage(err, "The hub rejected the change"),
+        "warn",
+      );
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const handleRemove = async (connection: Connection) => {
+    try {
+      await removeConnection(connection.id);
+    } catch (err) {
+      toast(
+        "Could not remove the connection",
+        errorMessage(err, "The hub rejected the change"),
+        "warn",
+      );
       return;
     }
-    patchConnection(connection.id, (c) => ({
-      ...c,
-      status: "Connected",
-      lastSync: "just now",
-    }));
-    toast(
-      "Connection verified",
-      `${connection.label} responded in ${result.latencyMs} ms`,
-    );
-  };
-
-  const handleSave = async (connection: ProviderConnection) => {
-    await saveConnection(connection);
-    toast(
-      "Connection saved",
-      `${connection.label} credentials encrypted and stored`,
-    );
-  };
-
-  const handleRemove = async (connection: ProviderConnection) => {
-    await removeConnection(connection.id);
     setGroups((prev) =>
       prev.map((g) => ({
         ...g,
         connections: g.connections.filter((c) => c.id !== connection.id),
       })),
     );
-    if (expandedId === connection.id) {
+    if (expandedId === String(connection.id)) {
       const next = new URLSearchParams(params);
       next.delete("conn");
       setParams(next, { replace: true });
@@ -123,45 +198,91 @@ export default function IntegrationsScreen() {
     );
   };
 
-  const handleAdd = (name: string) =>
-    toast(
-      `Add ${name} connection`,
-      "Paste an organisation URL and access token to begin",
-      "info",
-    );
+  /**
+   * `+ Add connection` creates the row for real and opens it. The expanded row
+   * IS the connection form in this design, so there is no second modal to
+   * invent — the new connection exists with no credential until it is saved.
+   */
+  const handleAdd = async (provider: ProviderKey) => {
+    if (addingProvider) return;
+    setAddingProvider(provider);
+    const name = PROVIDERS[provider].name;
+    try {
+      const created = await createConnection(provider, `New ${name} connection`);
+      setGroups((prev) =>
+        prev.map((g) =>
+          g.provider === provider
+            ? { ...g, connections: [...g.connections, created] }
+            : g,
+        ),
+      );
+      const next = new URLSearchParams(params);
+      next.set("conn", String(created.id));
+      setParams(next, { replace: true });
+      toast(
+        `Add ${name} connection`,
+        "Paste an organisation URL and access token to begin",
+        "info",
+      );
+    } catch (err) {
+      toast(
+        `Could not add a ${name} connection`,
+        errorMessage(err, "The hub rejected the request"),
+        "warn",
+      );
+    } finally {
+      setAddingProvider(null);
+    }
+  };
 
-  const handleImportAll = () =>
-    toast("Import started", "Pulling work items from every connected provider");
+  if (load === "loading") {
+    return <LoadingState label="Loading provider connections…" />;
+  }
+  if (load === "error") {
+    return (
+      <ErrorState
+        title="Could not load provider connections"
+        detail={loadError ?? undefined}
+        onRetry={reload}
+      />
+    );
+  }
 
   return (
     <div className="animate-fade-in-up flex flex-col gap-[14px]">
       {/* Summary strip */}
       <GlassCard className="flex flex-wrap items-center gap-[14px] px-5 py-4">
-        <span className="animate-pulse-dot size-2 shrink-0 rounded-full bg-ok" />
+        <span
+          className={cn(
+            "animate-pulse-dot size-2 shrink-0 rounded-full",
+            verifiedCount > 0 ? "bg-ok" : "bg-label",
+          )}
+        />
         <span className="text-[12.5px] font-semibold text-txt3">
-          {providerCount} providers · {connectionCount} connections live
+          {providerCount} {providerCount === 1 ? "provider" : "providers"} ·{" "}
+          {connectionCount}{" "}
+          {connectionCount === 1 ? "connection" : "connections"} ·{" "}
+          {verifiedCount} verified
         </span>
         <span className="text-[11.5px] text-label">
           Credentials encrypted at rest · tokens never leave EmeHub
         </span>
-        <button
-          type="button"
-          onClick={handleImportAll}
-          className={cn(
-            "ml-auto inline-flex cursor-pointer items-center gap-2 rounded-button",
-            "border border-bd2 bg-card2 px-4 py-[10px] text-[12.5px] font-semibold text-txt3",
-            "transition-colors duration-200 hover:bg-bd",
-          )}
-        >
-          <Icon
-            name="sync"
-            size={14}
-            strokeWidth={2.2}
-            className="text-ps-text"
-          />
-          Import all
-        </button>
       </GlassCard>
+
+      {/* The `Import all` control the handoff draws has no endpoint: nothing in
+          the API imports across every provider at once. It is omitted rather
+          than wired to a toast that pretends. */}
+      <Notice tone="info">
+        A token you store here can be replaced but never read back — the hub
+        returns whether a credential exists, never the credential.
+      </Notice>
+
+      {connectionCount === 0 && (
+        <Notice tone="warn">
+          No provider connections yet. Add one below, then run Test connection
+          to prove the credential reaches the provider.
+        </Notice>
+      )}
 
       {/* One block per provider */}
       <div className="flex flex-col gap-5">
@@ -170,18 +291,18 @@ export default function IntegrationsScreen() {
             key={g.provider}
             group={g}
             provider={PROVIDERS[g.provider]}
-            name={
-              integrations.find((i) => i.id === g.provider)?.name ??
-              PROVIDERS[g.provider].name
-            }
+            name={PROVIDERS[g.provider].name}
             expandedId={expandedId}
             testingId={testingId}
+            savingId={savingId}
+            adding={addingProvider === g.provider}
             onToggle={setExpanded}
             onFieldChange={handleFieldChange}
+            onLabelChange={handleLabelChange}
             onTest={handleTest}
             onSave={handleSave}
             onRemove={handleRemove}
-            onAdd={() => handleAdd(PROVIDERS[g.provider].name)}
+            onAdd={() => void handleAdd(g.provider)}
           />
         ))}
       </div>

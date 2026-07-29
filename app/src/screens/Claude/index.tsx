@@ -8,7 +8,7 @@
 // query param, never in the store (CLAUDE.md › Routing & navigation).
 
 import { useSearchParams } from "react-router-dom";
-import { Button, toast } from "@/components/ui";
+import { Button } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { AgentPreferencesTab } from "./AgentPreferencesTab";
 import { CredentialsTab } from "./CredentialsTab";
@@ -65,16 +65,15 @@ export default function ClaudeScreen() {
           );
         })}
 
+        {/* Credentials persist the moment they change — every mutation on the
+            Credentials tab is its own request. Models and agent preferences
+            have no endpoint, so there is nothing this button could save; it is
+            disabled rather than left to fake a success toast. */}
         <Button
           variant="primary"
+          disabled
+          title="Credentials save as you change them. Model and agent preferences have no endpoint yet."
           className="ml-auto h-auto px-5 py-[11px] text-[13px]"
-          onClick={() =>
-            toast(
-              "Settings saved",
-              "Credentials and model defaults applied to both agents",
-              "ok",
-            )
-          }
         >
           Save changes
         </Button>

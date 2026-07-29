@@ -1,45 +1,386 @@
-// Provider connections and the per-provider integration summary.
+// Provider connections — real calls to the hub.
 //
-// STUBS. Each function names the endpoint that will replace it. Note the hub
-// never returns a PAT (CLAUDE.md › Security rules) — the real `/connections`
-// response carries `hasPat`, never the token itself, so nothing in this module
-// should ever grow a field holding one.
+// Endpoint map:
+//   GET    /connections                 getConnections / getIntegrations
+//   POST   /connections                 createConnection
+//   PATCH  /connections/{id}            saveConnection
+//   DELETE /connections/{id}            removeConnection
+//   POST   /connections/{id}/test       testConnection
+//
+// ## The PAT never comes back
+//
+// `ConnectionOut` has no PAT field and never will (CLAUDE.md › Security rules;
+// `api/app/routers/connections.py`). All the wire says is `hasPat`. So the
+// credential input in the Integrations form is always empty on load: a stored
+// token may be *replaced*, never read. `saveConnection` sends `pat` only when
+// the user typed one — an omitted `pat` keeps the stored credential, which is
+// what lets a label be edited without re-typing the token.
+//
+// The hub's kinds are spelled out (`azure_devops` | `github` | `jira`); the
+// design system's provider keys are the two-letter `ado` | `gh` | `jira`. The
+// translation lives here and nowhere else.
 
-import { CONNECTION_GROUPS } from "./fixtures/connections";
-import { INTEGRATIONS, PROVIDERS } from "./fixtures/providers";
-import { after, READ_DELAY_MS } from "./timing";
+import { api } from "@/lib/api";
+import { PROVIDERS, PROVIDER_ORDER } from "./fixtures/providers";
+import { relativeTime } from "./humanize";
 import type {
-  ConnectionTestResult,
+  ConnectionFieldType,
+  ConnectionStatus,
   Integration,
-  ProviderConnection,
-  ProviderConnectionGroup,
+  ProviderKey,
 } from "./types";
-
-/** Test connection — "Testing…" spinner. */
-export const TEST_CONNECTION_DELAY_MS = 1300;
 
 export { PROVIDERS };
 
-// STUB: GET /api/connections
-export const getConnections = (): Promise<ProviderConnectionGroup[]> =>
-  after(CONNECTION_GROUPS, READ_DELAY_MS);
+/* ── Wire types ──────────────────────────────────────────────────────────── */
 
-// STUB: GET /api/integrations — the per-provider summary cards.
-export const getIntegrations = (): Promise<Integration[]> =>
-  after(INTEGRATIONS, READ_DELAY_MS);
+/** The hub's provider kinds. */
+export type ConnectionKind = "azure_devops" | "github" | "jira";
 
-/** Resolves after 1300 ms; the caller then marks the connection Connected. */
-// STUB: POST /api/connections/{connectionId}/test
+/** `ConnectionOut`. Note the absence of anything credential-shaped. */
+export interface ConnectionWire {
+  id: number;
+  kind: string;
+  label: string;
+  baseUrl: string;
+  config: Record<string, unknown>;
+  capabilities: string[];
+  supportedCapabilities: string[];
+  /** Whether a credential is stored. Never the credential. */
+  hasPat: boolean;
+  connected: boolean;
+  shared: boolean;
+  lastSync: string | null;
+  lastTestedAt: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** `POST /connections/{id}/test` — a real provider round-trip, so it can fail. */
+export interface ConnectionTestOutcome {
+  ok: boolean;
+  message: string;
+  detail: Record<string, unknown>;
+  latencyMs: number;
+}
+
+/* ── Screen types ────────────────────────────────────────────────────────── */
+
+/** One editable field of a connection form. */
+export interface ConnectionFormField {
+  /** `baseUrl`, or a key inside `config`. */
+  key: string;
+  label: string;
+  value: string;
+  type: ConnectionFieldType;
+  /** Shown when the field is empty. */
+  placeholder?: string;
+  /** True for the credential field — its value is never loaded from the hub. */
+  secret?: boolean;
+}
+
+/** A connection as the Integrations screen renders it. */
+export interface Connection {
+  id: number;
+  kind: ConnectionKind;
+  provider: ProviderKey;
+  label: string;
+  /** Mono one-liner, e.g. `dev.azure.com/emesoft · Surveyor`. */
+  summary: string;
+  status: ConnectionStatus;
+  /** "2 min ago" / "never". */
+  lastTested: string;
+  hasPat: boolean;
+  shared: boolean;
+  capabilities: string[];
+  fields: ConnectionFormField[];
+}
+
+export interface ConnectionGroup {
+  provider: ProviderKey;
+  kind: ConnectionKind;
+  /** What the connections in this group supply, e.g. "work items · repositories". */
+  capabilitiesLabel: string;
+  connections: Connection[];
+}
+
+/* ── Kind <-> provider key ───────────────────────────────────────────────── */
+
+const KIND_BY_PROVIDER: Record<ProviderKey, ConnectionKind> = {
+  ado: "azure_devops",
+  gh: "github",
+  jira: "jira",
+};
+
+const PROVIDER_BY_KIND: Record<string, ProviderKey> = {
+  azure_devops: "ado",
+  github: "gh",
+  jira: "jira",
+};
+
+export const kindForProvider = (provider: ProviderKey): ConnectionKind =>
+  KIND_BY_PROVIDER[provider];
+
+const CAPABILITY_LABEL: Record<string, string> = {
+  work_item: "work items",
+  repository: "repositories",
+};
+
+const capabilitiesLabel = (capabilities: string[]): string =>
+  capabilities.length === 0
+    ? "no capabilities"
+    : capabilities.map((c) => CAPABILITY_LABEL[c] ?? c).join(" · ");
+
+/* ── Field schemas ───────────────────────────────────────────────────────── */
+
+const str = (value: unknown): string =>
+  typeof value === "string" ? value : value == null ? "" : String(value);
+
+/**
+ * The fields each kind's adapter actually reads
+ * (`api/app/services/adapters/*.py`) plus the one credential field.
+ *
+ * This is narrower than the handoff's list because the handoff was drawn
+ * against a different backend: there is no ADO "Area path" on a connection
+ * (area paths are a sync filter, not adapter config) and GitHub authenticates
+ * with a PAT, not a GitHub App, so there is no installation id or private key.
+ */
+function fieldsFor(kind: ConnectionKind, wire: ConnectionWire): ConnectionFormField[] {
+  const cfg = wire.config ?? {};
+  const secret = (label: string): ConnectionFormField => ({
+    key: "pat",
+    label,
+    value: "",
+    type: "password",
+    secret: true,
+    placeholder: wire.hasPat
+      ? "Stored — type a new one to replace it"
+      : "Required to reach the provider",
+  });
+
+  if (kind === "azure_devops") {
+    return [
+      {
+        key: "baseUrl",
+        label: "Organisation URL",
+        value: wire.baseUrl,
+        type: "text",
+        placeholder: "https://dev.azure.com/your-org",
+      },
+      {
+        key: "config.project",
+        label: "Project",
+        value: str(cfg.project),
+        type: "text",
+      },
+      secret("Personal access token"),
+    ];
+  }
+
+  if (kind === "jira") {
+    return [
+      {
+        key: "baseUrl",
+        label: "Site URL",
+        value: wire.baseUrl,
+        type: "text",
+        placeholder: "https://your-team.atlassian.net",
+      },
+      {
+        key: "config.email",
+        label: "Account email",
+        value: str(cfg.email),
+        type: "text",
+      },
+      {
+        key: "config.project",
+        label: "Project key",
+        value: str(cfg.project),
+        type: "text",
+      },
+      secret("API token"),
+    ];
+  }
+
+  return [
+    {
+      key: "config.org",
+      label: "Organisation",
+      value: str(cfg.org),
+      type: "text",
+    },
+    {
+      key: "config.repo",
+      label: "Repository",
+      value: str(cfg.repo),
+      type: "text",
+      placeholder: "Optional — narrows the connection to one repo",
+    },
+    {
+      key: "baseUrl",
+      label: "API base URL",
+      value: wire.baseUrl,
+      type: "text",
+      placeholder: "Empty for github.com",
+    },
+    secret("Personal access token"),
+  ];
+}
+
+/** The mono sub-line: whatever identifies this account at the provider. */
+function summaryFor(kind: ConnectionKind, wire: ConnectionWire): string {
+  const cfg = wire.config ?? {};
+  const host = wire.baseUrl.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  if (kind === "github") {
+    const path = [str(cfg.org), str(cfg.repo)].filter(Boolean).join("/");
+    return [host || "github.com", path].filter(Boolean).join(" · ");
+  }
+  return [host, str(cfg.project)].filter(Boolean).join(" · ") || "not configured";
+}
+
+/**
+ * `connected` is the last test verdict, so a never-tested connection is not
+ * "Disconnected" — it is unproven. A stored PAT that has never passed a test
+ * reads as Attention; no PAT at all is Disconnected.
+ */
+function statusFor(wire: ConnectionWire): ConnectionStatus {
+  if (wire.connected) return "Connected";
+  return wire.hasPat ? "Attention" : "Disconnected";
+}
+
+function toConnection(wire: ConnectionWire): Connection {
+  const provider = PROVIDER_BY_KIND[wire.kind] ?? "ado";
+  const kind = (KIND_BY_PROVIDER[provider] ?? "azure_devops") as ConnectionKind;
+  return {
+    id: wire.id,
+    kind,
+    provider,
+    label: wire.label || PROVIDERS[provider].name,
+    summary: summaryFor(kind, wire),
+    status: statusFor(wire),
+    lastTested: relativeTime(wire.lastTestedAt),
+    hasPat: wire.hasPat,
+    shared: wire.shared,
+    capabilities: wire.capabilities ?? [],
+    fields: fieldsFor(kind, wire),
+  };
+}
+
+/* ── Reads ───────────────────────────────────────────────────────────────── */
+
+/** `GET /connections`, grouped into the handoff's provider blocks. */
+export const getConnections = async (): Promise<ConnectionGroup[]> => {
+  const rows = await api.get<ConnectionWire[]>("/connections");
+  const byProvider = rows.map(toConnection);
+  return PROVIDER_ORDER.map((provider) => {
+    const connections = byProvider.filter((c) => c.provider === provider);
+    const capabilities = [...new Set(connections.flatMap((c) => c.capabilities))];
+    return {
+      provider,
+      kind: KIND_BY_PROVIDER[provider],
+      capabilitiesLabel: capabilitiesLabel(capabilities),
+      connections,
+    };
+  });
+};
+
+/**
+ * The Overview page's per-provider summary cards, derived from the same
+ * `GET /connections` response — the hub has no separate integrations resource.
+ *
+ * Only providers with at least one connection appear, and every string is
+ * something the wire actually says: there is no sync schedule and no work-item
+ * count on a connection, so those cells report what is known instead.
+ */
+export const getIntegrations = async (): Promise<Integration[]> => {
+  const groups = await getConnections();
+  return groups
+    .filter((g) => g.connections.length > 0)
+    .map((g) => {
+      const provider = PROVIDERS[g.provider];
+      const connected = g.connections.filter((c) => c.status === "Connected");
+      const withPat = g.connections.filter((c) => c.hasPat);
+      const tested = g.connections
+        .map((c) => c.lastTested)
+        .filter((t) => t !== "never");
+      const n = g.connections.length;
+      return {
+        id: g.provider,
+        name: provider.name,
+        state: connected.length === n ? "Connected" : ("Attention" as ConnectionStatus),
+        meta: `${n} ${n === 1 ? "connection" : "connections"} · ${g.capabilitiesLabel}`,
+        auth: `${withPat.length} of ${n} with a stored token`,
+        sync: "On demand",
+        last: tested[0] ?? "never tested",
+        items: `${connected.length} verified`,
+      };
+    });
+};
+
+/* ── Writes ──────────────────────────────────────────────────────────────── */
+
+/** Split the flat form values back into `baseUrl` + `config` + `pat`. */
+function toPayload(fields: ConnectionFormField[]): {
+  baseUrl?: string;
+  config: Record<string, string>;
+  pat?: string;
+} {
+  const config: Record<string, string> = {};
+  let baseUrl: string | undefined;
+  let pat: string | undefined;
+  for (const field of fields) {
+    if (field.key === "pat") {
+      // Empty means "leave the stored credential alone" — the hub treats an
+      // omitted `pat` as keep, and `""` as clear.
+      if (field.value) pat = field.value;
+      continue;
+    }
+    if (field.key === "baseUrl") {
+      baseUrl = field.value;
+      continue;
+    }
+    if (field.key.startsWith("config.")) config[field.key.slice(7)] = field.value;
+  }
+  return { baseUrl, config, pat };
+}
+
+/** `POST /connections` — a new, empty connection of `kind`, ready to fill in. */
+export const createConnection = async (
+  provider: ProviderKey,
+  label: string,
+): Promise<Connection> => {
+  const wire = await api.post<ConnectionWire>("/connections", {
+    kind: KIND_BY_PROVIDER[provider],
+    label,
+  });
+  return toConnection(wire);
+};
+
+/** `PATCH /connections/{id}`. Sends `pat` only when the user typed a new one. */
+export const saveConnection = async (
+  connection: Connection,
+): Promise<Connection> => {
+  const { baseUrl, config, pat } = toPayload(connection.fields);
+  const body: Record<string, unknown> = { label: connection.label, config };
+  if (baseUrl !== undefined) body.baseUrl = baseUrl;
+  if (pat !== undefined) body.pat = pat;
+  const wire = await api.patch<ConnectionWire>(
+    `/connections/${connection.id}`,
+    body,
+  );
+  return toConnection(wire);
+};
+
+/**
+ * `POST /connections/{id}/test` — really calls the provider, so it is as slow
+ * as the provider is and can genuinely fail. `ok: false` carries the reason.
+ */
 export const testConnection = (
-  _connectionId: string,
-): Promise<ConnectionTestResult> =>
-  after({ ok: true, latencyMs: 118 }, TEST_CONNECTION_DELAY_MS);
+  connectionId: number,
+): Promise<ConnectionTestOutcome> =>
+  api.post<ConnectionTestOutcome>(`/connections/${connectionId}/test`);
 
-// STUB: PUT /api/connections/{connectionId}
-export const saveConnection = (
-  connection: ProviderConnection,
-): Promise<ProviderConnection> => after(connection, READ_DELAY_MS);
-
-// STUB: DELETE /api/connections/{connectionId}
-export const removeConnection = (_connectionId: string): Promise<void> =>
-  after(undefined, READ_DELAY_MS);
+/** `DELETE /connections/{id}` — takes the stored credential with it. */
+export const removeConnection = async (connectionId: number): Promise<void> => {
+  await api.delete(`/connections/${connectionId}`);
+};

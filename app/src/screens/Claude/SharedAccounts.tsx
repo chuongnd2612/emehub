@@ -1,16 +1,34 @@
 // Handoff › 6. Claude Settings › Credentials › "SHARED CLAUDE ACCOUNTS"
-// — the admin section: one card per shared credential plus the dashed
-// "Add a shared Claude account" upload zone.
+// — the admin section, wired to `PUT|DELETE /credentials/claude/shared`.
+//
+// The handoff drew a LIST of shared accounts with a `DEFAULT` chip and a
+// `Set as default` action. The hub holds exactly one shared workspace
+// credential (`api/app/services/claude_credentials.py` › `get_shared`), so
+// this renders one card or the upload zone, and the default action is offered
+// disabled with the reason — see `SET_DEFAULT_UNAVAILABLE`.
 
-import { ClaudeMark, Dropdown, Icon, StatusPill } from "@/components/ui";
-import { formatDaysLeft, maskToken, type SharedCredential } from "@/data";
+import {
+  ClaudeMark,
+  Dropdown,
+  Icon,
+  Notice,
+  Spinner,
+  StatusPill,
+} from "@/components/ui";
+import {
+  SET_DEFAULT_UNAVAILABLE,
+  formatDaysLeft,
+  formatExpiryIso,
+  formatRefreshed,
+  type ClaudeCredentialMeta,
+} from "@/data";
 import { cn } from "@/lib/cn";
 import {
   FileUpload,
   Meta,
   ReadingToken,
   ScopeChips,
-  TokenRow,
+  StoredSecretRow,
 } from "./parts";
 import { statusLabel, type ClaudeSettings } from "./state";
 
@@ -27,46 +45,52 @@ export function SharedAccounts({ s }: { s: ClaudeSettings }) {
         </span>
       </div>
 
-      {s.shared.map((cred) => (
-        <SharedCredentialCard key={cred.id} cred={cred} s={s} />
-      ))}
+      {s.shared ? (
+        <SharedCredentialCard meta={s.shared} s={s} />
+      ) : (
+        <FileUpload
+          onFile={s.addShared}
+          className="flex flex-col items-center gap-[9px] rounded-card border-[1.5px] border-dashed border-bd2 bg-transparent p-[26px] text-center hover:border-pb hover:bg-inset"
+        >
+          {s.uploadingShared ? (
+            <ReadingToken />
+          ) : (
+            <>
+              <span className="flex size-[42px] items-center justify-center rounded-button border border-pb bg-pt text-ps-text">
+                <Icon name="plus" size={20} strokeWidth={2.4} />
+              </span>
+              <div className="text-[13.5px] font-bold text-txt">
+                Add a shared Claude account
+              </div>
+              <div className="text-[12px] text-muted">
+                Upload a{" "}
+                <span className="font-mono text-[11px]">.credentials.json</span>{" "}
+                exported from an authenticated Claude CLI
+              </div>
+            </>
+          )}
+        </FileUpload>
+      )}
 
-      <FileUpload
-        onFile={s.addShared}
-        className="flex flex-col items-center gap-[9px] rounded-card border-[1.5px] border-dashed border-bd2 bg-transparent p-[26px] text-center hover:border-pb hover:bg-inset"
-      >
-        {s.uploadingShared ? (
-          <ReadingToken />
-        ) : (
-          <>
-            <span className="flex size-[42px] items-center justify-center rounded-button border border-pb bg-pt text-ps-text">
-              <Icon name="plus" size={20} strokeWidth={2.4} />
-            </span>
-            <div className="text-[13.5px] font-bold text-txt">
-              Add a shared Claude account
-            </div>
-            <div className="text-[12px] text-muted">
-              Upload a{" "}
-              <span className="font-mono text-[11px]">.credentials.json</span>{" "}
-              exported from an authenticated Claude CLI
-            </div>
-          </>
-        )}
-      </FileUpload>
+      <Notice tone="info">
+        The workspace runs on a single shared account. Uploading replaces it for
+        every member who has not attached their own. Set as default is disabled:{" "}
+        {SET_DEFAULT_UNAVAILABLE}.
+      </Notice>
     </>
   );
 }
 
 function SharedCredentialCard({
-  cred,
+  meta,
   s,
 }: {
-  cred: SharedCredential;
+  meta: ClaudeCredentialMeta;
   s: ClaudeSettings;
 }) {
-  const status = statusLabel(cred.daysLeft);
+  const status = statusLabel(meta.daysLeft);
   const needsRotation = status !== "Active";
-  const revealed = !!s.revealed[cred.id];
+  const assigned = meta.assignedUsers ?? 0;
 
   return (
     <div
@@ -75,11 +99,7 @@ function SharedCredentialCard({
         // Not <GlassCard/>: the border colour is derived, and `glass` sets the
         // border shorthand, which would out-specify a border-colour utility.
         "overflow-hidden rounded-panel border bg-card backdrop-blur-glass",
-        cred.isDefault
-          ? "border-pb"
-          : needsRotation
-            ? "border-warn/30"
-            : "border-bd",
+        needsRotation ? "border-warn/30" : "border-pb",
       )}
     >
       {needsRotation && (
@@ -87,7 +107,7 @@ function SharedCredentialCard({
           <span className="shrink-0">
             <Icon name="alert" size={14} strokeWidth={2.2} />
           </span>
-          This token expires {formatDaysLeft(cred.daysLeft)} — rotate it to keep
+          This token expires {formatDaysLeft(meta.daysLeft)} — rotate it to keep
           agent runs authenticated.
         </div>
       )}
@@ -101,36 +121,33 @@ function SharedCredentialCard({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-[9px]">
               <span className="truncate text-[15.5px] font-extrabold tracking-[-.02em] text-txt">
-                {cred.label}
+                {meta.label || "Shared Claude account"}
               </span>
-              {cred.isDefault && (
-                <span className="shrink-0 rounded-pill bg-pt px-2 py-[3px] text-[9px] font-bold tracking-[.09em] text-ps-text">
-                  DEFAULT
-                </span>
-              )}
+              <span className="shrink-0 rounded-pill bg-pt px-2 py-[3px] text-[9px] font-bold tracking-[.09em] text-ps-text">
+                DEFAULT
+              </span>
             </div>
             <div className="mt-[3px] font-mono text-[11.5px] text-muted">
-              {cred.email}
+              {meta.subscriptionType ?? "Claude account"}
             </div>
           </div>
 
           <StatusPill status={status} />
 
           <Dropdown
-            ddKey={`cred-menu-${cred.id}`}
-            width={196}
+            ddKey="cred-menu-shared"
+            width={220}
             align="end"
             value={null}
             items={[
-              ...(cred.isDefault
-                ? []
-                : [
-                    {
-                      value: "default" as const,
-                      label: "Set as default",
-                      icon: <Icon name="spark" size={14} />,
-                    },
-                  ]),
+              {
+                value: "default" as const,
+                label: "Set as default",
+                icon: <Icon name="spark" size={14} />,
+                // No endpoint sets a default, and with one shared account
+                // there is nothing to choose between.
+                disabled: true,
+              },
               {
                 value: "remove" as const,
                 label: "Remove credential",
@@ -138,48 +155,54 @@ function SharedCredentialCard({
                 destructive: true,
               },
             ]}
-            onSelect={(v) =>
-              v === "default" ? s.makeDefault(cred.id) : s.removeShared(cred.id)
-            }
+            onSelect={(v) => {
+              if (v === "remove") s.removeShared();
+            }}
             trigger={({ ref, toggle }) => (
               <button
                 ref={ref}
                 type="button"
                 data-surface
                 onClick={toggle}
-                aria-label={`Credential actions for ${cred.label}`}
+                aria-label="Shared credential actions"
                 className="flex size-[30px] shrink-0 cursor-pointer items-center justify-center rounded-control border border-bd2 bg-card2 text-muted hover:bg-bd2"
               >
-                <Icon name="more" size={16} className="fill-current stroke-none" />
+                <Icon
+                  name="more"
+                  size={16}
+                  className="fill-current stroke-none"
+                />
               </button>
             )}
           />
         </div>
 
         <div className="mt-[18px] grid grid-cols-4 gap-3">
-          <Meta label="SUBSCRIPTION" value={cred.subscription} />
+          <Meta
+            label="SUBSCRIPTION"
+            value={meta.subscriptionType ?? "Claude account"}
+          />
           <Meta
             label="EXPIRES"
-            value={cred.expiresDisplay}
-            sub={formatDaysLeft(cred.daysLeft)}
+            value={formatExpiryIso(meta.expiresAt)}
+            sub={formatDaysLeft(meta.daysLeft)}
           />
-          <Meta label="LAST REFRESHED" value={cred.lastRefreshed} />
+          <Meta
+            label="LAST REFRESHED"
+            value={formatRefreshed(meta.lastRefreshed)}
+          />
           <Meta
             label="ASSIGNED"
-            value={`${cred.members} ${cred.members === 1 ? "member" : "members"}`}
+            value={`${assigned} ${assigned === 1 ? "member" : "members"}`}
           />
         </div>
 
         <div className="mt-4">
-          <ScopeChips scopes={cred.scopes} />
+          <ScopeChips scopes={meta.scopes} />
         </div>
 
         <div className="mt-4">
-          <TokenRow
-            revealed={revealed}
-            onToggle={() => s.toggleReveal(cred.id)}
-            value={revealed ? cred.token : maskToken(cred.token)}
-          />
+          <StoredSecretRow />
         </div>
 
         <div className="mt-[15px] flex items-center gap-[9px] border-t border-bd3 pt-[14px]">
@@ -187,13 +210,17 @@ function SharedCredentialCard({
             <Icon name="doc" size={12} />
           </span>
           <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">
-            {cred.source}
+            {meta.label || ".credentials.json"}
           </span>
           <FileUpload
-            onFile={(file) => s.rotateShared(cred.id, file)}
+            onFile={s.addShared}
             className="inline-flex items-center gap-2 rounded-control-lg border border-pb bg-pt px-[15px] py-[9px] text-[12.5px] font-bold text-ps-text hover:bg-bd"
           >
-            <Icon name="upload" size={14} />
+            {s.uploadingShared ? (
+              <Spinner size={14} speed="run" />
+            ) : (
+              <Icon name="upload" size={14} />
+            )}
             Rotate token
           </FileUpload>
         </div>
