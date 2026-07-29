@@ -8,7 +8,13 @@
 // The file the user drops is the same one the agents need at
 // `~/.claude/.credentials.json` before each run (INTEGRATION.md §4).
 
-import type { CredentialStatus, PersonalCredential } from "./types";
+import { SHARED_CREDENTIALS } from "./fixtures/credentials";
+import { after, READ_DELAY_MS } from "./timing";
+import type {
+  CredentialStatus,
+  PersonalCredential,
+  SharedCredential,
+} from "./types";
 
 /** Toast copy for an unparseable file. Copy is final — do not paraphrase. */
 export const INVALID_CREDENTIAL_TOAST = {
@@ -182,3 +188,68 @@ export function toPersonalCredential(
     lastRefreshed: "just now",
   };
 }
+
+/* ── Resource stubs ───────────────────────────────────────────────────────
+ *
+ * Everything above is real logic. Everything below is a STUB naming the
+ * endpoint that will replace it. The Claude credential is the one secret the
+ * hub deliberately hands out (INTEGRATION.md §4), so when these are swapped
+ * for real calls the response must never be persisted anywhere but the CLI's
+ * own config dir. */
+
+/** Credential upload — "Reading token…" spinner, after the parse succeeds. */
+export const CREDENTIAL_DELAY_MS = CREDENTIAL_UPLOAD_DELAY_MS;
+
+// STUB: GET /api/credentials/claude/shared
+export const getSharedCredentials = (): Promise<SharedCredential[]> =>
+  after(SHARED_CREDENTIALS, READ_DELAY_MS);
+
+/**
+ * Parses the dropped `.credentials.json` for real (see above), then waits the
+ * handoff's 850 ms "Reading token…" dwell before resolving.
+ */
+// STUB: POST /api/credentials/claude (multipart .credentials.json)
+export const uploadCredential = async (
+  file: File,
+): Promise<PersonalCredential> => {
+  const parsed = await parseCredentialFile(file);
+  return after(toPersonalCredential(parsed), CREDENTIAL_DELAY_MS);
+};
+
+// STUB: POST /api/credentials/claude/{credentialId}/rotate
+export const rotateCredential = async (
+  credentialId: string,
+  file: File,
+): Promise<SharedCredential> => {
+  const parsed = await parseCredentialFile(file);
+  const existing = SHARED_CREDENTIALS.find((c) => c.id === credentialId);
+  const personal = toPersonalCredential(parsed);
+  const rotated: SharedCredential = {
+    id: credentialId,
+    label: existing?.label ?? parsed.filename.replace(/\.json$/, ""),
+    email: existing?.email ?? "—",
+    subscription: personal.subscription,
+    expiresDisplay: personal.expiresDisplay,
+    daysLeft: personal.daysLeft,
+    scopes: personal.scopes,
+    lastRefreshed: "just now",
+    members: existing?.members ?? 0,
+    isDefault: existing?.isDefault ?? false,
+    token: personal.token,
+    source: `uploaded · ${parsed.filename}`,
+  };
+  return after(rotated, CREDENTIAL_DELAY_MS);
+};
+
+// STUB: DELETE /api/credentials/claude/{credentialId}
+export const removeCredential = (_credentialId: string): Promise<void> =>
+  after(undefined, READ_DELAY_MS);
+
+// STUB: POST /api/credentials/claude/{credentialId}/default
+export const setDefaultCredential = (
+  credentialId: string,
+): Promise<SharedCredential[]> =>
+  after(
+    SHARED_CREDENTIALS.map((c) => ({ ...c, isDefault: c.id === credentialId })),
+    READ_DELAY_MS,
+  );
