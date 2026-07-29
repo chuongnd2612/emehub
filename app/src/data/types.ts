@@ -107,6 +107,40 @@ export interface KnowledgeMeta {
   lastError: string;
   shared: boolean;
   body: KnowledgeBody;
+  /** Live build progress — see {@link KnowledgeBuildProgress}. */
+  build: KnowledgeBuildProgress;
+}
+
+/** One stage of a hub-side knowledge build, in the order they happen. */
+export type KnowledgeBuildStage =
+  | "queued"
+  | "resolving"
+  | "cloning"
+  | "analyzing"
+  | "writing";
+
+/**
+ * What the hub is actually doing right now (issue #68).
+ *
+ * Every field is read back from the row the build worker writes, so a reload
+ * picks the build up where it is instead of restarting a local animation.
+ * `stage` is `""` when nothing is in flight.
+ */
+export interface KnowledgeBuildProgress {
+  stage: KnowledgeBuildStage | "";
+  /** 1-based ordinal of `stage`; 0 when there is none. */
+  step: number;
+  /** How many stages there are — the hub's count, not a hard-coded one. */
+  totalSteps: number;
+  /** The live line. During `analyzing` it follows Claude's own event stream. */
+  message: string;
+  /** ISO timestamp the current (or last) build started — the elapsed clock. */
+  startedAt: string | null;
+  /**
+   * The row says `indexing` but no worker is behind it: a build orphaned by a
+   * restarted container. Offer a retry; never keep spinning.
+   */
+  orphaned: boolean;
 }
 
 /** One configured repository — `ProjectConfigOut.repos[]`. */

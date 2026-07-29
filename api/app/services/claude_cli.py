@@ -1,4 +1,4 @@
-"""Claude Code CLI integration — the one-shot JSON path, and nothing else.
+"""Claude Code CLI integration — the one-shot JSON path, and a streaming twin.
 
 ADR 0007 lets the hub build the shared artefacts it already owns the inputs for.
 That is one job (``project-bootstrap``) and one invocation shape::
@@ -8,6 +8,29 @@ That is one job (``project-bootstrap``) and one invocation shape::
 
 run in the repository clone's directory, under a ``CLAUDE_CONFIG_DIR`` holding
 the materialised credential.
+
+## The streaming variant (issue #68)
+
+A knowledge build spends most of its multi-minute wall time inside that one
+subprocess, and ``--output-format json`` emits nothing until it is over — so
+there is no per-tool signal available even in principle. Passing ``on_event``
+switches the invocation to::
+
+    claude -p "<prompt>" --output-format stream-json --verbose …
+
+and reads stdout **line by line**, handing each decoded NDJSON event to the
+callback as it arrives. The caller turns those into a live status line.
+
+It is deliberately an *opt-in argument*, not a second function and not a change
+of default: with ``on_event=None`` — every existing call site — the command,
+the subprocess call and the parsing are exactly what they were. What the two
+paths share is everything that matters afterwards, because ``stream-json``'s
+terminal ``{"type": "result", …}`` event carries the same envelope
+``--output-format json`` prints whole: ``result``, ``usage``, ``modelUsage``,
+``total_cost_usd``, ``duration_ms``. :func:`_envelope_from` accepts either
+shape, so usage recording, credential refresh, the auth-failure markers and
+:func:`run_json`'s "returns parsed JSON" contract are one implementation rather
+than two that can drift.
 
 ## What is deliberately absent
 
@@ -38,9 +61,12 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import subprocess
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +75,11 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.logging import logger
 
-__all__ = ["ClaudeError", "run_json", "run_prompt"]
+__all__ = ["ClaudeError", "describe_event", "run_json", "run_prompt"]
+
+#: A decoded ``stream-json`` event, handed to ``on_event`` as it arrives.
+StreamEvent = dict[str, Any]
+EventHandler = Callable[[StreamEvent], None]
 
 
 class ClaudeError(RuntimeError):
@@ -268,6 +298,259 @@ def _record_usage(
         logger.warning("Claude usage capture skipped: %s", exc)
 
 
+# --------------------------------------------------------------- streaming
+#: Tools whose invocation says something a human wants to read, mapped to the
+#: input key that names *what* it acted on. Anything not listed still produces a
+#: line ("Running <Tool>…"), it just does not try to name a target.
+_TOOL_TARGET_KEY: dict[str, str] = {
+    "Read": "file_path",
+    "Write": "file_path",
+    "Edit": "file_path",
+    "NotebookRead": "notebook_path",
+    "Glob": "pattern",
+    "Grep": "pattern",
+    "WebFetch": "url",
+    "Task": "description",
+}
+
+#: Present-participle verb per tool, so the line reads as an activity.
+_TOOL_VERB: dict[str, str] = {
+    "Read": "Reading",
+    "Write": "Writing",
+    "Edit": "Editing",
+    "NotebookRead": "Reading",
+    "Glob": "Looking for",
+    "Grep": "Searching for",
+    "WebFetch": "Fetching",
+    "Bash": "Running a command",
+    "Task": "Delegating",
+    "TodoWrite": "Planning",
+}
+
+#: The live message is a status line, not a transcript. Long before the column
+#: limit, anything longer stops being readable in the UI's one row.
+_MESSAGE_LIMIT = 160
+
+
+def _shorten(value: str, limit: int = 72) -> str:
+    """A path or pattern trimmed to something that fits a status line.
+
+    Paths keep their **tail** — ``…/services/knowledge_service.py`` says far more
+    than the first 72 characters of an absolute path ever would.
+    """
+    text = " ".join(str(value).split())
+    if len(text) <= limit:
+        return text
+    return "…" + text[-(limit - 1) :]
+
+
+def describe_event(event: StreamEvent) -> str | None:
+    """A one-line human description of a ``stream-json`` event, or ``None``.
+
+    ``None`` means "this event says nothing new" — most of the stream is
+    tool *results* and bookkeeping, and emitting a line for those would make the
+    UI flicker without informing anyone.
+
+    Nothing here is trusted: the strings come out of a model that has just been
+    reading an arbitrary repository, so every one is whitespace-collapsed and
+    length-bounded. Scrubbing for credentials happens at the caller, on the way
+    to the database, because that is the boundary that matters.
+    """
+    if not isinstance(event, dict):
+        return None
+
+    kind = event.get("type")
+    if kind == "system" and event.get("subtype") == "init":
+        return "Claude session started"
+
+    if kind != "assistant":
+        return None
+
+    content = ((event.get("message") or {}).get("content")) or []
+    if not isinstance(content, list):
+        return None
+
+    # A tool call is the most informative thing in the stream, so it wins over
+    # any prose in the same message.
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        name = str(block.get("name") or "tool")
+        verb = _TOOL_VERB.get(name, f"Running {name}")
+        payload = block.get("input")
+        target_key = _TOOL_TARGET_KEY.get(name)
+        target = ""
+        if target_key and isinstance(payload, dict):
+            target = str(payload.get(target_key) or "")
+        return f"{verb} {_shorten(target)}".strip() if target else verb
+
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            text = " ".join(str(block.get("text") or "").split())
+            if text:
+                return _shorten(text, _MESSAGE_LIMIT)
+    return None
+
+
+def _decode_event(line: str) -> StreamEvent | None:
+    """One NDJSON line → an event, or ``None`` for blank/undecodable output.
+
+    The CLI can interleave a plain-text warning with its NDJSON; a stray line is
+    not a build failure, so it is skipped rather than raised on.
+    """
+    text = line.strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _terminate(proc: "subprocess.Popen[str]") -> None:
+    """Stop a CLI that overran its budget, and do not leave a zombie."""
+    try:
+        proc.kill()
+        proc.wait(timeout=5)
+    except Exception:  # noqa: BLE001 - teardown is best-effort by definition
+        pass
+
+
+def _run_blocking(
+    cmd: list[str], *, cwd: str | None, env: dict[str, str], budget: int
+) -> tuple[int, str, str]:
+    """The original path: run to completion, then read. ``(rc, stdout, stderr)``."""
+    proc = subprocess.run(  # fixed argv, no shell
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=budget,
+        check=False,
+        cwd=cwd,
+        env=env,
+    )
+    return proc.returncode, (proc.stdout or "").strip(), (proc.stderr or "").strip()
+
+
+def _run_streaming(
+    cmd: list[str],
+    *,
+    cwd: str | None,
+    env: dict[str, str],
+    budget: int,
+    on_event: EventHandler,
+) -> tuple[int, str, str]:
+    """Run the CLI and dispatch each NDJSON line as it arrives.
+
+    Two pump threads, because both pipes must be drained: a full stderr buffer
+    deadlocks a process whose stdout we are patiently reading. The main loop
+    takes lines off a queue with a *deadline* rather than calling ``readline``
+    directly, so a CLI that stops emitting entirely is still killed at ``budget``
+    instead of blocking this thread forever.
+
+    ``on_event`` is called on this thread and is never allowed to fail the run —
+    a progress write that throws must not lose a build that is going fine.
+    """
+    proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        cwd=cwd,
+        env=env,
+    )
+    lines: list[str] = []
+    stderr_text = ""
+    inbox: queue.Queue[str | None] = queue.Queue()
+
+    def pump_stdout() -> None:
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                inbox.put(line)
+        finally:
+            inbox.put(None)
+
+    def pump_stderr() -> None:
+        nonlocal stderr_text
+        try:
+            assert proc.stderr is not None
+            stderr_text = proc.stderr.read() or ""
+        except Exception:  # noqa: BLE001
+            pass
+
+    readers = (
+        threading.Thread(target=pump_stdout, name="claude-stdout", daemon=True),
+        threading.Thread(target=pump_stderr, name="claude-stderr", daemon=True),
+    )
+    for reader in readers:
+        reader.start()
+
+    deadline = time.monotonic() + budget
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate(proc)
+                raise subprocess.TimeoutExpired(cmd, budget)
+            try:
+                line = inbox.get(timeout=min(remaining, 1.0))
+            except queue.Empty:
+                continue
+            if line is None:
+                break
+            lines.append(line)
+            event = _decode_event(line)
+            if event is None:
+                continue
+            try:
+                on_event(event)
+            except Exception as exc:  # noqa: BLE001 - progress never fails a build
+                logger.warning("Claude stream handler raised: %s", type(exc).__name__)
+
+        remaining = max(1.0, deadline - time.monotonic())
+        try:
+            proc.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            _terminate(proc)
+            raise
+    finally:
+        for reader in readers:
+            reader.join(timeout=2)
+
+    return proc.returncode, "".join(lines).strip(), stderr_text.strip()
+
+
+def _envelope_from(stdout_text: str) -> dict | None:
+    """The result envelope, from either output format.
+
+    ``--output-format json`` prints exactly one object, so the whole of stdout
+    parses. ``stream-json`` prints one object per line and the last
+    ``{"type": "result", …}`` is the same envelope — same ``result``, ``usage``,
+    ``modelUsage``, ``total_cost_usd`` and ``duration_ms`` keys — so both paths
+    feed identical data to usage recording and to :func:`run_json`.
+    """
+    if not stdout_text:
+        return None
+    try:
+        parsed = json.loads(stdout_text)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    for line in reversed(stdout_text.splitlines()):
+        event = _decode_event(line)
+        if event is not None and event.get("type") == "result":
+            return event
+    return None
+
+
 # -------------------------------------------------------------------- runs
 def run_prompt(
     prompt: str,
@@ -280,11 +563,18 @@ def run_prompt(
     timeout: int | None = None,
     label: str | None = None,
     cwd: str | Path | None = None,
+    on_event: EventHandler | None = None,
 ) -> str:
     """Run one prompt through the CLI and return its text result.
 
     ``cwd`` is the repository clone: running there is what lets the CLI's file
     tools read real source instead of inferring structure from metadata.
+
+    ``on_event`` opts into the streaming invocation (module docstring): the CLI
+    is asked for ``stream-json --verbose`` and every decoded event is handed to
+    the callback as it arrives, so a caller can show what the model is doing
+    while it does it. Everything after the subprocess — usage, credential
+    refresh, auth detection, the returned string — is identical either way.
 
     Raises:
         ClaudeError: the CLI is missing, unauthenticated, timed out or exited
@@ -293,7 +583,12 @@ def run_prompt(
     system = _compose_system(system, skill, include_template)
     model = _resolve_model(skill)
     budget = timeout or settings.claude_timeout_s
-    cmd = [settings.claude_bin, "-p", prompt, "--output-format", "json", "--model", model]
+    streaming = on_event is not None
+    output_format = ["--output-format", "stream-json", "--verbose"] if streaming else [
+        "--output-format",
+        "json",
+    ]
+    cmd = [settings.claude_bin, "-p", prompt, *output_format, "--model", model]
     if system:
         cmd += ["--append-system-prompt", system]
 
@@ -301,26 +596,24 @@ def run_prompt(
     resolved_cwd = _resolve_cwd(cwd)
     # Lengths and the model only — never the prompt, which embeds project config.
     logger.info(
-        "Claude CLI: %s (%d-char prompt, model=%s, timeout=%ss)",
+        "Claude CLI: %s (%d-char prompt, model=%s, timeout=%ss, %s)",
         label or skill or "call",
         len(prompt),
         model,
         budget,
+        "streaming" if streaming else "blocking",
     )
 
     started = time.monotonic()
     try:
-        proc = subprocess.run(  # fixed argv, no shell
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=budget,
-            check=False,
-            cwd=resolved_cwd,
-            env=env,
-        )
+        if on_event is not None:
+            returncode, stdout_text, stderr_text = _run_streaming(
+                cmd, cwd=resolved_cwd, env=env, budget=budget, on_event=on_event
+            )
+        else:
+            returncode, stdout_text, stderr_text = _run_blocking(
+                cmd, cwd=resolved_cwd, env=env, budget=budget
+            )
     except FileNotFoundError as exc:
         raise ClaudeError(
             f"Claude CLI not found (looked for '{settings.claude_bin}'). The API "
@@ -332,10 +625,7 @@ def run_prompt(
     # The CLI may have rotated its own access token inside the config dir.
     _persist_refreshed_credential(db, owner_id, env)
 
-    stdout_text = (proc.stdout or "").strip()
-    stderr_text = (proc.stderr or "").strip()
-
-    if proc.returncode != 0:
+    if returncode != 0:
         # `claude -p --output-format json` writes its failure reason to STDOUT
         # and leaves STDERR empty, so a bare exit code hides the real cause.
         combined = f"{stdout_text}\n{stderr_text}".lower()
@@ -346,16 +636,10 @@ def run_prompt(
                 "fresh one, then build again."
             )
         detail = (stderr_text or stdout_text or "no output")[:_DETAIL_LIMIT]
-        logger.error("Claude CLI exited %s: %s", proc.returncode, detail)
-        raise ClaudeError(f"Claude CLI exited {proc.returncode}: {detail}")
+        logger.error("Claude CLI exited %s: %s", returncode, detail)
+        raise ClaudeError(f"Claude CLI exited {returncode}: {detail}")
 
-    envelope: dict | None = None
-    try:
-        parsed = json.loads(stdout_text)
-        if isinstance(parsed, dict):
-            envelope = parsed
-    except json.JSONDecodeError:
-        pass
+    envelope = _envelope_from(stdout_text)
 
     _record_usage(
         db,
@@ -369,6 +653,14 @@ def run_prompt(
 
     if envelope is not None and "result" in envelope:
         return str(envelope["result"])
+    if streaming:
+        # A stream that ended without its terminal `result` event produced no
+        # answer. Returning the raw NDJSON would let `_extract_json` "succeed"
+        # on the session-init event and hand the caller a knowledge base built
+        # from bookkeeping.
+        raise ClaudeError(
+            "Claude ended without returning a result. Try the build again."
+        )
     return stdout_text
 
 
@@ -383,8 +675,15 @@ def run_json(
     timeout: int | None = None,
     label: str | None = None,
     cwd: str | Path | None = None,
+    on_event: EventHandler | None = None,
 ) -> Any:
-    """:func:`run_prompt`, with the response parsed as JSON."""
+    """:func:`run_prompt`, with the response parsed as JSON.
+
+    ``on_event`` is passed straight through: the contract here — returns parsed
+    JSON, records usage and cost, persists a refreshed credential, marks an
+    invalid one — is unchanged by streaming, because both output formats yield
+    the same envelope (module docstring).
+    """
     instruction = (
         "\n\nRespond with ONLY a single valid JSON value (object or array). "
         "Do not include prose or markdown fences."
@@ -400,5 +699,6 @@ def run_json(
             timeout=timeout,
             label=label,
             cwd=cwd,
+            on_event=on_event,
         )
     )

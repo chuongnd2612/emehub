@@ -54,7 +54,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.deps_auth import require_principal, require_user
-from app.models.knowledge import KNOWLEDGE_STATUSES, ProjectKnowledge
+from app.models.knowledge import BUILD_TOTAL_STEPS, KNOWLEDGE_STATUSES, ProjectKnowledge
 from app.models.project import Project
 from app.models.user import User
 from app.schemas import ApiModel
@@ -188,6 +188,24 @@ class KnowledgeOut(ApiModel):
     last_error: str = ""
     shared: bool = False
 
+    # ── Build progress (issue #68) ─────────────────────────────────────────
+    # Extending the read the UI already polls, rather than adding a second
+    # endpoint: the client needs the status and the progress together to decide
+    # anything, and two calls could disagree with each other.
+    #: One of ``knowledge.BUILD_STAGES``; "" when nothing is in flight.
+    build_stage: str = ""
+    #: 1-based ordinal of the stage; 0 when there is none.
+    build_step: int = 0
+    #: Total stages, so "3 of 5" needs no hard-coded 5 on the client.
+    build_total_steps: int = BUILD_TOTAL_STEPS
+    #: The live line. Scrubbed and length-bounded before it was stored.
+    build_message: str = ""
+    #: When the current (or last) build started — the elapsed clock.
+    build_started_at: datetime | None = None
+    #: This row says ``indexing`` but no worker is behind it — a build orphaned
+    #: by a restarted container. The client offers a retry instead of spinning.
+    build_orphaned: bool = False
+
 
 class KnowledgeReportIn(ApiModel):
     """What an agent reports after a build it ran on its own host."""
@@ -248,6 +266,12 @@ def _knowledge_out(row: ProjectKnowledge) -> KnowledgeOut:
         doc_path=row.doc_path,
         last_error=row.last_error,
         shared=row.owner_id is None,
+        build_stage=row.build_stage or "",
+        build_step=row.build_step or 0,
+        build_total_steps=BUILD_TOTAL_STEPS,
+        build_message=row.build_message or "",
+        build_started_at=row.build_started_at,
+        build_orphaned=knowledge_service.is_orphaned(row),
     )
 
 
