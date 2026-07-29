@@ -36,8 +36,12 @@ services:
     volumes:
       # Materialised credentials and cloned state, persisted across restarts.
       - emehub-workspace:/app/api/workspace
-    expose:
-      - "8790"
+    # Published, not merely exposed, so `npm run dev` can proxy /api straight at
+    # the containerised backend (app/vite.config.ts targets 127.0.0.1:8790).
+    # Without this, frontend dev against the Docker stack is impossible and the
+    # only workaround is repointing the dev proxy through nginx.
+    ports:
+      - "${EMEHUB_API_PORT:-8790}:8790"
     depends_on:
       db:
         condition: service_healthy
