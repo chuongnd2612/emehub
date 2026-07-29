@@ -52,7 +52,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from urllib.parse import quote, urlparse, urlunparse
+from urllib.parse import quote, unquote, urlparse, urlunparse
 
 from sqlalchemy.orm import Session
 
@@ -122,16 +122,34 @@ def _authenticated_url(url: str, pat: str) -> str:
     legally contain ``/``, ``@``, ``:`` or ``#``, every one of which would
     otherwise re-parse the URL into a different host or path.
 
-    Non-HTTPS URLs and URLs that already have userinfo are returned untouched —
-    the hub never rewrites a credential someone else put there.
+    **A bare username in the URL is not a credential.** Azure DevOps hands out
+    clone URLs of the form ``https://<org>@dev.azure.com/<org>/<project>/_git/…``
+    — the org name sits in the userinfo with no password. An earlier version of
+    this function bailed on any ``@`` ("never rewrite someone else's
+    credential"), which meant every ADO clone reached git as a username with no
+    password and failed with ``could not read Password``. So:
+
+    * no userinfo            → inject ``x-access-token:<pat>``;
+    * username, no password  → keep the username, add the PAT as its password;
+    * username **and** password → leave it completely alone. That one really is
+      a credential someone embedded deliberately, and overwriting it would
+      silently authenticate as somebody else.
     """
     if not pat or not url.startswith("https://"):
         return url
     parsed = urlparse(url)
-    if "@" in parsed.netloc:
-        return url
-    userinfo = f"{quote(_PAT_USERNAME, safe='')}:{quote(pat, safe='')}"
-    return urlunparse(parsed._replace(netloc=f"{userinfo}@{parsed.netloc}"))
+    host = parsed.netloc
+    username = _PAT_USERNAME
+    if "@" in host:
+        existing, _, host = host.rpartition("@")
+        if ":" in existing:
+            # A real embedded credential — not ours to replace.
+            return url
+        # Bare username (the ADO org). Keep it; it is the password that is
+        # missing, and ADO ignores the username anyway.
+        username = unquote(existing) or _PAT_USERNAME
+    userinfo = f"{quote(username, safe='')}:{quote(pat, safe='')}"
+    return urlunparse(parsed._replace(netloc=f"{userinfo}@{host}"))
 
 
 def _secrets(pat: str) -> tuple[str, str]:
