@@ -121,7 +121,12 @@ export function AuthLayout({ children }: AuthLayoutProps) {
 
           <div className="flex items-center gap-[9px] text-[12px] text-muted">
             <span className="size-[7px] shrink-0 animate-pulse-dot rounded-full bg-ok shadow-[0_0_8px_var(--ok)]" />
-            Two-key encryption · SAML 2.0 · audited access
+            {/* No SAML: the Authentication screen's SSO card is a stub and the
+                hub has no IdP integration. Claiming it on the sign-in screen
+                would be a security claim the product cannot honour. The three
+                below are all real — separate signing and encryption keys
+                (ADR 0005), Argon2 hashing, and an audit row per sign-in. */}
+            Two-key encryption · Argon2 hashing · audited access
           </div>
         </aside>
 
