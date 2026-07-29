@@ -1,24 +1,32 @@
 // Handoff § 9. Integrations — one provider block: 34px glyph, name 15.5px/800,
-// `2 connections · 4 projects`, and a `+ Add connection` accent-tint button,
-// followed by that provider's connection rows.
+// `2 connections · work items · repositories`, and a `+ Add connection`
+// accent-tint button, followed by that provider's connection rows.
+//
+// The handoff's second sub-line figure was "4 projects". A connection carries
+// no project count on the wire (`GET /connections/{id}/projects` is a live
+// provider call, far too expensive for a list header), so the block reports
+// what the connections actually advertise instead: their capabilities.
 
-import { Glyph, Icon } from "@/components/ui";
-import type { Provider, ProviderConnection, ProviderConnectionGroup } from "@/data";
+import { Glyph, Icon, Spinner } from "@/components/ui";
+import type { Connection, ConnectionGroup, Provider } from "@/data";
 import { cn } from "@/lib/cn";
 import { ConnectionRow } from "./ConnectionRow";
 
 export interface ProviderGroupProps {
-  group: ProviderConnectionGroup;
+  group: ConnectionGroup;
   provider: Provider;
-  /** Display name — from the integrations summary, e.g. "Azure DevOps". */
+  /** Display name, e.g. "Azure DevOps". */
   name: string;
   expandedId: string | null;
-  testingId: string | null;
-  onToggle: (connectionId: string) => void;
-  onFieldChange: (connectionId: string, fieldKey: string, value: string) => void;
-  onTest: (connection: ProviderConnection) => void;
-  onSave: (connection: ProviderConnection) => void;
-  onRemove: (connection: ProviderConnection) => void;
+  testingId: number | null;
+  savingId: number | null;
+  adding: boolean;
+  onToggle: (connectionId: number) => void;
+  onFieldChange: (connectionId: number, fieldKey: string, value: string) => void;
+  onLabelChange: (connectionId: number, value: string) => void;
+  onTest: (connection: Connection) => void;
+  onSave: (connection: Connection) => void;
+  onRemove: (connection: Connection) => void;
   onAdd: () => void;
 }
 
@@ -28,8 +36,11 @@ export function ProviderGroup({
   name,
   expandedId,
   testingId,
+  savingId,
+  adding,
   onToggle,
   onFieldChange,
+  onLabelChange,
   onTest,
   onSave,
   onRemove,
@@ -48,20 +59,27 @@ export function ProviderGroup({
             {name}
           </div>
           <div className="mt-[2px] text-[11.5px] text-muted">
-            {connectionsLabel} · {group.projectsLabel}
+            {count === 0
+              ? "No connections yet"
+              : `${connectionsLabel} · ${group.capabilitiesLabel}`}
           </div>
         </div>
 
         <button
           type="button"
           onClick={onAdd}
+          disabled={adding}
           className={cn(
             "inline-flex shrink-0 cursor-pointer items-center gap-[7px] rounded-control-lg",
             "border border-pb bg-pt px-[14px] py-[9px] text-[12.5px] font-bold text-ps-text",
-            "transition-colors duration-200 hover:bg-pb/40",
+            "transition-colors duration-200 hover:bg-pb/40 disabled:cursor-not-allowed",
           )}
         >
-          <Icon name="plus" size={14} strokeWidth={2.5} />
+          {adding ? (
+            <Spinner size={14} speed="run" />
+          ) : (
+            <Icon name="plus" size={14} strokeWidth={2.5} />
+          )}
           Add connection
         </button>
       </div>
@@ -70,10 +88,12 @@ export function ProviderGroup({
         <ConnectionRow
           key={c.id}
           connection={c}
-          expanded={expandedId === c.id}
+          expanded={expandedId === String(c.id)}
           testing={testingId === c.id}
+          saving={savingId === c.id}
           onToggle={() => onToggle(c.id)}
           onFieldChange={(fieldKey, value) => onFieldChange(c.id, fieldKey, value)}
+          onLabelChange={(value) => onLabelChange(c.id, value)}
           onTest={() => onTest(c)}
           onSave={() => onSave(c)}
           onRemove={() => onRemove(c)}

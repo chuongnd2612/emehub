@@ -69,19 +69,19 @@ export function ScopeChips({ scopes }: { scopes: string[] }) {
 }
 
 /**
- * The ACCESS TOKEN row. The value passed in is ALREADY masked unless the user
- * pressed Reveal — this component never sees a decision about that.
+ * What replaced the handoff's ACCESS TOKEN row.
+ *
+ * The handoff drew a masked token with a `Reveal` toggle. No credential
+ * endpoint the SPA may call returns credential material — `CredentialMetaOut`
+ * has no token field, and the one endpoint that does return the blob
+ * (`GET /credentials/claude/resolve`) exists for the agents, not for a settings
+ * screen. There is therefore nothing to mask and nothing to reveal, and
+ * rendering a plausible-looking fake would be worse than saying so.
  */
-export function TokenRow({
-  value,
-  revealed,
-  onToggle,
+export function StoredSecretRow({
   tone = "accent",
 }: {
-  value: string;
-  revealed: boolean;
-  onToggle: () => void;
-  /** `cyan` on the personal card, `accent` on the shared cards. */
+  /** `cyan` on the personal card, `accent` on the shared card. */
   tone?: "accent" | "cyan";
 }) {
   return (
@@ -93,19 +93,17 @@ export function TokenRow({
         data-surface
         className="flex items-center gap-2.5 rounded-control-lg border border-bd2 bg-code px-[13px] py-[11px]"
       >
-        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-txt3">
-          {value}
-        </span>
-        <button
-          type="button"
-          onClick={onToggle}
+        <span
           className={cn(
-            "shrink-0 cursor-pointer bg-transparent text-[11.5px] font-semibold",
+            "shrink-0",
             tone === "cyan" ? "text-cyan-soft" : "text-ps-text",
           )}
         >
-          {revealed ? "Hide" : "Reveal"}
-        </button>
+          <Icon name="lock" size={13} strokeWidth={2.2} />
+        </span>
+        <span className="min-w-0 flex-1 font-mono text-[12px] text-txt3">
+          Encrypted at rest · never returned by the hub
+        </span>
       </div>
     </div>
   );

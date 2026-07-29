@@ -3,7 +3,7 @@
 // and a `Parallel agent runs` range (1–8)".
 
 import type { ReactNode } from "react";
-import { Dropdown, GlassCard, Icon, Range } from "@/components/ui";
+import { Dropdown, GlassCard, Icon, Notice, Range } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import {
   MODELS,
@@ -15,6 +15,12 @@ import {
 export function ModelsTab({ s }: { s: ClaudeSettings }) {
   return (
     <div className="flex flex-col gap-[14px]">
+      {/* No settings endpoint exists (verified against /api/openapi.json), so
+          these choices live in the screen and are lost on reload. */}
+      <Notice tone="info">
+        Preview data. The hub has no model-settings endpoint yet, so these
+        choices are not saved.
+      </Notice>
       <div className="grid grid-cols-2 gap-[14px]">
         <ModelCard
           ddKey="claude-main-model"
