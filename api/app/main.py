@@ -38,7 +38,7 @@ from app.config import settings
 from app.db import init_db
 from app.deps_auth import require_principal, require_user
 from app.logging import logger, setup_logging
-from app.routers import audit, auth, health, me, tickets
+from app.routers import audit, auth, health, me, projects, tickets
 from app.security import auth_guard
 
 VERSION = "0.1.0"
@@ -56,6 +56,10 @@ ROUTERS = (
     (auth, MIXED),
     (me, CONTRACT),
     (audit, CONTRACT),
+    # CONTRACT: GET /projects, GET …/config, GET …/knowledge and PATCH …/knowledge
+    # are called by an agent with its own token (aud: "qagent"). The router's
+    # non-contract writes each add Depends(require_user) to stay hub-only.
+    (projects, CONTRACT),
     # Agents read the ticket store with the token they hold (aud: qagent/dagent),
     # so it cannot be hub-audience-only — INTEGRATION.md §3.
     (tickets, CONTRACT),
