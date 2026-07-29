@@ -1,30 +1,164 @@
-"""EmeHub API.
-
-Phase 1 skeleton: only ``/health`` exists. Every screen in ``app/`` reads from
-the typed stub layer at ``app/src/data/`` until the real endpoints land here —
-each stub carries a ``# STUB:`` comment naming the route that will replace it.
+"""EmeHub API — application factory and entrypoint.
 
 Importing this module loads the settings, so a missing ``EMEHUB_JWT_SECRET`` or
-``EMEHUB_ENCRYPTION_KEY`` refuses to start rather than booting insecurely.
+``EMEHUB_ENCRYPTION_KEY`` refuses to start rather than booting insecurely
+(ADR 0005). There is no generated-on-boot fallback for either.
+
+## Auth posture
+
+Routers are registered from one table, :data:`ROUTERS`, and each row declares
+its own posture:
+
+* ``PUBLIC``    — no blanket dependency. Only ``health``; every path it exposes
+  is also in ``security.PUBLIC_PATHS``.
+* ``MIXED``     — the auth router, which straddles the boundary: its public
+  endpoints are individually allowlisted, its protected ones each declare
+  ``Depends(require_user)`` or ``Depends(require_admin)``.
+* ``CONTRACT``  — the endpoints agents consume (INTEGRATION.md §3), registered
+  with ``Depends(require_principal)``: any *registered* audience is accepted,
+  because an agent calls them with the token it holds (``aud: "qagent"``), not a
+  hub token. An unregistered audience is still refused.
+* ``PROTECTED`` — everything else, registered with a blanket
+  ``Depends(require_user)`` (``aud: "emehub"`` only).
+
+On top of that, ``security.auth_guard`` refuses any request that is neither
+allowlisted nor carrying a valid hub-issued token. See ``app/security.py`` for
+why both layers exist. Neither has an off switch.
 """
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from contextlib import asynccontextmanager
 
-from app.config import get_settings
+from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-# Fail fast at import time if a required secret is absent.
-settings = get_settings()
+from app.audit_context import bind_audit_actor
+from app.config import settings
+from app.db import init_db
+from app.deps_auth import require_principal, require_user
+from app.logging import logger, setup_logging
+from app.routers import audit, auth, health, me
+from app.security import auth_guard
 
-app = FastAPI(
-    title="EmeHub API",
-    version="0.1.0",
-    description="EMESOFT AI Operating Center — identity and shared configuration.",
+VERSION = "0.1.0"
+
+PUBLIC = "public"
+MIXED = "mixed"
+CONTRACT = "contract"
+PROTECTED = "protected"
+
+#: (module, posture). Adding a router here is the only registration step, and
+#: omitting a posture is impossible — so a new router cannot be accidentally
+#: public.
+ROUTERS = (
+    (health, PUBLIC),
+    (auth, MIXED),
+    (me, CONTRACT),
+    (audit, CONTRACT),
 )
 
+_POSTURE_DEPENDENCY = {
+    PUBLIC: None,
+    MIXED: None,  # each route declares its own
+    CONTRACT: require_principal,
+    PROTECTED: require_user,
+}
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    """Liveness probe. Returns no configuration and never a secret."""
-    return {"status": "ok", "service": "emehub-api", "version": "0.1.0"}
+
+def _seed_admin() -> None:
+    """Ensure the first administrator exists, from the configured credentials.
+
+    Unlike QAgent there is **no dev fallback that generates a password**: a
+    generated credential is a secret created at boot, which CLAUDE.md forbids.
+    If the variables are unset and the workspace has no users, the hub boots and
+    logs loudly that nobody can sign in — it does not invent a way in.
+    """
+    from app.db import SessionLocal
+    from app.models.user import ROLE_ADMIN, User
+    from app.services import auth_service
+
+    db = SessionLocal()
+    try:
+        if db.query(User.id).first() is not None:
+            return
+        email = auth_service.normalize_email(settings.admin_email)
+        password = settings.admin_password
+        if not (email and password):
+            logger.error(
+                "No users exist and no first admin is configured — set "
+                "EMEHUB_ADMIN_EMAIL and EMEHUB_ADMIN_PASSWORD to create one. "
+                "Nobody can sign in until you do."
+            )
+            return
+        db.add(
+            User(
+                email=email,
+                first_name="Admin",
+                last_name="",
+                role=ROLE_ADMIN,
+                password_hash=auth_service.hash_password(password),
+                is_active=True,
+            )
+        )
+        db.commit()
+        logger.info("Seeded first admin %s", email)
+    except Exception as exc:  # noqa: BLE001 - never block startup on the seed
+        logger.warning("admin seed failed: %s", exc)
+        db.rollback()
+    finally:
+        db.close()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):  # noqa: ARG001
+    setup_logging()
+    settings.ensure_dirs()
+    init_db()  # Alembic upgrade → head, on every boot.
+    _seed_admin()
+    logger.info(
+        "EmeHub API ready on %s:%s — audiences: %s",
+        settings.host,
+        settings.api_port,
+        ", ".join(settings.registered_audiences),
+    )
+    yield
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="EmeHub API",
+        version=VERSION,
+        description="EMESOFT AI Operating Center — identity and shared configuration.",
+        lifespan=lifespan,
+    )
+
+    # Registered before CORS so CORS stays the outermost middleware and its
+    # headers are attached even to the guard's 401s.
+    app.middleware("http")(auth_guard)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        # Any localhost port, so `npm run dev` works when Vite falls off 5180.
+        allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    for module, posture in ROUTERS:
+        # bind_audit_actor runs in the endpoint's request context (a
+        # BaseHTTPMiddleware would run in a different one and lose the value),
+        # so audit events are attributed to the caller without threading the
+        # user through every service call.
+        dependencies = [Depends(bind_audit_actor)]
+        guard = _POSTURE_DEPENDENCY[posture]  # KeyError on an unknown posture
+        if guard is not None:
+            dependencies.append(Depends(guard))
+        app.include_router(module.router, dependencies=dependencies)
+
+    return app
+
+
+app = create_app()
