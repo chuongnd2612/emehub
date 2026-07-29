@@ -7,7 +7,7 @@ which the suite is half-migrated and broken.
 
 ---
 
-## Phase 0 — Scaffold *(current)*
+## Phase 0 — Scaffold *(done)*
 
 The repository, the documentation and the architecture decisions.
 
@@ -20,7 +20,7 @@ disagreed with, or accepted.
 
 ---
 
-## Phase 1 — The UI, against stubbed data
+## Phase 1 — The UI, against stubbed data *(done)*
 
 The full design handoff, implemented. Scope expanded from "a landing page" once the complete
 design landed in [`design/design_handoff_emehub/`](../design/design_handoff_emehub/)
@@ -35,9 +35,21 @@ design landed in [`design/design_handoff_emehub/`](../design/design_handoff_emeh
 - `api/` — minimal FastAPI + `/health` only. Real endpoints arrive in Phases 2–4.
 - `docker-compose.yml` — `api` + `db` + `web` (nginx) on ports that don't clash with QAgent.
 
-**Exit criteria:** `docker compose up -d --build` serves the app; `npm run typecheck` and
-`npm run build` pass; every screen renders in both modes and all four accents; the light-mode
-contrast audit finds no pale hue used as body text.
+**Exit criteria — all met.** `docker compose up -d --build` serves the app (all three services
+healthy); `typecheck` and `build` pass; 9 routes × 2 modes × 4 accents = 72 loads verified
+against the *container* build with one canvas each and zero console errors; the light-mode
+contrast audit went from 241 failing text elements to 2 (both the `#fff`-on-`#2684ff` Jira
+logotype, which WCAG exempts).
+
+**Two token corrections were needed**, because the handoff contradicts itself: its theme-token
+table gives light `--muted` as `#6a7182`, while its own darkening map says
+`#8b8b9e → #5c6273` — and `#8b8b9e` *is* the dark `--muted`. `#6a7182` measures 4.29:1,
+breaking the handoff's stated ≥4.5:1 promise. `--terra` needed the same treatment for the code
+chips inside the terracotta banner. Both are commented in `app/src/styles/theme.css`.
+
+**Carried forward:** dark mode has its own contrast failures from the handoff's dark column
+(`--label` 3.38:1, `--faint` 3.93:1) — [issue #26](https://github.com/chuongnd2612/emehub/issues/26),
+a design decision rather than a defect fix.
 
 **Note.** Phases 2–4 then replace stubs with real calls, one resource at a time. The stub
 layer is the seam that makes that a per-file change rather than a rewrite.
