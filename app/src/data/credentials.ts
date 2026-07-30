@@ -200,13 +200,20 @@ export interface CredentialStatusInput {
  * dropped file and the hub's own answer never disagree. Precedence:
  *
  *   1. a stored `expired` — the CLI's verdict, authoritative;
- *   2. elapsed expiry **with** a refresh token -> `refreshable` (the CLI renews
- *      it on the next run; issue #63);
- *   3. otherwise {@link credentialStatus}, the handoff's rule, verbatim — so
- *      `expired` is derived from the clock only when there is no refresh token.
+ *   2. **a refresh token on file** -> the expiry stops being a health signal:
+ *      `refreshable` once elapsed, `active` before. Never `expiring`, never
+ *      `expired` (issues #63 and #70);
+ *   3. otherwise {@link credentialStatus}, the handoff's rule, verbatim — the
+ *      clock decides only when nothing can renew it.
  *
- * Step 2 tests the timestamp directly rather than `daysLeft < 0`, because
- * `daysLeft` rounds: a token that lapsed three hours ago reports `0` days, and
+ * Why step 2 covers the *un*-elapsed case too: a Claude OAuth access token
+ * lives hours, so `daysLeft <= 2` is true from the moment of upload and stays
+ * true. Warning `expiring` on every working credential, permanently, is noise
+ * — the threshold is meaningful for a long-lived secret, not a self-renewing
+ * one.
+ *
+ * The elapsed test uses the timestamp rather than `daysLeft < 0`, because
+ * `daysLeft` rounds: a token that lapsed three hours ago reports `0`, and
  * three-hours-past-expiry is the state a real `.credentials.json` is usually in.
  */
 export function derivedCredentialStatus(
@@ -215,8 +222,8 @@ export function derivedCredentialStatus(
 ): CredentialStatus {
   if (input.storedStatus === "expired") return "expired";
   const expiry = input.expiresAtEpochMs;
-  if (input.hasRefreshToken && expiry != null && expiry < now) {
-    return "refreshable";
+  if (input.hasRefreshToken) {
+    return expiry != null && expiry < now ? "refreshable" : "active";
   }
   return credentialStatus(daysLeftFrom(expiry, now));
 }

@@ -20,12 +20,14 @@ import {
   StatusPill,
 } from "@/components/ui";
 import {
-  derivedCredentialStatus,
   formatDaysLeft,
-  getSharedCredentials,
+  formatExpiryIso,
+  getCredentialState,
+  setCredentialMode,
+  statusOfCredential,
+  type ClaudeCredentialState,
   type CredentialSource,
   type CredentialStatus,
-  type SharedCredential,
 } from "@/data";
 import {
   placeBelow,
@@ -73,20 +75,33 @@ export function ClaudeCredentialChip() {
   const panelRef = useRef<HTMLDivElement>(null);
   const anchor = useAnchorRect(triggerRef, open);
 
-  const [shared, setShared] = useState<SharedCredential[]>([]);
-  // Which credential the workspace runs on. Claude Settings › Credentials owns
-  // the persisted value; the shell keeps its own until that screen lands.
-  const [source, setSource] = useState<CredentialSource>("shared");
+  // The whole credential state, so the chip reports what the hub will ACTUALLY
+  // run with. This used to default `source` to "shared" and fetch only the
+  // shared credential, so a user on their own token saw the shared one's
+  // status — an expired shared account made the chip read "Expired" while
+  // their own credential was fine (issue #70).
+  const [state, setState] = useState<ClaudeCredentialState | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     let live = true;
-    void getSharedCredentials().then((rows) => {
-      if (live) setShared(rows);
-    });
+    void getCredentialState()
+      .then((next) => {
+        if (live) setState(next);
+      })
+      .catch(() => {
+        /* The chip degrades to "unknown"; the header must never break. */
+      });
     return () => {
       live = false;
     };
   }, []);
+
+  useEffect(load, [load]);
+  // Re-read whenever the popover opens: Claude Settings may have changed the
+  // credential since the shell mounted.
+  useEffect(() => {
+    if (open) load();
+  }, [open, load]);
 
   const close = useCallback(() => setClaudeOpen(false), [setClaudeOpen]);
   useEscape(open, close);
@@ -103,36 +118,39 @@ export function ClaudeCredentialChip() {
     return () => document.removeEventListener("mousedown", onDown, true);
   }, [open, close]);
 
-  // The default shared credential is `isDefault`, falling back to the first.
-  const defaultCred = shared.find((c) => c.isDefault) ?? shared[0] ?? null;
+  // `mode` is what the hub RESOLVES for this user (own → shared → none), which
+  // is the only honest thing for the chip to report. It is not a local
+  // preference and must never default.
+  const source: CredentialSource = state?.mode === "own" ? "personal" : "shared";
   const isShared = source === "shared";
+  const meta = isShared ? (state?.shared ?? null) : (state?.own ?? null);
 
-  // Derived status: shared → the default credential's; personal → always
-  // "expired" until a personal token is attached (none is, see below).
-  const status: CredentialStatus = isShared
-    ? defaultCred
-      ? derivedCredentialStatus(defaultCred)
-      : "expired"
-    : "expired";
+  const status: CredentialStatus = meta ? statusOfCredential(meta) : "expired";
 
   const chipLabel = isShared ? "Shared account" : "Personal token";
-  const credentialName = isShared
-    ? (defaultCred?.label ?? "—")
-    : "Not attached";
-  const expiryLabel =
-    isShared && defaultCred
-      ? `${defaultCred.expiresDisplay} · ${formatDaysLeft(defaultCred.daysLeft)}`
-      : "—";
+  const credentialName = meta?.label || (meta ? ".credentials.json" : "Not attached");
+  const expiryLabel = meta
+    ? `${formatExpiryIso(meta.expiresAt)} · ${formatDaysLeft(meta.daysLeft)}`
+    : "—";
 
   const onSourceChange = (next: CredentialSource) => {
-    setSource(next);
-    // Handoff › derived rules: switching to personal with nothing attached
-    // navigates to Claude Settings › Credentials and prompts an upload. There
-    // is no personal-credential endpoint yet, so this is always the case.
-    if (next === "personal") {
+    const wantsOwn = next === "personal";
+    // Nothing to switch to — send them to Claude Settings to attach one,
+    // rather than silently selecting a credential that does not exist.
+    if (wantsOwn && !state?.hasOwn) {
       close();
       navigate("/app/claude");
+      return;
     }
+    if (!wantsOwn && !state?.hasShared) {
+      close();
+      navigate("/app/claude");
+      return;
+    }
+    // A real, persisted switch — `PUT /credentials/claude/mode`.
+    void setCredentialMode(wantsOwn ? "own" : "shared")
+      .then(setState)
+      .catch(() => load());
   };
 
   const pos = anchor
