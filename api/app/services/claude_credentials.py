@@ -290,12 +290,20 @@ def derived_status(row: ClaudeCredentials, now: datetime | None = None) -> str:
        (``claude_cli._mark_credential_invalid`` → :func:`mark_expired`) stays
        ``expired`` whatever the timestamps say. That is the only signal the hub
        has that a credential *does not work*, so nothing derived may override it.
-    2. **elapsed + a refresh token on file** → :data:`STATUS_REFRESHABLE`. The
-       access token is genuinely past its expiry, but the CLI refreshes it on
-       the next run, so this is not a credential anyone needs to re-upload.
-    3. otherwise :func:`status_of`, the handoff's rule, verbatim. In particular
-       ``expired`` is derived from the timestamp **only when there is no refresh
-       token** — which is the fix for issue #63.
+    2. **a refresh token on file** → the access token's expiry stops being a
+       health signal at all: :data:`STATUS_REFRESHABLE` once it has elapsed,
+       :data:`STATUS_ACTIVE` before that. Never ``expiring``, never ``expired``.
+
+       A Claude OAuth *access* token lives hours, so ``status_of``'s
+       "``daysLeft <= 2`` means expiring" is true from the moment of upload and
+       stays true — every credential anyone attached rendered amber
+       **Expiring** while working perfectly (issue #70). The ≤2-day threshold
+       is meaningful for a long-lived secret and noise for one that renews
+       itself every few hours. Issue #63 fixed the elapsed half of this; this
+       is the other half.
+
+    3. otherwise :func:`status_of`, the handoff's rule, verbatim — the
+       timestamp decides only when nothing can renew it.
 
     ``has_refresh_token`` may still be NULL on a row nobody has read since the
     column landed; NULL is treated as "no refresh token" here, and
@@ -303,8 +311,10 @@ def derived_status(row: ClaudeCredentials, now: datetime | None = None) -> str:
     """
     if row.status == STATUS_EXPIRED:
         return STATUS_EXPIRED
-    if row.has_refresh_token and has_elapsed(row.expires_at, now):
-        return STATUS_REFRESHABLE
+    if row.has_refresh_token:
+        return (
+            STATUS_REFRESHABLE if has_elapsed(row.expires_at, now) else STATUS_ACTIVE
+        )
     return status_of(days_left(row.expires_at, now))
 
 

@@ -167,7 +167,9 @@ def test_days_left_counts_whole_days_forward_and_backward():
 
 def test_upload_derives_status_and_metadata_from_the_file(db_session, make_user):
     user = make_user("meta@emesoft.net")
-    row = svc.upsert_own(db_session, user.id, creds_file(days=1), "laptop")
+    # No refresh token, so the expiry still drives the derived state — that is
+    # the only case where `expiring` is meaningful (issue #70).
+    row = svc.upsert_own(db_session, user.id, creds_file(days=1, refresh=False), "laptop")
     # Stored status stays `active`; "expiring" is a derived display state only.
     assert row.status == STATUS_ACTIVE
     assert svc.derived_status(row) == STATUS_EXPIRING
@@ -239,16 +241,56 @@ def test_a_few_hours_past_expiry_with_no_refresh_token_stays_the_handoffs_answer
     assert svc.derived_status(row) == STATUS_EXPIRING
 
 
-def test_a_future_expiry_is_unaffected_by_the_refresh_token(db_session, make_user):
-    """The refresh rule applies only once the expiry has actually elapsed —
-    it must not paper over the `expiring` warning."""
+def test_a_refresh_token_silences_the_expiry_warning_entirely(db_session, make_user):
+    """Issue #70. This asserted the opposite until now — that a credential
+    expiring within two days still warns ``expiring`` even with a refresh token
+    on file, so as not to "paper over the warning".
+
+    That is wrong for this credential type. A Claude OAuth *access* token lives
+    hours, so ``daysLeft <= 2`` is true from the moment of upload and stays
+    true: every working credential rendered amber **Expiring** permanently. The
+    warning was not protecting anyone — it was the resting state.
+
+    With a refresh token on file the access token's expiry is not a health
+    signal at all: ``active`` before it elapses, ``refreshable`` after, and the
+    only route to ``expired`` is the CLI actually rejecting it.
+    """
     user = make_user("future@emesoft.net")
+
+    # Not yet elapsed — including 1 day out, which used to warn.
+    for days in (90, 2, 1):
+        assert (
+            svc.derived_status(
+                svc.upsert_own(db_session, user.id, creds_file(days=days))
+            )
+            == STATUS_ACTIVE
+        ), f"{days}d out with a refresh token — nothing to warn about"
+
+    # The invariant that actually matters, and the one that is boundary-safe:
+    # with a refresh token the clock can never produce a state that asks the
+    # user to do something. `days=0` straddles "now", so it may land either
+    # side — both answers are fine, neither may be a warning.
+    for days in (0, -1, -30):
+        assert svc.derived_status(
+            svc.upsert_own(db_session, user.id, creds_file(days=days))
+        ) in (STATUS_ACTIVE, STATUS_REFRESHABLE), f"{days}d must not warn"
+
+
+def test_without_a_refresh_token_the_expiry_still_warns(db_session, make_user):
+    """The counterpart, and why the rule is conditional rather than deleted:
+    expiry is a real signal when nothing can renew it. Then ``expiring`` means
+    "act soon" and is worth showing."""
+    user = make_user("norefresh@emesoft.net")
     assert (
-        svc.derived_status(svc.upsert_own(db_session, user.id, creds_file(days=90)))
+        svc.derived_status(
+            svc.upsert_own(db_session, user.id, creds_file(days=90, refresh=False))
+        )
         == STATUS_ACTIVE
     )
     assert (
-        svc.derived_status(svc.upsert_own(db_session, user.id, creds_file(days=1)))
+        svc.derived_status(
+            svc.upsert_own(db_session, user.id, creds_file(days=1, refresh=False))
+        )
         == STATUS_EXPIRING
     )
 
