@@ -189,6 +189,11 @@ def _split_ac(text: str) -> list[str]:
 
 class AzureDevOpsAdapter(ProviderAdapter):
     kind = "azure_devops"
+    supports_comments = True
+    supports_test_cases = True
+    # ADO has no cheap per-work-item test-case query, so list_test_cases answers
+    # project-wide and says so rather than pretending to be scoped.
+    test_cases_project_wide = True
 
     def __init__(self, config: dict, secrets: dict, *, transport=None) -> None:
         super().__init__(config, secrets, transport=transport)
@@ -404,10 +409,16 @@ class AzureDevOpsAdapter(ProviderAdapter):
             ]
 
     def fetch_comments(self, ticket_external_id: str) -> list[dict[str, Any]]:
+        """This ticket's comments. Raises rather than hiding a provider failure.
+
+        ``swallow=False`` is the whole difference from the sync path: a caller
+        that asked for comments specifically must not be told there are none
+        because the PAT lacks a scope or the org is unreachable.
+        """
         if not str(ticket_external_id).isdigit():
-            return []
+            raise ProviderError(f"'{ticket_external_id}' is not an Azure DevOps work-item id")
         with self._client() as client:
-            return self._fetch_comments(client, int(ticket_external_id))
+            return self._fetch_comments(client, int(ticket_external_id), swallow=False)
 
     # -- Query ------------------------------------------------------------
     def _query_work_item_ids(
@@ -554,16 +565,24 @@ class AzureDevOpsAdapter(ProviderAdapter):
             return "Medium"
         return "Low"
 
-    def _fetch_comments(self, client: httpx.Client, wi_id: Any) -> list[dict[str, Any]]:
+    def _fetch_comments(
+        self, client: httpx.Client, wi_id: Any, *, swallow: bool = True
+    ) -> list[dict[str, Any]]:
         try:
             resp = client.get(
                 f"/_apis/wit/workItems/{wi_id}/comments",
                 params={"api-version": COMMENTS_API_VERSION},
             )
             resp.raise_for_status()
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
             # Comments are decoration on a ticket; a 403 from a PAT without the
-            # scope must not fail the whole sync.
+            # scope must not fail the whole sync. ``swallow=False`` is for
+            # :meth:`fetch_comments`, where [] would be a lie.
+            if not swallow:
+                raise ProviderError(
+                    f"Azure DevOps rejected the comment read for work item {wi_id}: "
+                    f"{self._scrub(exc)}"
+                ) from exc
             return []
         return [
             {
@@ -709,9 +728,17 @@ class AzureDevOpsAdapter(ProviderAdapter):
         return None
 
     def list_test_cases(self, ticket_external_id: str | None = None) -> list[dict[str, Any]]:
-        """The project's ``Test Case`` work items as ``{external_id, title, state}``."""
+        """The project's ``Test Case`` work items as ``{external_id, title, state}``.
+
+        Project-wide: ADO has no cheap per-work-item query, and the consumer
+        (continuing existing numbering) wants the project anyway. Documented on
+        the base method so no caller assumes ``ticket_external_id`` scopes it.
+        """
         if not self.project:
-            return []
+            raise ProviderError(
+                "This Azure DevOps connection has no project configured, so its "
+                "test cases cannot be listed"
+            )
         with self._client() as client:
             try:
                 ids = self._run_wiql(
@@ -723,8 +750,10 @@ class AzureDevOpsAdapter(ProviderAdapter):
                         "[System.State] <> 'Removed'",
                     ],
                 )
-            except _WiqlError:
-                return []
+            except _WiqlError as exc:
+                raise ProviderError(
+                    f"Azure DevOps rejected the test-case query: {self._scrub(exc)}"
+                ) from exc
             if not ids:
                 return []
             items = self._get_work_items(client, ids[:MAX_SYNC_ITEMS])

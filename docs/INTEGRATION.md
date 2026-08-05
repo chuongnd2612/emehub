@@ -125,6 +125,8 @@ noted.
 | `PUT` | `/projects/{key}/repos/{repo}/knowledge` | **Write.** Report the result of a build the agent ran on its own host — status, blob, confidence, and `docPath` (an opaque agent-host path the hub stores and never resolves). |
 | `GET` | `/tickets` | Synced tickets, paged and filterable by project, provider, connection, state, assignee, sprint and free text. |
 | `GET` | `/tickets/{external_id}` | One ticket, normalised. Optional `?providerKind=` disambiguates the same id across providers. |
+| `GET` | `/tickets/{external_id}/comments` | The work item's comment thread, read **live** from the provider through the hub's own PAT. `{items, supported}`. |
+| `GET` | `/tickets/{external_id}/test-cases` | Provider-side test cases, for continuing existing numbering when generating. `{items, supported, projectWide}`. |
 | `POST` | `/tickets/sync` | **Write.** Pull work items from a provider and upsert them. **The hub makes the provider call with its own stored PAT** — see below. |
 | `DELETE` | `/tickets/{external_id}` | **Write.** Drop a mirrored row the caller can already see. Local only: it never touches the provider, so a re-sync restores it. |
 | `POST` | `/audit/events` | **Write.** Append an audit event attributed to the calling agent. |
@@ -153,6 +155,34 @@ a **ticket**, never a URL. That is what distinguishes it from the generic
 `POST /connections/{id}/proxy` in §4, which stays deferred precisely because a caller-directed
 forwarder is an SSRF and header-leak surface. The narrow endpoints have neither, and after them
 there is no agent operation left that the generic one is needed for.
+
+`GET /tickets/{external_id}/comments` and `…/test-cases` are the same arrangement for reads.
+
+### Reading through to the provider: `supported` is not the same as empty
+
+Both read-throughs answer `{items, supported}` rather than a bare array, because three different
+things can happen and only one of them is "there are none":
+
+| Outcome | Response |
+|---|---|
+| The provider has no such concept — Jira has no test cases; neither do GitHub issues | `200 {items: [], supported: false}` |
+| There genuinely are none | `200 {items: [], supported: true}` |
+| The provider call failed | `502` — **never** an empty list |
+| No work-item-capable connection routes this ticket | `404` (a routing gap, not a provider failure) |
+| The stored PAT cannot be decrypted under the current key | `502` (never passed on as an empty credential) |
+
+An agent that treats an empty array as "no comments" will be wrong two ways out of three, so branch
+on `supported` and treat a non-2xx as *unknown*, never as *none*. This is the same distinction §5
+draws for the hub as a whole, applied one level down.
+
+`GET …/test-cases` additionally reports **`projectWide`**. Azure DevOps has no cheap per-work-item
+test-case query and answers for the entire project; the ticket in the path selects the *connection*,
+not the result set. `projectWide: true` means "these are the project's cases, not this ticket's" —
+treat them as scoped and you will over-count.
+
+The comment shape is `{who, when, text}`, deliberately identical to the `comments` snapshot on
+`GET /tickets/{external_id}`. Same shape, different freshness: the snapshot is as of `syncedAt`,
+this endpoint is current. One concept, one shape.
 
 ### Hub-only routes
 

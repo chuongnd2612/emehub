@@ -91,6 +91,10 @@ def _criteria_from_body(body: str) -> list[str]:
 
 class GitHubAdapter(ProviderAdapter):
     kind = "github"
+    supports_comments = True
+    # GitHub issues have no test-case concept. ``list_test_cases`` is left at the
+    # base default, and the flag is what stops [] reading as "none exist".
+    supports_test_cases = False
 
     def __init__(self, config: dict, secrets: dict, *, transport=None) -> None:
         super().__init__(config, secrets, transport=transport)
@@ -275,11 +279,22 @@ class GitHubAdapter(ProviderAdapter):
             ]
 
     def fetch_comments(self, ticket_external_id: str) -> list[dict[str, Any]]:
+        """This issue's comments. Raises rather than hiding a provider failure.
+
+        A non-200 used to read as "no comments", which is wrong for a caller that
+        asked for comments and nothing else.
+        """
         org, repo = self._require_repo()
         with self._client() as client:
-            resp = client.get(f"/repos/{org}/{repo}/issues/{ticket_external_id}/comments")
+            try:
+                resp = client.get(f"/repos/{org}/{repo}/issues/{ticket_external_id}/comments")
+            except httpx.HTTPError as exc:
+                raise ProviderError(f"GitHub is unreachable: {scrub(exc, self.pat)}") from exc
             if resp.status_code != 200:
-                return []
+                raise ProviderError(
+                    f"GitHub rejected the comment read for issue {ticket_external_id} "
+                    f"(HTTP {resp.status_code})"
+                )
             return self._comments(resp.json())
 
     @staticmethod
