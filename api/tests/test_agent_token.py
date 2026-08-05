@@ -210,3 +210,33 @@ def test_a_deactivated_user_cannot_mint(client, signed_in, db_session):
         headers=_csrf_headers(client),
     )
     assert response.status_code == 401
+
+
+# ------------------------------------------------------------------ CORS config
+# The hand-off is cross-origin, so the agent's origin has to be allowlisted.
+# EMEHUB_CORS_ORIGINS is operator-facing config set by hand once per deployment,
+# and docker-compose passes it as ${EMEHUB_CORS_ORIGINS:-} — so an empty string
+# reaches the parser whenever the operator has not set it.
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ('["https://a.test","https://b.test"]', ["https://a.test", "https://b.test"]),
+        ("https://a.test,https://b.test", ["https://a.test", "https://b.test"]),
+        (" https://a.test , https://b.test ", ["https://a.test", "https://b.test"]),
+        ("https://a.test", ["https://a.test"]),
+    ],
+)
+def test_cors_origins_accepts_json_or_a_comma_separated_list(monkeypatch, raw, expected):
+    from app.config import Settings
+
+    monkeypatch.setenv("EMEHUB_CORS_ORIGINS", raw)
+    assert Settings().cors_origins == expected
+
+
+@pytest.mark.parametrize("raw", ["", "   "])
+def test_an_empty_cors_value_means_unset_not_deny_everything(monkeypatch, raw):
+    """Declaring the variable in compose must not break `npm run dev`."""
+    from app.config import DEFAULT_CORS_ORIGINS, Settings
+
+    monkeypatch.setenv("EMEHUB_CORS_ORIGINS", raw)
+    assert Settings().cors_origins == list(DEFAULT_CORS_ORIGINS)

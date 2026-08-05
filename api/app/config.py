@@ -14,12 +14,17 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
-from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # ``api/`` — the directory holding pyproject.toml, alembic.ini and migrations/.
 API_DIR = Path(__file__).resolve().parent.parent
+
+#: Origins allowed when ``EMEHUB_CORS_ORIGINS`` is unset or empty — the hub's
+#: own dev server. Agent origins are added per deployment (ADR 0008).
+DEFAULT_CORS_ORIGINS = ("http://localhost:5180", "http://127.0.0.1:5180")
 
 # The hub's own audience. Always registered; a token for the hub's API carries
 # this value. Agent audiences are registered only when their URL is configured
@@ -112,9 +117,42 @@ class Settings(BaseSettings):
     skills_dir: str = ""
 
     # ── CORS ───────────────────────────────────────────────────────────────
-    # The SPA is same-origin in every packaged deployment (nginx proxies /api),
-    # so this only matters for `npm run dev` against a locally-run API.
-    cors_origins: list[str] = ["http://localhost:5180", "http://127.0.0.1:5180"]
+    # The hub's own SPA is same-origin in every packaged deployment (nginx
+    # proxies /api), but **an agent's origin is not**: the sign-in hand-off has
+    # the agent's browser call POST /auth/agent-token cross-origin with
+    # credentials (ADR 0008). So every agent origin must be listed here in any
+    # deployment using the hand-off — not just for `npm run dev`.
+    #
+    # Accepts a JSON array or a comma-separated list; see the validator below.
+    cors_origins: Annotated[list[str], NoDecode] = list(DEFAULT_CORS_ORIGINS)
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_origins(cls, value: object) -> object:
+        """Accept ``a,b`` as well as ``["a","b"]``, and treat empty as unset.
+
+        Two operator-facing traps this closes:
+
+        * Without it, pydantic-settings decodes the env value as JSON, so a
+          perfectly reasonable ``EMEHUB_CORS_ORIGINS=https://a,https://b``
+          aborts startup with ``error parsing value for field "cors_origins"``
+          — which names the field but not the cause.
+        * ``docker-compose.yml`` passes ``${EMEHUB_CORS_ORIGINS:-}``, so an
+          operator who has not set it hands us an **empty string**. That must
+          mean "unset", not "allow no origins at all" — otherwise merely
+          declaring the variable in compose would silently break `npm run dev`
+          against the containerised API.
+        """
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return list(DEFAULT_CORS_ORIGINS)
+            if text.startswith("["):
+                import json
+
+                return json.loads(text)
+            return [part.strip() for part in text.split(",") if part.strip()]
+        return value
 
     @model_validator(mode="after")
     def _secrets_must_differ(self) -> "Settings":
