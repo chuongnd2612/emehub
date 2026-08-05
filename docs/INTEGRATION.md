@@ -2,11 +2,19 @@
 
 The specification QAgent and DAgent implement in order to be part of the suite.
 
-Status: **the hub side is built; no agent consumes it yet.** Everything in §2 and §3 is live
-against the running API — you can call it today. What has *not* happened is the other half:
-neither QAgent nor DAgent validates a hub token or reads its configuration from here, so the
-hub currently runs in parallel with both rather than in front of them. See
-[ROADMAP.md](ROADMAP.md) Phases 2–5.
+Status: **the hub side is built. QAgent consumes identity; nothing else is consumed by anyone.**
+Everything in §2 and §3 is live against the running API — you can call it today.
+
+- **Identity — done.** QAgent validates hub tokens, JIT-provisions a local user from `sub`, and
+  establishes its own session from the handed-over token, behind `QAGENT_HUB_SSO_ENABLED`
+  (q-agent#476, slices B1–B5). Sign in at the hub, land in QAgent authenticated.
+- **Everything else — not started.** No agent reads a credential, a project, a knowledge base or a
+  ticket from here, so for those the hub still runs *in parallel* with both agents rather than in
+  front of them.
+- **DAgent consumes nothing**, and the blocker is on its side: no user model exists to receive an
+  identity (§6.1).
+
+See [ROADMAP.md](ROADMAP.md) Phases 3–5.
 
 ---
 
@@ -117,10 +125,34 @@ noted.
 | `PUT` | `/projects/{key}/repos/{repo}/knowledge` | **Write.** Report the result of a build the agent ran on its own host — status, blob, confidence, and `docPath` (an opaque agent-host path the hub stores and never resolves). |
 | `GET` | `/tickets` | Synced tickets, paged and filterable by project, provider, connection, state, assignee, sprint and free text. |
 | `GET` | `/tickets/{external_id}` | One ticket, normalised. Optional `?providerKind=` disambiguates the same id across providers. |
+| `POST` | `/tickets/sync` | **Write.** Pull work items from a provider and upsert them. **The hub makes the provider call with its own stored PAT** — see below. |
+| `DELETE` | `/tickets/{external_id}` | **Write.** Drop a mirrored row the caller can already see. Local only: it never touches the provider, so a re-sync restores it. |
 | `POST` | `/audit/events` | **Write.** Append an audit event attributed to the calling agent. |
 
 Agents MAY cache any `GET` above. Cache lifetime is the agent's choice; the hub sets
 `Cache-Control` as a hint, not a rule.
+
+### Ticket sync: the hub calls the provider, so the PAT does not have to move
+
+`POST /tickets/sync` is in this table on purpose, and it settles a question that has been read the
+wrong way round. Syncing work items needs a provider PAT — and §4 says the PAT never leaves the hub.
+Those two facts do **not** add up to "an agent cannot own ticket sync". The agent names a connection
+or a provider kind; **the hub** resolves it, decrypts its own PAT, calls the provider, and upserts
+into the caller's own rows. The secret never crosses the boundary because it never needs to: the
+call happens on the side that holds it.
+
+Sync and delete are gated the same way as the reads (`require_principal` — any registered audience)
+because neither is a hub-administration action. Both are scoped through
+`app.services.ownership` to rows the caller can already see, so an agent can no more sync into
+another member's tickets than it can read them. A ticket owned by someone else 404s rather than
+403s, here as everywhere.
+
+This is the pattern to reach for whenever an agent needs a provider operation — a narrow,
+purpose-built endpoint where the hub picks the upstream from data it already owns. The caller names
+a **ticket**, never a URL. That is what distinguishes it from the generic
+`POST /connections/{id}/proxy` in §4, which stays deferred precisely because a caller-directed
+forwarder is an SSRF and header-leak surface. The narrow endpoints have neither, and after them
+there is no agent operation left that the generic one is needed for.
 
 ### Hub-only routes
 
@@ -133,8 +165,7 @@ so an agent token is refused. Listed so the surface is not mistaken for undocume
 `POST /connections/{id}/test`, `GET /connections/{id}/{projects|repos|sprints|work-item-metadata}`
 · `POST /projects`, `PATCH /projects/{key}`, `DELETE /projects/{key}`,
 `PUT /projects/{key}/config`,
-`POST /projects/{key}/repos/{repo}/knowledge/build` ·
-`POST /tickets/sync`, `DELETE /tickets/{external_id}` · all of `/auth/*`.
+`POST /projects/{key}/repos/{repo}/knowledge/build` · all of `/auth/*`.
 
 `POST …/knowledge/build` is hub-only for a specific reason: it clones a repository, runs a
 Claude CLI process for minutes and spends money against the owner's credential
@@ -206,12 +237,20 @@ encrypted blob that `/resolve` already returns whole.
 
 **Provider PAT.** Deliberately *not* returned. Agents that need a provider call get one of:
 
-- the hub performs the call (`POST /connections/{id}/proxy`) — preferred, PAT never leaves;
+- **the hub performs the call through a narrow, purpose-built endpoint** — `POST /tickets/sync`
+  today (§3), and this is the preferred answer, not a stopgap;
+- the hub performs the call through the generic `POST /connections/{id}/proxy` — **deferred**,
+  because a caller-directed forwarder needs its own security design;
 - or, where an agent must talk to the provider directly at volume, a scoped short-lived
   token if the provider supports one.
 
-Phase 3 will pick one per provider rather than one globally. Until then agents keep their own
-provider credentials and the hub's `/connections` is informational.
+The first and second are the same principle at different widths, and the width is the whole
+argument: a narrow endpoint cannot be pointed at an arbitrary upstream, so it carries none of the
+SSRF or header-leak risk that deferred the generic one. Prefer adding a narrow endpoint over
+reviving the proxy.
+
+Until an agent's provider operations are all covered that way, agents keep their own provider
+credentials and the hub's `/connections` is informational.
 
 ---
 

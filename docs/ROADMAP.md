@@ -58,9 +58,8 @@ layer is the seam that makes that a per-file change rather than a rewrite.
 
 ## Phase 2 — Identity
 
-> **Hub side: done.** Agent cutover: **not started** — it edits `q-agent/`, which is out of
-> scope until that call is made. Every phase below splits the same way, so the two halves are
-> now listed separately.
+> **Hub side: done. Agent cutover: shipped for QAgent** (identity only), **not started for
+> DAgent.** Every phase below splits the same way, so the two halves are listed separately.
 
 The hub becomes the login for the suite.
 
@@ -84,12 +83,18 @@ The hub becomes the login for the suite.
   `EMEHUB_COOKIE_DOMAIN` does not cover its origin. The UI surfaces the second, so it never offers
   a launch that fails after the click.
 
-**Agent cutover — not started.** Everything the agent needs now exists and is callable.
-- QAgent switches to validating hub tokens. Its own `/auth/*` becomes a thin proxy to the hub
-  first (so nothing breaks in one step), then is deleted. Tracked in
-  [q-agent#476](https://github.com/chuongnd2612/q-agent/issues/476); the agent-side plan is
-  `q-agent/docs/HUB-INTEGRATION.md`, slices B1–B5, gated behind `QAGENT_HUB_SSO_ENABLED` so each
-  is shippable before the hub is reconfigured.
+**Agent cutover — shipped for QAgent.** Slices B1–B5 of
+`q-agent/docs/HUB-INTEGRATION.md` are merged ([q-agent#476](https://github.com/chuongnd2612/q-agent/issues/476)),
+gated behind `QAGENT_HUB_SSO_ENABLED`:
+- QAgent validates hub tokens alongside its own, branching on `iss`, and JIT-provisions a local user
+  keyed on a new `users.hub_user_id`. **Local ids were kept and mapped rather than re-pointed** —
+  every `owner_id`, run, evidence file and per-user workspace path keeps working, and no data
+  migration ran.
+- `POST /auth/sso/complete` returns a login-shaped body, so QAgent's auth store and its
+  401→refresh→retry interceptor were untouched.
+- Not done, and deliberately: QAgent's own `/auth/*` still exists rather than proxying here, and its
+  `users` / `auth_sessions` tables are still live. The wholesale user migration — which logs
+  everyone out once, at a scheduled time — has not been scheduled.
 - Because the agent creates **its own** session from the handed-over token, the hub token is
   consumed once at bootstrap. **This phase therefore has no 15-minute-token problem** — that only
   arrives when QAgent starts *reading* hub configuration in Phases 3–4, where it is a genuine
