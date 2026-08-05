@@ -9,6 +9,7 @@
 // phrasing-only content model does not allow.
 
 import type { KeyboardEvent } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { Icon, Pill, toast } from "@/components/ui";
 import { useCardTilt } from "@/hooks/useTilt";
@@ -17,15 +18,18 @@ import { PRODUCT_ICON, PRODUCT_VISUALS } from "./productVisuals";
 
 export function ProductCard({ product }: { product: Product }) {
   const tilt = useCardTilt();
+  const navigate = useNavigate();
   const visual = PRODUCT_VISUALS[product.key];
 
+  // The landing page is public, and `GET /agents` is hub-audience only — so this
+  // card cannot know where an agent lives, and must not be given a public
+  // endpoint just to find out. Sending a live product to /app is the honest
+  // move: RequireAuth either restores the session and lands on Overview, where
+  // the real Launch button is, or bounces to /login. One redirect, no new
+  // public surface, and the URL stays the source of truth.
   const open = () => {
     if (product.live) {
-      toast(
-        "Launching Q-Agent",
-        "Opening the QA operating system in a new workspace",
-        "ok",
-      );
+      navigate("/app");
     } else {
       toast(
         "D-Agent is not live yet",
