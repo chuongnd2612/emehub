@@ -23,11 +23,38 @@ export interface Provider {
 /** Q-Agent is live; D-Agent is a placeholder. */
 export type AgentKey = "q" | "d";
 
+/** Why the sign-in hand-off is unavailable — `api/app/config.py`. */
+export type HandoffBlocker = "no_url" | "no_cookie_domain" | "domain_mismatch";
+
+/**
+ * One entry from `GET /agents` — where an agent lives and whether we can
+ * actually hand a session to it.
+ *
+ * `registered` and `handoffReady` are **not** the same thing: an agent can be
+ * registered (the hub mints it tokens) while single sign-on still cannot work,
+ * because the refresh cookie will not reach its origin. See ADR 0008.
+ */
+export interface AgentTarget {
+  /** The JWT audience — `qagent` | `dagent`. */
+  id: string;
+  key: AgentKey;
+  name: string;
+  url: string | null;
+  registered: boolean;
+  handoffReady: boolean;
+  reason: HandoffBlocker | null;
+}
+
 export interface Product {
   key: AgentKey;
   name: string;
   /** Mono sub-line under the name. */
   code: string;
+  /**
+   * Design copy, **not** runtime state — it drives the "Live"/"Placeholder"
+   * pill. D-Agent stays a placeholder even once a URL is configured for it.
+   * Whether a launch is possible is `launchUrl` / `handoffReady` below.
+   */
   live: boolean;
   role: string;
   description: string;
@@ -36,6 +63,12 @@ export interface Product {
   metric: string;
   metricLabel: string;
   stats: { k: string; v: string }[];
+  /** Merged from `GET /agents`. Null when the agent has no URL configured. */
+  launchUrl?: string | null;
+  /** Merged from `GET /agents`. False means a launch would fail after the click. */
+  handoffReady?: boolean;
+  /** Merged from `GET /agents`. Names the missing configuration. */
+  handoffReason?: HandoffBlocker | null;
 }
 
 /* ── Projects & repositories ─────────────────────────────────────────────── */

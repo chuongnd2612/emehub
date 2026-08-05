@@ -17,6 +17,7 @@
 //   tickets.ts      LIVE — tickets (server-side filtered), the schema, sync
 //   people.ts       members, roles, invitations
 //   overview.ts     activity feed, KPI tiles, product cards
+//   agents.ts       LIVE — the launch registry (GET /agents)
 //
 // The split exists so later slices can each own one module without colliding.
 // Identity, projects, knowledge and tickets are real calls through `@/lib/api`;
@@ -37,6 +38,7 @@
 // scaffolding for the stubs, not public API, and they disappear when the last
 // stub becomes a real call.
 export * from "./types";
+export * from "./agents";
 export * from "./auth";
 export * from "./credentials";
 export * from "./connections";

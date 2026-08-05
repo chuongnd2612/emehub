@@ -6,6 +6,7 @@
 // Live|Placeholder pill, role, CTA) → 3-up mono stat boxes.
 
 import { Glyph, Icon, Pill } from "@/components/ui";
+import { handoffBlockerText } from "@/data";
 import type { AgentKey, Product } from "@/data";
 import { useCardTilt } from "@/hooks/useTilt";
 
@@ -22,6 +23,27 @@ const ACCENT_TEXT: Record<AgentKey, string> = {
 
 export function ProductCard({ product }: { product: Product }) {
   const tilt = useCardTilt<HTMLDivElement>();
+
+  // Three states, and the middle one is the point: an agent can be configured
+  // and still not launchable, because single sign-on additionally needs the
+  // shared cookie domain (ADR 0008). Offering a launch that fails after the
+  // click is worse than a disabled button that says why.
+  const canLaunch = Boolean(product.launchUrl && product.handoffReady);
+  const blocker = handoffBlockerText({
+    id: product.key === "q" ? "qagent" : "dagent",
+    key: product.key,
+    name: product.name,
+    url: product.launchUrl ?? null,
+    registered: Boolean(product.launchUrl),
+    handoffReady: Boolean(product.handoffReady),
+    reason: product.handoffReason ?? null,
+  });
+
+  // Top-level navigation, not a new tab: the agent bootstraps its own session
+  // from the shared cookie, and the back button should land back on the hub.
+  const launch = () => {
+    if (canLaunch && product.launchUrl) window.location.assign(product.launchUrl);
+  };
 
   return (
     <div className="[perspective:1200px]">
@@ -57,9 +79,14 @@ export function ProductCard({ product }: { product: Product }) {
           <button
             type="button"
             data-surface
-            // NO-OP: neither agent has a destination in the route map yet.
-            onClick={() => {}}
-            className={`flex shrink-0 cursor-pointer items-center gap-[6px] rounded-[11px] border border-bd2 bg-card2 px-[12px] py-[7px] text-[12px] font-bold transition-[background-color,border-color,transform] duration-200 hover:-translate-y-px hover:border-pb hover:bg-bd ${ACCENT_TEXT[product.key]}`}
+            disabled={!canLaunch}
+            title={blocker ?? undefined}
+            onClick={launch}
+            className={`flex shrink-0 items-center gap-[6px] rounded-[11px] border border-bd2 bg-card2 px-[12px] py-[7px] text-[12px] font-bold transition-[background-color,border-color,transform] duration-200 ${
+              canLaunch
+                ? `cursor-pointer hover:-translate-y-px hover:border-pb hover:bg-bd ${ACCENT_TEXT[product.key]}`
+                : "cursor-not-allowed text-muted opacity-60"
+            }`}
           >
             {product.live ? "Launch" : "Preview"}
             <Icon name="arrowRight" size={13} strokeWidth={2.4} />
