@@ -90,6 +90,13 @@ def _split_ac(text: str) -> list[str]:
 
 class JiraAdapter(ProviderAdapter):
     kind = "jira"
+    # Neither is implemented here: issue comments arrive with the issue in
+    # ``fetch_tickets``, and Jira's test-case story lives in Xray/Zephyr —
+    # separate products with their own APIs. Both flags stay False so an agent is
+    # told "not supported" rather than "there are none". An explicit decision,
+    # not an oversight.
+    supports_comments = False
+    supports_test_cases = False
 
     def __init__(self, config: dict, secrets: dict, *, transport=None) -> None:
         super().__init__(config, secrets, transport=transport)

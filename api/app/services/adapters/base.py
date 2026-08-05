@@ -111,6 +111,20 @@ class ProviderAdapter(ABC):
     #: not hold a hub worker open.
     timeout: float = 30.0
 
+    # -- Optional capabilities --------------------------------------------
+    # Declared, not inferred. The optional read methods below default to
+    # returning ``[]``, so "this provider has no such concept" is otherwise
+    # indistinguishable from "there are none" — tolerable while only sync
+    # consumed them, wrong now that an endpoint serves the result to an agent.
+    # A caller reads these to tell the two apart; see ``ticket_provider``.
+    #: :meth:`fetch_comments` is really implemented.
+    supports_comments: bool = False
+    #: :meth:`list_test_cases` is really implemented.
+    supports_test_cases: bool = False
+    #: :meth:`list_test_cases` answers for the whole project, ignoring the
+    #: ``ticket_external_id`` hint. True for Azure DevOps.
+    test_cases_project_wide: bool = False
+
     def __init__(
         self,
         config: dict,
@@ -180,7 +194,15 @@ class ProviderAdapter(ABC):
         """
 
     def fetch_comments(self, ticket_external_id: str) -> list[dict[str, Any]]:
-        """One ticket's comments, on demand, as ``[{who, when, text}]``."""
+        """One ticket's comments, on demand, as ``[{who, when, text}]``.
+
+        Overriders must set :attr:`supports_comments` and **must raise**
+        :class:`ProviderError` when the provider call fails, rather than
+        returning ``[]``. Sync may swallow a comment failure — comments are
+        decoration on a work item and a scope-less PAT must not fail a whole
+        sync — but this method answers a caller who asked for comments and
+        nothing else, and an empty list would tell it there are none.
+        """
         return []
 
     def list_sprints(self) -> list[dict[str, Any]]:
@@ -202,8 +224,13 @@ class ProviderAdapter(ABC):
     def list_test_cases(self, ticket_external_id: str | None = None) -> list[dict[str, Any]]:
         """Existing test cases as ``[{external_id, title, state}]``.
 
-        Optionally scoped to one work item. Used to continue existing numbering
-        when generating, and to manage provider-side cases in-app.
+        ``ticket_external_id`` is a *hint*, not a guarantee: Azure DevOps has no
+        cheap per-work-item query for this and answers project-wide, which is
+        what its consumer (continuing existing numbering when generating) needs
+        anyway. Callers must not assume the result is scoped.
+
+        Overriders must set :attr:`supports_test_cases` and raise
+        :class:`ProviderError` on failure — see :meth:`fetch_comments`.
         """
         return []
 

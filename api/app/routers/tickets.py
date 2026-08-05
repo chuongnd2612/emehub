@@ -1,9 +1,15 @@
 """Tickets router — the hub's ticket store (INTEGRATION.md §3, ROADMAP Phase 4).
 
-    GET    /tickets                  -> TicketPageOut    (paged, filterable)
-    GET    /tickets/{external_id}    -> TicketDetailOut
-    POST   /tickets/sync             -> SyncResult       (pull from a provider)
-    DELETE /tickets/{external_id}    -> 204              (local delete only)
+    GET    /tickets                             -> TicketPageOut  (paged, filterable)
+    GET    /tickets/{external_id}               -> TicketDetailOut
+    GET    /tickets/{external_id}/comments      -> CommentListOut  (live, via the hub's PAT)
+    GET    /tickets/{external_id}/test-cases    -> TestCaseListOut (live, via the hub's PAT)
+    POST   /tickets/sync                        -> SyncResult      (pull from a provider)
+    DELETE /tickets/{external_id}               -> 204             (local delete only)
+
+The two provider read-throughs live in ``services.ticket_provider``; read its
+module docstring for why an empty list is never allowed to mean three different
+things.
 
 ## Posture: CONTRACT
 
@@ -45,7 +51,7 @@ from app.db import get_db
 from app.deps_auth import require_principal
 from app.models.user import User
 from app.schemas import ApiModel
-from app.services import audit_service, ticket_service
+from app.services import audit_service, ticket_provider, ticket_service
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
@@ -117,8 +123,65 @@ class SyncResult(ApiModel):
     tickets: list[TicketOut] = Field(default_factory=list)
 
 
+class CommentOut(ApiModel):
+    """One provider comment. Same shape as the ``comments`` snapshot on
+    ``TicketDetailOut``, so an agent handles one shape, not two."""
+
+    who: str = ""
+    when: str = ""
+    text: str = ""
+
+
+class CommentListOut(ApiModel):
+    items: list[CommentOut] = Field(default_factory=list)
+    #: ``False`` when the provider has no comment concept — an empty list then
+    #: means "not supported", not "there are none". See ``ticket_provider``.
+    supported: bool = True
+
+
+class TestCaseOut(ApiModel):
+    external_id: str = ""
+    title: str = ""
+    state: str = ""
+
+
+class TestCaseListOut(ApiModel):
+    items: list[TestCaseOut] = Field(default_factory=list)
+    supported: bool = True
+    #: ``True`` when the provider answered project-wide rather than for this
+    #: ticket alone (Azure DevOps always does). A caller that assumes scoping
+    #: would otherwise silently over-count.
+    project_wide: bool = False
+
+
 def _csv(value: str | None) -> list[str]:
     return [part.strip() for part in (value or "").split(",") if part.strip()]
+
+
+def _ticket_or_404(
+    db: Session, principal: User, external_id: str, provider_kind: str | None
+):
+    ticket = ticket_service.get_ticket(db, principal, external_id, provider_kind=provider_kind)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"Ticket '{external_id}' not found")
+    return ticket
+
+
+def _provider_read(call, db: Session, ticket):
+    """Run a ``ticket_provider`` read and map its failures to status codes.
+
+    The mapping is the point: `INTEGRATION.md` §5 requires a failed read to be
+    distinguishable from an empty one, so nothing here can answer ``200`` with an
+    empty list because the provider was unreachable.
+    """
+    try:
+        return call(db, ticket)
+    except ticket_provider.NoWorkItemConnection as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ticket_provider.AdapterLayerMissing as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ticket_provider.ProviderUnavailable as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------- endpoints
@@ -176,10 +239,55 @@ def get_ticket(
     principal: User = Depends(require_principal),
     db: Session = Depends(get_db),
 ) -> TicketDetailOut:
-    ticket = ticket_service.get_ticket(db, principal, external_id, provider_kind=provider_kind)
-    if ticket is None:
-        raise HTTPException(status_code=404, detail=f"Ticket '{external_id}' not found")
-    return TicketDetailOut.model_validate(ticket)
+    return TicketDetailOut.model_validate(
+        _ticket_or_404(db, principal, external_id, provider_kind)
+    )
+
+
+@router.get("/{external_id}/comments", response_model=CommentListOut)
+def list_ticket_comments(
+    external_id: str,
+    provider_kind: str | None = Query(None, alias="providerKind"),
+    principal: User = Depends(require_principal),
+    db: Session = Depends(get_db),
+) -> CommentListOut:
+    """This work item's comment thread, read live from the provider.
+
+    The hub holds the PAT and makes the call, so an agent needs no provider
+    credential of its own — the same arrangement as ``POST /tickets/sync``.
+
+    Distinct from the ``comments`` field on ``GET /tickets/{id}``, which is the
+    snapshot taken at ``syncedAt``. Same shape, different freshness.
+    """
+    read = _provider_read(ticket_provider.list_comments, db, _ticket_or_404(
+        db, principal, external_id, provider_kind
+    ))
+    return CommentListOut(
+        items=[CommentOut.model_validate(c) for c in read.items],
+        supported=read.supported,
+    )
+
+
+@router.get("/{external_id}/test-cases", response_model=TestCaseListOut)
+def list_ticket_test_cases(
+    external_id: str,
+    provider_kind: str | None = Query(None, alias="providerKind"),
+    principal: User = Depends(require_principal),
+    db: Session = Depends(get_db),
+) -> TestCaseListOut:
+    """Provider-side test cases, for continuing existing numbering when generating.
+
+    **Check ``projectWide``.** Azure DevOps answers for the whole project rather
+    than this work item, so treating the result as scoped over-counts.
+    """
+    read = _provider_read(ticket_provider.list_test_cases, db, _ticket_or_404(
+        db, principal, external_id, provider_kind
+    ))
+    return TestCaseListOut(
+        items=[TestCaseOut.model_validate(c) for c in read.items],
+        supported=read.supported,
+        project_wide=read.project_wide,
+    )
 
 
 @router.post("/sync", response_model=SyncResult)
