@@ -42,6 +42,12 @@ PUBLIC_PATHS: frozenset[str] = frozenset(
         "/auth/refresh",
         "/auth/request-reset",
         "/auth/reset",
+        # Cross-app hand-off (ADR 0008). NOT unauthenticated: it authenticates
+        # with the HttpOnly refresh cookie plus the CSRF double-submit, exactly
+        # like /auth/refresh above. It is listed here for the same reason —
+        # the guard checks for a *bearer* token, which this caller has not got
+        # yet, because getting one is the point of the call.
+        "/auth/agent-token",
         # Generated documentation.
         "/openapi.json",
         "/docs",

@@ -57,6 +57,8 @@ def test_the_allowlist_is_exactly_the_expected_paths():
             "/auth/refresh",
             "/auth/request-reset",
             "/auth/reset",
+            # Cookie + CSRF authenticated, not unauthenticated — ADR 0008.
+            "/auth/agent-token",
             "/openapi.json",
             "/docs",
             "/docs/oauth2-redirect",

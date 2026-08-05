@@ -118,6 +118,25 @@ class RefreshResponse(ApiModel):
     user: UserOut
 
 
+class AgentTokenRequest(ApiModel):
+    """Body for ``POST /auth/agent-token``.
+
+    Exactly one agent audience. The hub's own audience is refused — the hub SPA
+    uses ``/auth/refresh``; this endpoint exists for agents (ADR 0008).
+    """
+
+    audience: str
+
+
+class AgentTokenResponse(ApiModel):
+    """One agent-audience access token. Carries no refresh material."""
+
+    access_token: str
+    audience: str
+    expires_in: int = 900
+    user: UserOut
+
+
 class RequestResetRequest(ApiModel):
     email: str
 

@@ -54,6 +54,37 @@ per-session state when a token with a new `sid` arrives. Immediate cross-agent r
 (pushing "session X is dead" to agents) is deferred; with a 15-minute expiry the worst case is
 a 15-minute window.
 
+### Getting the first token — the sign-in hand-off
+
+An agent deployed on a sibling subdomain of the hub obtains its first token from the browser,
+using the shared refresh cookie ([ADR 0008](adr/0008-cross-app-session-handoff.md)):
+
+```
+POST /auth/agent-token        { "audience": "qagent" }
+  credentials: 'include'      → sends the shared emehub_refresh cookie
+  X-CSRF: <emehub_csrf>       → the readable double-submit cookie
+  → { accessToken, audience, expiresIn, user }
+```
+
+It returns a token for **that audience only**, and no refresh material. The hub's own audience is
+refused: the hub SPA uses `/auth/refresh`, and handing an agent origin a hub-audience token would
+let it reach hub-only routes.
+
+> **Agents MUST call `/auth/agent-token`, never `/auth/refresh`.** `/auth/refresh` **rotates** the
+> refresh token, so two applications sharing one cookie race — whichever silent refresh lands
+> second presents a dead token and logs a live session out. `/auth/agent-token` deliberately does
+> not rotate, which is what makes the cookie safe to share. Every call is audited, because this is
+> the one path that accepts the refresh token without rotating it.
+
+This requires the hub and the agent to be same-site: set `EMEHUB_COOKIE_DOMAIN` to the shared
+parent (e.g. `.chuongnd.click`) and add the agent's origin to `EMEHUB_CORS_ORIGINS`. An agent on an
+unrelated registrable domain cannot use this path; that case needs a short-lived single-use
+hand-off code redeemed server-to-server, recorded as the fallback in ADR 0008 and not built.
+
+The agent is expected to establish **its own** session from the token it receives, so the hub token
+is consumed once at bootstrap rather than held. An agent that instead keeps using hub tokens for
+onward reads runs into the 15-minute expiry with no way to refresh — see §5.
+
 ### Key distribution
 
 **Phase 1 — shared secret.** All three deployments are ours; `EMEHUB_JWT_SECRET` is
