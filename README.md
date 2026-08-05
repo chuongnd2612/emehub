@@ -44,10 +44,17 @@ connections with live Azure DevOps / GitHub / Jira adapters, projects and their 
 knowledge bases — **which it now builds itself**
 ([ADR 0007](docs/adr/0007-knowledge-builds-run-on-the-hub.md)) — and the ticket store.
 
-**What has not happened is the agent cutover.** Neither Q-Agent nor D-Agent validates a
-hub token or reads its configuration from here, so the hub currently runs *alongside* both
-rather than in front of them. That is the remaining work; see
-[docs/ROADMAP.md](docs/ROADMAP.md).
+**The sign-in hand-off is built** ([ADR 0008](docs/adr/0008-cross-app-session-handoff.md)):
+`POST /auth/agent-token` mints an agent-audience token from the shared refresh cookie without
+rotating it, `GET /agents` publishes the launch registry, and the Overview cards launch for real —
+disabled with an explanation when the deployment cannot support single sign-on yet.
+
+**What has not happened is the agent cutover.** Neither Q-Agent nor D-Agent yet validates a hub
+token or reads its configuration from here, so the hub still runs *alongside* both rather than in
+front of them. The hub's half is done and callable; the agent's half is
+[q-agent#476](https://github.com/chuongnd2612/q-agent/issues/476), planned in
+`q-agent/docs/HUB-INTEGRATION.md`. See [docs/ROADMAP.md](docs/ROADMAP.md) and
+[docs/SSO-HANDOFF-PLAN.md](docs/SSO-HANDOFF-PLAN.md).
 
 Known gaps: [#50](https://github.com/chuongnd2612/emehub/issues/50) — a handful of designed
 screens (API keys, roles, invitations, Overview activity/KPIs) have no backend behind them

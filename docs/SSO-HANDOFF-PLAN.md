@@ -4,6 +4,26 @@
 > the agent. It is the **agent cutover half of [ROADMAP](ROADMAP.md) Phase 2**, for one agent.
 > Paths without a repo prefix are in this repository; Q-Agent paths are marked `q-agent/`.
 
+## Status
+
+| Track | State |
+|---|---|
+| **A — EmeHub** | **Done.** A1 `POST /auth/agent-token` (#75) · A2 CORS + cookie-domain config (#77) · A3 `GET /agents` (#79) · A4 the Launch buttons (#81) · A5 ADR 0008 and these docs. |
+| **B — Q-Agent** | Not started. Tracked in [q-agent#476](https://github.com/chuongnd2612/q-agent/issues/476), planned in `q-agent/docs/HUB-INTEGRATION.md`. |
+| **DAgent** | Deferred — §5. Prerequisites filed as [ticket-executor#81](https://github.com/DaoLinh98/ticket-executor/issues/81). |
+
+**One decision changed during implementation.** §1 below is written as designed and remains
+accurate: the mechanism is the shared cookie plus a **non-rotating** mint. The plan originally
+considered having the agent call `/auth/refresh` directly; that was rejected once it was confirmed
+that `/auth/refresh` rotates (`api/app/services/auth_service.py:333-344`), which makes two SPAs
+sharing one cookie race and log each other out.
+
+**To enable it on a deployment**, set on the hub: `EMEHUB_COOKIE_DOMAIN` to the shared parent
+domain, `EMEHUB_COOKIE_SECURE=true`, `EMEHUB_CORS_ORIGINS` to include the agent's origin, and
+`EMEHUB_AGENT_QAGENT_URL` to the agent's deployed origin. Until then `GET /agents` reports
+`handoffReady: false` with reason `no_cookie_domain`, and the UI disables launching rather than
+offering a click that fails.
+
 ## Context
 
 The hub is built and running — identity, Claude credentials, provider connections, projects,

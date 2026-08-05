@@ -72,10 +72,28 @@ The hub becomes the login for the suite.
   and still want a designer pass.
 - ✅ **Audience-scoped tokens** (`aud`), which QAgent does not have. `kid` is present from the
   first token so the Phase-3 RS256/JWKS move is not breaking.
+- ✅ **The sign-in hand-off** ([ADR 0008](adr/0008-cross-app-session-handoff.md)) —
+  `POST /auth/agent-token` mints an agent-audience token from the shared refresh cookie **without
+  rotating it**, `GET /agents` publishes the launch registry, and the Overview cards launch for
+  real. Detail in [SSO-HANDOFF-PLAN.md](SSO-HANDOFF-PLAN.md).
 
-**Agent cutover — not started.**
+  Two things this settled that the plan had left open. The hand-off deliberately does *not* reuse
+  `/auth/refresh`, because that **rotates** — two SPAs sharing one rotating credential race and log
+  each other out. And `registered` is now distinct from `handoffReady`: an agent can be registered
+  (the hub mints it tokens) while single sign-on still cannot work, because
+  `EMEHUB_COOKIE_DOMAIN` does not cover its origin. The UI surfaces the second, so it never offers
+  a launch that fails after the click.
+
+**Agent cutover — not started.** Everything the agent needs now exists and is callable.
 - QAgent switches to validating hub tokens. Its own `/auth/*` becomes a thin proxy to the hub
-  first (so nothing breaks in one step), then is deleted.
+  first (so nothing breaks in one step), then is deleted. Tracked in
+  [q-agent#476](https://github.com/chuongnd2612/q-agent/issues/476); the agent-side plan is
+  `q-agent/docs/HUB-INTEGRATION.md`, slices B1–B5, gated behind `QAGENT_HUB_SSO_ENABLED` so each
+  is shippable before the hub is reconfigured.
+- Because the agent creates **its own** session from the handed-over token, the hub token is
+  consumed once at bootstrap. **This phase therefore has no 15-minute-token problem** — that only
+  arrives when QAgent starts *reading* hub configuration in Phases 3–4, where it is a genuine
+  blocker.
 
 **Data migration.** QAgent has live users. Argon2 password hashes are portable — they move as
 opaque strings and users keep their passwords. TOTP secrets are stored in plaintext in
