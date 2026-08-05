@@ -355,11 +355,16 @@ def test_only_the_resolve_response_model_can_carry_credential_material(app):
 
 
 def test_every_credential_route_declares_an_auth_guard(app):
-    """The blanket ``CONTRACT`` dependency plus, on management routes, a
+    """The blanket ``GRANTED`` dependency plus, on management routes, a
     stricter one of their own."""
-    from app.deps_auth import require_admin, require_principal, require_user
+    from app.deps_auth import (
+        require_admin,
+        require_credential_grant,
+        require_principal,
+        require_user,
+    )
 
-    guards = {require_user, require_admin, require_principal}
+    guards = {require_user, require_admin, require_principal, require_credential_grant}
     unguarded = []
     for route in _api_routes(app):
         if not route.path.startswith("/credentials/"):

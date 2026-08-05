@@ -24,6 +24,7 @@ from app.deps_auth import (
     read_csrf_cookie,
     read_refresh_cookie,
     require_admin,
+    require_principal,
     require_user,
     set_auth_cookies,
 )
@@ -36,6 +37,8 @@ from app.schemas import (
     AdminInviteUserResponse,
     AdminUpdateUserRequest,
     AdminUserOut,
+    AgentGrantRequest,
+    AgentGrantResponse,
     AgentTokenRequest,
     AgentTokenResponse,
     ChangePasswordRequest,
@@ -294,6 +297,73 @@ def agent_token(
         audience=audience,
         expires_in=int(auth_service.access_ttl().total_seconds()),
         user=UserOut.model_validate(user),
+    )
+
+
+@router.post("/auth/agent-grant", response_model=AgentGrantResponse, status_code=201)
+def agent_grant(
+    request: Request,
+    body: AgentGrantRequest,
+    principal: User = Depends(require_principal),
+    db: Session = Depends(get_db),
+) -> AgentGrantResponse:
+    """Exchange a live agent access token for a run-scoped credential grant.
+
+    **Why this exists** (ADR 0009). ``/auth/agent-token`` mints from the browser's
+    shared refresh cookie, and an agent's *background run* has no browser and no
+    cookie. Its access token lives 15 minutes, it may not refresh one, and a run
+    that needs to resolve a Claude credential after minute 15 otherwise has no
+    legal path — while INTEGRATION.md §5 forbids proceeding on a stale credential.
+
+    An agent calls this **once, at run start**, while its token is still fresh. The
+    grant then carries that run.
+
+    **What keeps it narrow.** It reaches only the three Claude-credential routes;
+    its audience is never registerable, so it cannot be used as an access token
+    anywhere; it is bound to this hub session, so revoking the session kills it
+    immediately; and it cannot mint another grant, because minting needs an access
+    token — which is exactly why this dependency is ``require_principal`` and not
+    ``require_credential_grant``.
+    """
+    audience = getattr(principal, "_aud", None) or ""
+    if audience == AUDIENCE_HUB:
+        # A grant is for a background agent run. The hub's SPA has a session and
+        # a rotating refresh token, so it has no use for one — and issuing a
+        # long-lived credential-scoped token to a browser origin would be a
+        # strictly worse trade than the 15-minute token it already holds.
+        raise HTTPException(
+            status_code=400, detail="A credential grant is for an agent, not the hub"
+        )
+
+    grant = auth_service.create_agent_grant(
+        principal,
+        principal._sid,  # type: ignore[attr-defined]
+        agent_audience=audience,
+        run_id=body.run_id or "",
+    )
+    ttl = int(auth_service.grant_ttl().total_seconds())
+
+    # Audited at mint, and every *use* is audited by the credential endpoints
+    # themselves — so a resolved credential is traceable to the run that asked.
+    audit_service.record(
+        category="credential",
+        action="Minted a credential grant",
+        actor=principal.email,
+        actor_id=principal.id,
+        actor_type="user",
+        source=audience,
+        target=f"claude:grant:{body.run_id or 'unscoped'}",
+        meta=f"expires in {ttl}s",
+        ip=request.client.host if request.client else None,
+        owner_id=principal.id,
+        db=db,
+    )
+    return AgentGrantResponse(
+        grant=grant,
+        audience=audience,
+        scope=auth_service.SCOPE_CLAUDE_CREDENTIAL,
+        run_id=body.run_id or "",
+        expires_in=ttl,
     )
 
 

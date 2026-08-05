@@ -66,6 +66,16 @@ ACCESS_TOKEN_KID = "emehub-hs256-2026-07"
 # never satisfy `decode_access_token`.
 AUDIENCE_MFA = f"{AUDIENCE_HUB}:mfa"
 AUDIENCE_RESET = f"{AUDIENCE_HUB}:reset"
+#: Run-scoped credential grants (ADR 0009). Put in the same never-registerable
+#: namespace deliberately: a grant outlives an access token, so it must be
+#: *structurally* incapable of satisfying ``decode_access_token`` or
+#: ``decode_any_registered``, not merely refused by convention somewhere.
+AUDIENCE_GRANT = f"{AUDIENCE_HUB}:grant"
+
+#: The only thing a grant may authorise. A claim rather than an implication of the
+#: audience, so a second scope can be added later without making every existing
+#: grant ambiguous.
+SCOPE_CLAUDE_CREDENTIAL = "claude-credential"
 
 REFRESH_TTL_REMEMBER_DAYS_DEFAULT = 30
 REFRESH_TTL_DEFAULT = timedelta(hours=12)
@@ -223,9 +233,87 @@ def decode_any_registered(token: str) -> dict[str, Any]:
     return _decode(token, list(registered_audiences()))
 
 
+# ------------------------------------------------------- run-scoped grants
+def grant_ttl() -> timedelta:
+    """How long a credential grant lives. See ``Settings.agent_grant_ttl_minutes``."""
+    return timedelta(minutes=settings.agent_grant_ttl_minutes)
+
+
+def create_agent_grant(user: User, sid: str, *, agent_audience: str, run_id: str) -> str:
+    """Mint a run-scoped credential grant for ``agent_audience`` (ADR 0009).
+
+    The grant exists because an agent's background run outlives a 15-minute
+    access token and may not refresh one: ``/auth/agent-token`` mints from the
+    *browser's* refresh cookie, which a daemon thread does not have.
+
+    Three things make it narrow rather than "a long-lived token":
+
+    * ``aud`` is :data:`AUDIENCE_GRANT`, which is never registerable, so this can
+      never be accepted as an access token anywhere;
+    * ``scp`` names the one thing it may do, and the dependency that accepts it is
+      wired to exactly three credential routes;
+    * ``sid`` is the *same hub session*, so revoking that session kills the grant
+      immediately — ``deps_auth`` re-checks the session row on every request, so
+      no grant registry or revocation list is needed.
+
+    Raises :class:`UnregisteredAudience` when ``agent_audience`` is not an agent
+    the hub is configured for. The hub's own audience is refused by the caller:
+    a grant is for a background agent run, and the hub SPA has a session.
+    """
+    require_registered_audience(agent_audience)
+    return _encode(
+        {
+            "sub": str(user.id),
+            "email": user.email,
+            "sid": sid,
+            "aud": AUDIENCE_GRANT,
+            "agt": agent_audience,
+            "scp": SCOPE_CLAUDE_CREDENTIAL,
+            "run": run_id,
+        },
+        grant_ttl(),
+    )
+
+
+def decode_agent_grant(token: str) -> dict[str, Any]:
+    """Decode and fully validate a credential grant.
+
+    Requires ``agt`` and ``scp`` in addition to the usual claims, and checks the
+    scope, so a token in the grant audience that is missing either is rejected
+    rather than treated as unscoped. ``agt`` is validated against the registered
+    audiences too: de-registering an agent stops its grants working.
+    """
+    payload = _decode(token, AUDIENCE_GRANT)
+    if payload.get("scp") != SCOPE_CLAUDE_CREDENTIAL:
+        raise AuthError("Grant is not valid for this scope")
+    agent = payload.get("agt") or ""
+    if agent not in registered_audiences():
+        raise AuthError(f"Grant names an unregistered agent: '{agent}'")
+    return payload
+
+
+def agent_grant_valid(token: str | None) -> bool:
+    """True when ``token`` is a live, in-scope credential grant.
+
+    For the guard middleware only. It answers "did this hub issue this?", and the
+    per-route dependency decides what it may reach — which is what confines a
+    grant to the three credential routes.
+    """
+    if not token:
+        return False
+    try:
+        decode_agent_grant(token)
+    except AuthError:
+        return False
+    return True
+
+
 def access_token_valid(token: str | None, audience: str | None = None) -> bool:
     """True when ``token`` is a live token for ``audience`` (default: any
-    registered audience)."""
+    registered audience).
+
+    A credential grant is **not** an access token and returns ``False`` here —
+    see :func:`agent_grant_valid`."""
     if not token:
         return False
     try:
