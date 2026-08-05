@@ -129,8 +129,10 @@ without a second login. QAgent's `users` and `auth_sessions` tables are gone.
 - ✅ The UI for both.
 
 **Not done.**
-- `POST /connections/{id}/proxy` — deliberately unbuilt; a generic forwarder is an SSRF and
-  header-leak surface that needs its own design
+- `POST /connections/{id}/proxy` — deliberately unbuilt, and now **permanently** so rather than
+  pending. A generic forwarder is an SSRF and header-leak surface that needs its own design; the
+  narrow per-operation endpoints on `/tickets/{external_id}/…` cover every provider call an agent
+  actually makes, without that surface
   ([INTEGRATION.md §4](INTEGRATION.md#4-secrets-that-cross-the-boundary)).
 - RS256 + JWKS, retiring the shared secret. `kid` is already emitted so this is additive.
 - Agent cutover.

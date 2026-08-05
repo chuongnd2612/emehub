@@ -1,10 +1,16 @@
 """Provider passthrough for one ticket — the hub makes the call, the PAT stays here.
 
-INTEGRATION.md §3/§4. An agent needs a work item's comments and its provider-side
-test cases, and it must get them without holding a provider credential. So the
-hub does what ``POST /tickets/sync`` already does for work items: resolve the
-ticket's own connection, decrypt its own PAT, call the provider, return the
-result.
+INTEGRATION.md §3/§4. An agent needs to read a work item's comments and its
+provider-side test cases, and to write back to the provider — post a results
+comment, transition the work item, create test cases — all without holding a
+provider credential. So the hub does what ``POST /tickets/sync`` already does for
+work items: resolve the ticket's own connection, decrypt its own PAT, call the
+provider.
+
+Reads are ``list_comments`` / ``list_test_cases``; writes are ``publish_comment``,
+``transition`` and ``create_test_cases``. The writes are what let an agent stop
+storing provider credentials at all — they are the provider side of QAgent's
+Publish and Link screens.
 
 **The caller names a ticket, never an upstream.** That is the property that keeps
 this off the SSRF surface which deferred the generic
@@ -28,6 +34,14 @@ conflating them is exactly the bug QAgent shipped twice (q-agent#490, #491:
   a comment failure must not fail a whole sync.
 * **there are genuinely none** — ``supported`` is ``True`` and the list is empty.
 
+## Writes keep the hub's own row honest
+
+A comment the hub published and a transition it applied are both changes the hub
+made itself. Leaving them to be discovered by the next sync would mean
+``GET /tickets/{id}`` serving a status the hub knows is wrong, so both mirror into
+the ticket row — and the transition mirrors **only** after the provider call
+returns without raising.
+
 ## The seam
 
 ``ticket_service`` defers its adapter dependency through an injectable resolver
@@ -40,6 +54,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from sqlalchemy.orm import Session
@@ -47,14 +62,19 @@ from sqlalchemy.orm import Session
 __all__ = [
     "AdapterLayerMissing",
     "AdapterResolver",
+    "CaseRequest",
+    "CaseResult",
     "NoWorkItemConnection",
     "ProviderRead",
     "ProviderUnavailable",
     "TicketAdapter",
+    "create_test_cases",
     "list_comments",
     "list_test_cases",
+    "publish_comment",
     "resolve_adapter",
     "set_adapter_resolver",
+    "transition",
     "use_adapter_resolver",
 ]
 
@@ -111,6 +131,52 @@ class TicketAdapter(Protocol):
     def list_test_cases(
         self, ticket_external_id: str | None = None
     ) -> list[dict[str, Any]]: ...
+
+    def publish_comment(
+        self,
+        ticket_external_id: str,
+        body: str,
+        *,
+        attachments: list[str] | None = None,
+    ) -> str: ...
+
+    def update_status(self, ticket_external_id: str, target_status: str) -> None: ...
+
+    def create_test_case(
+        self,
+        ticket_external_id: str,
+        *,
+        title: str,
+        precondition: str = "",
+        steps: list[dict[str, Any]] | None = None,
+        priority: str = "Medium",
+        link: bool = True,
+    ) -> dict[str, Any]: ...
+
+
+class CaseRequest(NamedTuple):
+    """One test case to create."""
+
+    title: str
+    precondition: str = ""
+    steps: list[dict[str, Any]] = []  # noqa: RUF012 - NamedTuple defaults are read-only
+    priority: str = "Medium"
+
+
+class CaseResult(NamedTuple):
+    """The outcome of one case in a batch.
+
+    Per-case rather than per-request because partial success is the normal case,
+    not an edge case: QAgent's Link screen creates every case for a ticket in one
+    pass and must report which ones landed.
+    """
+
+    title: str
+    external_id: str = ""
+    url: str = ""
+    status: str = ""
+    linked: bool = False
+    error: str = ""
 
 
 #: ``(db, ticket) -> TicketAdapter``.
@@ -234,3 +300,124 @@ def list_test_cases(db: Session, ticket: Any) -> ProviderRead:
         what="test cases",
         project_wide_attr="test_cases_project_wide",
     )
+
+
+# ------------------------------------------------------------------------ writes
+# Every shipped adapter really implements all three of these, so there are no
+# capability flags here — unlike the reads, where two providers have no test-case
+# concept. The base class raises for anything it cannot do rather than no-opping.
+
+
+def _write(what: str, external_id: str, call: Callable[[], Any]) -> Any:
+    """Run one provider write, normalising failure to :class:`ProviderUnavailable`.
+
+    Every provider rejection arrives here as an exception carrying the provider's
+    own reason, and that reason is propagated verbatim: an agent shows it to a
+    human, so replacing it with a generic message loses the only actionable part.
+    """
+    try:
+        return call()
+    except (ProviderUnavailable, AdapterLayerMissing, NoWorkItemConnection):
+        raise
+    except Exception as exc:  # noqa: BLE001 - any adapter/provider failure
+        raise ProviderUnavailable(f"Could not {what} for '{external_id}': {exc}") from exc
+
+
+def publish_comment(
+    db: Session,
+    ticket: Any,
+    *,
+    body: str,
+    attachments: list[str] | None = None,
+    author: str = "",
+) -> str:
+    """Post a comment on the work item. Returns the provider's comment id.
+
+    Also appends it to the ticket's stored ``comments``, so a subsequent
+    ``GET /tickets/{id}`` reflects a comment the hub itself just published rather
+    than waiting for the next sync to discover it.
+    """
+    adapter = resolve_adapter(db, ticket)
+    external_comment_id = _write(
+        "publish a comment",
+        ticket.external_id,
+        lambda: adapter.publish_comment(ticket.external_id, body, attachments=attachments or None),
+    )
+
+    # Mirror it locally. Same {who, when, text} shape sync produces, so the
+    # snapshot stays homogeneous.
+    stored = list(ticket.comments or [])
+    stored.append(
+        {
+            "who": author,
+            "when": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "text": body,
+        }
+    )
+    ticket.comments = stored
+    db.add(ticket)
+    db.commit()
+    db.refresh(ticket)
+    return str(external_comment_id or "")
+
+
+def transition(db: Session, ticket: Any, *, target_status: str) -> Any:
+    """Transition the work item, then bring the hub's own row into line.
+
+    The local update happens **only** after the provider call returns without
+    raising — the hub must not record a status the provider does not have. The
+    base adapter raises rather than no-opping for exactly this reason.
+    """
+    adapter = resolve_adapter(db, ticket)
+    _write(
+        f"transition to '{target_status}'",
+        ticket.external_id,
+        lambda: adapter.update_status(ticket.external_id, target_status),
+    )
+    ticket.status = target_status
+    db.add(ticket)
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+def create_test_cases(
+    db: Session,
+    ticket: Any,
+    *,
+    cases: list[CaseRequest],
+    link: bool = True,
+) -> list[CaseResult]:
+    """Create provider-side test cases for this ticket, one result per case.
+
+    **Never raises for a single rejected case**, because partial success is
+    normal: one unsupported field or one duplicate title must not discard the
+    cases that were created before it. A failure that prevents *any* case being
+    attempted — an unroutable ticket, an undecryptable PAT — still raises, since
+    then there is nothing partial about it.
+    """
+    adapter = resolve_adapter(db, ticket)
+    results: list[CaseResult] = []
+    for case in cases:
+        try:
+            created = adapter.create_test_case(
+                ticket.external_id,
+                title=case.title,
+                precondition=case.precondition,
+                steps=list(case.steps or []),
+                priority=case.priority,
+                link=link,
+            ) or {}
+        except Exception as exc:  # noqa: BLE001 - per-case, so the batch continues
+            results.append(CaseResult(title=case.title, error=str(exc)[:200]))
+            continue
+        results.append(
+            CaseResult(
+                title=case.title,
+                external_id=str(created.get("external_id", "")),
+                url=str(created.get("url", "")),
+                status=str(created.get("status", "")),
+                linked=bool(created.get("linked")),
+            )
+        )
+    return results
