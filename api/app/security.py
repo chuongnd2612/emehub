@@ -96,4 +96,11 @@ async def auth_guard(request, call_next):  # noqa: ANN001, ANN201
     token = bearer_token(request.headers.get("authorization"))
     if auth_service.access_token_valid(token):
         return await call_next(request)
+    # A run-scoped credential grant is hub-issued but is deliberately not an
+    # access token (ADR 0009), so this backstop has to recognise it or it would
+    # refuse one before any route dependency ran. It does **not** widen what a
+    # grant can reach: this layer only asks "did we issue this?", and
+    # ``require_credential_grant`` — wired to three routes — decides the rest.
+    if auth_service.agent_grant_valid(token):
+        return await call_next(request)
     return JSONResponse({"detail": "Not authenticated"}, status_code=401)

@@ -128,6 +128,13 @@ without a second login. QAgent's `users` and `auth_sessions` tables are gone.
   never returned — `GET /connections` says `hasPat` and nothing more.
 - ✅ The UI for both.
 
+- ✅ **Run-scoped credential grants** ([ADR 0009](adr/0009-run-scoped-credential-grants.md)) —
+  `POST /auth/agent-grant`. The blocker nothing on this roadmap had accounted for: an agent's
+  background run has no browser, so `/auth/agent-token` is unavailable to it, its access token lives
+  15 minutes and it may not refresh. A run needing a Claude credential after minute 15 had no legal
+  path at all. A grant reaches only the three credential endpoints, dies with its hub session, and
+  cannot renew itself.
+
 **Not done.**
 - `POST /connections/{id}/proxy` — deliberately unbuilt, and now **permanently** so rather than
   pending. A generic forwarder is an SSRF and header-leak surface that needs its own design; the

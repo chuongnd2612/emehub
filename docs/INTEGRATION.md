@@ -93,6 +93,44 @@ The agent is expected to establish **its own** session from the token it receive
 is consumed once at bootstrap rather than held. An agent that instead keeps using hub tokens for
 onward reads runs into the 15-minute expiry with no way to refresh — see §5.
 
+### Run-scoped credential grants — for work that outlives the token
+
+The 15-minute expiry is a real wall for one case: an agent's **background run**. There is no browser
+and no refresh cookie on a daemon thread, so `/auth/agent-token` is unavailable, and a run whose
+Claude-credential need arrives after minute 15 would have no legal path — while §5 forbids proceeding
+on a stale credential.
+
+So an agent may exchange a live access token, **once at run start**, for a grant
+([ADR 0009](adr/0009-run-scoped-credential-grants.md)):
+
+```
+POST /auth/agent-grant        { "runId": "…" }        Authorization: Bearer <agent access token>
+  → { grant, audience, scope: "claude-credential", runId, expiresIn }   // default 4h, capped 24h
+```
+
+**A grant is not an access token, and reaches exactly three endpoints:**
+`GET /credentials/claude/resolve`, `PUT /credentials/claude/refreshed` and
+`POST /credentials/claude/usage`. Presented anywhere else it is a `401` — its audience
+(`emehub:grant`) is never registerable, so it fails the access-token decoders structurally rather
+than by a check.
+
+What agents must know:
+
+- **Mint it early**, while the access token is still valid. Minting requires an access token, so a
+  grant cannot renew itself and there is no grant→grant chain.
+- **`runId` is opaque to the hub.** It is recorded in the grant and in the audit trail; the hub never
+  interprets it.
+- **Revoking the hub session kills a live grant**, on its next use. `sid` is carried and re-checked,
+  so §2's "revoking the session kills every agent" applies to grants unchanged.
+- **An expired grant is a `401`, and that means refuse** — mint a new one if the session is still
+  live, and otherwise stop. It does **not** mean the hub is down; see §5 for the distinction that
+  matters to the user.
+- The hub's own audience cannot mint one. A grant is for a background agent run.
+
+Operator setting: `EMEHUB_AGENT_GRANT_TTL_MINUTES` (default `240`, hard cap `1440`; out of range is a
+startup failure, not a clamp). There is no setting that disables grants — nothing here is an
+authentication bypass.
+
 ### Key distribution
 
 **Phase 1 — shared secret.** All three deployments are ours; `EMEHUB_JWT_SECRET` is
@@ -288,6 +326,11 @@ beyond the CLI's config dir; the CLI's own token rotation is posted back
 (`PUT /credentials/claude/refreshed`) so the hub stays authoritative; the endpoint is
 audited on every call.
 
+A **background run** reaches this endpoint with a run-scoped grant rather than an access token
+(§2) — the 15-minute token expires long before a run does, and a grant is bound to the hub
+session so revocation still applies. That is the only supported way to resolve a credential
+outside the 15-minute window; holding the access token past its expiry is not a thing that works.
+
 > Since [ADR 0007](adr/0007-knowledge-builds-run-on-the-hub.md) the hub also materialises a
 > Claude credential *for itself*, into a locked-down `CLAUDE_CONFIG_DIR` under
 > `EMEHUB_WORKSPACE_DIR`, to run a knowledge build. That does **not** change this section:
@@ -346,6 +389,7 @@ construction. Those need the scoped-short-lived-token answer, per provider, or n
 | Reachable | Normal. |
 | Unreachable, agent holds a valid unexpired token | Serve cached configuration read-only. Allow work already started to finish. **Refuse** any operation requiring a fresh Claude credential. Show an unmistakable banner. |
 | Unreachable, token expired | Refuse. Redirect to the hub login, which will also be down — the error page must say *the hub is down*, not *you are logged out*. |
+| Reachable, but the run's **credential grant** expired | Refuse the credential-dependent work, and mint a new grant if the session is live (§2). This is *not* "the hub is down" and *not* "you are logged out" — it is one run running out of authorisation, and it must read as that. |
 | Reachable but returns 5xx on a config endpoint | Treat as unreachable for that endpoint only. Do not fall back to an agent-local copy of the same data — that reintroduces the drift the hub exists to remove. |
 
 Explicitly **not** allowed: failing open on authentication. There is no "hub is down so let

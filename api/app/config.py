@@ -34,6 +34,11 @@ AUDIENCE_HUB = "emehub"
 AUDIENCE_QAGENT = "qagent"
 AUDIENCE_DAGENT = "dagent"
 
+#: Hard ceiling on ``agent_grant_ttl_minutes`` (24h). A grant is the longest-lived
+#: credential-bearing token the hub issues, so its lifetime is bounded in code and
+#: not left to an operator's env var alone (ADR 0009).
+GRANT_TTL_CAP_MINUTES = 1440
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -68,6 +73,17 @@ class Settings(BaseSettings):
     cookie_path: str = "/"
     mfa_token_ttl_minutes: int = 5
     reset_token_ttl_minutes: int = 30
+    #: Lifetime of a run-scoped Claude-credential grant (ADR 0009). Longer than an
+    #: access token because an agent's background run outlives one and has no way
+    #: to refresh; safe to be longer because the grant reaches only the credential
+    #: routes and dies with its hub session. Clamped to
+    #: :data:`GRANT_TTL_CAP_MINUTES` — a longer run mints a second grant, which
+    #: needs a live session, and that pressure is the point.
+    #:
+    #: Deliberately **not** disable-able: there is no configuration in which this
+    #: becomes an authentication bypass (CLAUDE.md › Never fail open). An operator
+    #: who does not want grants has agents that never ask for one.
+    agent_grant_ttl_minutes: int = 240
 
     # ── Registered agents ──────────────────────────────────────────────────
     agent_qagent_url: str = "http://localhost:5174"
@@ -153,6 +169,24 @@ class Settings(BaseSettings):
 
                 return json.loads(text)
             return [part.strip() for part in text.split(",") if part.strip()]
+        return value
+
+    @field_validator("agent_grant_ttl_minutes")
+    @classmethod
+    def _cap_grant_ttl(cls, value: int) -> int:
+        """Refuse an out-of-range grant lifetime rather than silently clamping it.
+
+        Startup failure, not a warning: an operator who typed ``14400`` meaning
+        minutes-not-hours should learn about it now, and a hub that quietly ran
+        with a different lifetime than configured would be worse than one that
+        would not start.
+        """
+        if value < 1 or value > GRANT_TTL_CAP_MINUTES:
+            raise ValueError(
+                f"EMEHUB_AGENT_GRANT_TTL_MINUTES must be between 1 and "
+                f"{GRANT_TTL_CAP_MINUTES} (got {value}). A credential grant is the "
+                "longest-lived credential-bearing token the hub issues (ADR 0009)."
+            )
         return value
 
     @model_validator(mode="after")

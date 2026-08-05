@@ -4,23 +4,29 @@ INTEGRATION.md §4: ``GET /credentials/claude/resolve`` returns credential
 material an agent writes to a private ``CLAUDE_CONFIG_DIR``. Everything in this
 module exists to make that the *only* leak, and a recorded one.
 
-## Posture — ``CONTRACT``, tightened per route
+## Posture — ``GRANTED``, tightened per route
 
-The router is registered ``CONTRACT`` in :data:`app.main.ROUTERS`, because two of
+The router is registered ``GRANTED`` in :data:`app.main.ROUTERS`, because three of
 its endpoints are in the integration contract and an agent calls them with the
-token it already holds (``aud: "qagent"`` / ``"dagent"``), not a hub token:
+token it already holds (``aud: "qagent"`` / ``"dagent"``) — or, past that token's
+15-minute life, with a run-scoped credential grant (ADR 0009):
 
 * ``GET  /credentials/claude/resolve``   — the credential to run with;
 * ``PUT  /credentials/claude/refreshed`` — the CLI's rotated token, posted back
   so the hub stays authoritative (INTEGRATION.md §4);
 * ``POST /credentials/claude/usage``     — one completed call's spend.
 
-``CONTRACT`` alone would also let an agent token *manage* credentials, which it
-must not. Every other endpoint therefore declares its own
-``Depends(require_user)`` (hub audience only) or ``Depends(require_admin)`` on
-top of the blanket ``require_principal``; both dependencies run, so the stricter
-one decides. ``PROTECTED`` is not an option — its blanket ``require_user`` would
-reject the very agent tokens ``/resolve`` exists for.
+**These three are the *only* routes in the hub a grant can reach**, and that is
+enforced by this wiring rather than by a check inside the grant: nowhere else
+depends on ``require_credential_grant``, and a grant's audience is never
+registerable, so ``require_principal`` and ``require_user`` both refuse it.
+
+The blanket dependency is the loosest one any route here needs, because every
+route's own dependency *also* runs and the stricter one decides. So every
+management endpoint declares ``Depends(require_user)`` (hub audience only) or
+``Depends(require_admin)`` on top — a grant, or a bare agent token, can fetch a
+credential but cannot manage one. ``PROTECTED`` is not an option: its blanket
+``require_user`` would reject the very agent tokens ``/resolve`` exists for.
 
 ## Why nothing else leaks the token
 
@@ -43,7 +49,7 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.deps_auth import require_admin, require_principal, require_user
+from app.deps_auth import require_admin, require_credential_grant, require_user
 from app.models.user import User
 from app.schemas import ApiModel, OkResponse
 from app.services import audit_service, claude_credentials, claude_usage
@@ -315,7 +321,7 @@ def test_credential(
 # ---------------------------------------------------------------- contract
 @router.get("/resolve", response_model=ResolvedCredentialOut)
 def resolve_credential(
-    principal: User = Depends(require_principal), db: Session = Depends(get_db)
+    principal: User = Depends(require_credential_grant), db: Session = Depends(get_db)
 ) -> ResolvedCredentialOut:
     """**The one endpoint that returns credential material** (INTEGRATION.md §3/§4).
 
@@ -374,7 +380,7 @@ def resolve_credential(
 @router.put("/refreshed", response_model=RefreshedCredentialOut)
 def persist_refreshed_credential(
     body: RefreshedCredentialIn,
-    principal: User = Depends(require_principal),
+    principal: User = Depends(require_credential_grant),
     db: Session = Depends(get_db),
 ) -> RefreshedCredentialOut:
     """Write back a token the Claude CLI rotated on the agent host.
@@ -406,7 +412,7 @@ def persist_refreshed_credential(
 @router.post("/usage", response_model=OkResponse, status_code=201)
 def append_usage(
     body: UsageIn,
-    principal: User = Depends(require_principal),
+    principal: User = Depends(require_credential_grant),
     db: Session = Depends(get_db),
 ) -> OkResponse:
     """Append one completed Claude call's token/cost figures.

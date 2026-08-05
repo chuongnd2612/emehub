@@ -54,6 +54,19 @@ def _resolve(
             payload = auth_service.decode_access_token(credentials.credentials, audience)
     except auth_service.AuthError as exc:
         raise unauthorized(str(exc)) from exc
+    return _load_principal(db, payload)
+
+
+def _load_principal(db: Session, payload: dict, *, aud: str | None = None) -> User:
+    """Load the active user behind a decoded payload and check its session.
+
+    Split out of :func:`_resolve` so a credential grant goes through **exactly**
+    the same user and session checks as an access token — in particular the live
+    session lookup, which is what makes revoking a hub session kill a grant
+    immediately (ADR 0009). ``aud`` overrides the audience stamped on the user for
+    a grant, where the meaningful audience is the agent named in ``agt`` rather
+    than the internal grant audience.
+    """
     try:
         user_id = int(payload.get("sub") or 0)
     except (TypeError, ValueError) as exc:
@@ -67,7 +80,7 @@ def _resolve(
     if not sid or auth_service.get_valid_session(db, sid) is None:
         raise unauthorized("Session revoked or expired")
     user._sid = sid  # type: ignore[attr-defined]
-    user._aud = payload.get("aud")  # type: ignore[attr-defined]
+    user._aud = aud or payload.get("aud")  # type: ignore[attr-defined]
     return user
 
 
@@ -92,6 +105,42 @@ def require_principal(
     but cannot, say, create a user. An unregistered audience still fails.
     """
     return _resolve(credentials, db, None)
+
+
+def require_credential_grant(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: Session = Depends(get_db),
+) -> User:
+    """The user behind **either** an agent access token **or** a credential grant.
+
+    Wired to exactly three routes — ``GET /credentials/claude/resolve``,
+    ``PUT /credentials/claude/refreshed``, ``POST /credentials/claude/usage`` —
+    and that wiring is what keeps a grant narrow (ADR 0009). A grant presented
+    anywhere else fails, structurally: its audience is never registerable, so
+    neither ``decode_access_token`` nor ``decode_any_registered`` will accept it.
+
+    The access-token path is tried first and is unchanged, so everything an agent
+    does today keeps working. A grant is then validated just as strictly, plus its
+    scope and the agent it names, and goes through the **same** live-session
+    lookup — which is what makes revoking the hub session kill a grant on its next
+    use, with no grant registry and no revocation list. INTEGRATION.md §2's
+    "revoking the session kills every agent" holds for grants verbatim.
+    """
+    if credentials is None or not credentials.credentials:
+        raise unauthorized()
+    try:
+        return _resolve(credentials, db, None)
+    except HTTPException:
+        # Not an access token for any registered audience. It may be a grant; if
+        # it is neither, the grant decoder's message is the more useful one, since
+        # a caller that gets this far is usually an agent whose grant expired.
+        pass
+
+    try:
+        payload = auth_service.decode_agent_grant(credentials.credentials)
+    except auth_service.AuthError as exc:
+        raise unauthorized(str(exc)) from exc
+    return _load_principal(db, payload, aud=payload.get("agt"))
 
 
 def require_audience(audience: str):

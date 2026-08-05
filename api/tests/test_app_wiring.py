@@ -29,9 +29,19 @@ def test_route_discovery_actually_finds_routes(app):
 def test_every_route_is_either_allowlisted_or_guarded(app):
     """No route may be reachable without authentication unless it is one of the
     handful of explicitly public paths."""
-    from app.deps_auth import require_admin, require_principal, require_user
+    from app.deps_auth import (
+        require_admin,
+        require_credential_grant,
+        require_principal,
+        require_user,
+    )
 
-    guards = {require_user, require_admin, require_principal}
+    # require_credential_grant is a guard like the others: it authenticates, it
+    # loads an active user, and it re-checks the live session. It accepts one
+    # extra token type (a run-scoped credential grant, ADR 0009) and is wired to
+    # three routes only. Adding it here is deliberate — a new dependency must be
+    # vetted into this set rather than silently satisfying the check.
+    guards = {require_user, require_admin, require_principal, require_credential_grant}
     routes = api_routes(app)
     assert len(routes) >= MIN_EXPECTED_ROUTES, "route discovery is broken"
 

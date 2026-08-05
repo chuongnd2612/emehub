@@ -159,6 +159,31 @@ class AgentTokenResponse(ApiModel):
     user: UserOut
 
 
+class AgentGrantRequest(ApiModel):
+    """Body for ``POST /auth/agent-grant`` (ADR 0009).
+
+    ``runId`` is opaque to the hub: it identifies the agent-side run in the audit
+    trail and in the grant's claims, and the hub never interprets or validates it.
+    """
+
+    run_id: str = ""
+
+
+class AgentGrantResponse(ApiModel):
+    """A run-scoped Claude-credential grant.
+
+    Not an access token — its audience is never registerable, so it is refused
+    everywhere except the three credential routes. Not refreshable either: minting
+    requires a live agent access token, so a grant cannot extend itself.
+    """
+
+    grant: str
+    audience: str
+    scope: str
+    run_id: str = ""
+    expires_in: int
+
+
 class RequestResetRequest(ApiModel):
     email: str
 

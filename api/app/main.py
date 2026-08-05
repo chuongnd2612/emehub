@@ -18,6 +18,11 @@ its own posture:
   with ``Depends(require_principal)``: any *registered* audience is accepted,
   because an agent calls them with the token it holds (``aud: "qagent"``), not a
   hub token. An unregistered audience is still refused.
+* ``GRANTED``   — ``CONTRACT``, and additionally accepts a run-scoped credential
+  grant (ADR 0009), registered with ``Depends(require_credential_grant)``. Only
+  ``credentials``. The blanket has to be the *loosest* dependency a router needs,
+  because every route's own dependency runs on top and the stricter one decides —
+  so a grant reaching this router still cannot manage a credential.
 * ``PROTECTED`` — everything else, registered with a blanket
   ``Depends(require_user)`` (``aud: "emehub"`` only).
 
@@ -36,7 +41,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.audit_context import bind_audit_actor
 from app.config import settings
 from app.db import init_db
-from app.deps_auth import require_principal, require_user
+from app.deps_auth import require_credential_grant, require_principal, require_user
 from app.logging import logger, setup_logging
 from app.routers import (
     agents,
@@ -56,6 +61,7 @@ VERSION = "0.1.0"
 PUBLIC = "public"
 MIXED = "mixed"
 CONTRACT = "contract"
+GRANTED = "granted"
 PROTECTED = "protected"
 
 #: (module, posture). Adding a router here is the only registration step, and
@@ -74,11 +80,12 @@ ROUTERS = (
     # token must reach it; every other route in that router adds
     # Depends(require_user) so managing a connection stays hub-only.
     (connections, CONTRACT),
-    # CONTRACT because `/credentials/claude/resolve`, `/refreshed` and `/usage`
-    # are called by an agent with its own token; every management endpoint in
-    # that router declares its own require_user/require_admin on top, so an
-    # agent token can fetch a credential but cannot manage one.
-    (credentials, CONTRACT),
+    # GRANTED, not CONTRACT: `/resolve`, `/refreshed` and `/usage` are called by
+    # an agent with its own token *or* with a run-scoped credential grant, which a
+    # background run past the 15-minute token expiry has to use (ADR 0009). Every
+    # management endpoint in that router declares its own require_user/require_admin
+    # on top, so neither a bare agent token nor a grant can manage a credential.
+    (credentials, GRANTED),
     # CONTRACT: GET /projects, GET …/config, GET …/knowledge and PATCH …/knowledge
     # are called by an agent with its own token (aud: "qagent"). The router's
     # non-contract writes each add Depends(require_user) to stay hub-only.
@@ -92,6 +99,7 @@ _POSTURE_DEPENDENCY = {
     PUBLIC: None,
     MIXED: None,  # each route declares its own
     CONTRACT: require_principal,
+    GRANTED: require_credential_grant,
     PROTECTED: require_user,
 }
 
