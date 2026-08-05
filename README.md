@@ -136,6 +136,7 @@ which would only be needed for browser automation the hub does not do.
 | [docs/CONTEXT.md](docs/CONTEXT.md) | Domain glossary, and who owns what across the three apps. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | The phased migration, Phase 0 → Phase 5. |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | The contract: token claims, config endpoints, degradation, known blockers. |
+| [docs/SSO-HANDOFF-PLAN.md](docs/SSO-HANDOFF-PLAN.md) | Plan for the Phase 2 agent cutover — making "Launch QAgent" a real single sign-on hand-off. |
 | [CLAUDE.md](CLAUDE.md) | Conventions and gates for anyone (human or agent) working in this repo. |
 | [design/DESIGN_SYSTEM.md](design/DESIGN_SYSTEM.md) | Colour, type, components, motion. |
 | [design/design_handoff_emehub/](design/design_handoff_emehub/) | **The binding design spec** — README, prototype, tokens, motion. |
