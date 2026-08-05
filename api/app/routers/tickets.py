@@ -4,12 +4,19 @@
     GET    /tickets/{external_id}               -> TicketDetailOut
     GET    /tickets/{external_id}/comments      -> CommentListOut  (live, via the hub's PAT)
     GET    /tickets/{external_id}/test-cases    -> TestCaseListOut (live, via the hub's PAT)
+    POST   /tickets/{external_id}/comments      -> 201             (write to the provider)
+    POST   /tickets/{external_id}/state         -> TicketDetailOut (write to the provider)
+    POST   /tickets/{external_id}/test-cases    -> 201             (write to the provider)
     POST   /tickets/sync                        -> SyncResult      (pull from a provider)
     DELETE /tickets/{external_id}               -> 204             (local delete only)
 
-The two provider read-throughs live in ``services.ticket_provider``; read its
-module docstring for why an empty list is never allowed to mean three different
-things.
+Everything that touches a provider goes through ``services.ticket_provider``; read
+its module docstring for why an empty list is never allowed to mean three
+different things, and why the writes mirror into the ticket row.
+
+The three writes are what let an agent stop holding provider credentials: they are
+the provider side of QAgent's Publish and Link screens, performed here so the PAT
+never leaves.
 
 ## Posture: CONTRACT
 
@@ -154,6 +161,53 @@ class TestCaseListOut(ApiModel):
     project_wide: bool = False
 
 
+class PublishCommentIn(ApiModel):
+    body: str = Field(min_length=1)
+    #: Provider-side attachment references. Passed through; adapters that have no
+    #: attachment path ignore them.
+    attachments: list[str] = Field(default_factory=list)
+
+
+class PublishCommentOut(ApiModel):
+    external_comment_id: str = ""
+
+
+class TransitionIn(ApiModel):
+    target_status: str = Field(min_length=1)
+
+
+class CaseIn(ApiModel):
+    title: str = Field(min_length=1)
+    precondition: str = ""
+    #: ``[{"a": action, "e": expected}]`` — the shape ``create_test_case`` takes.
+    steps: list[dict] = Field(default_factory=list)
+    priority: str = "Medium"
+
+
+class CreateTestCasesIn(ApiModel):
+    cases: list[CaseIn] = Field(min_length=1)
+    #: Link each created case back to the work item where the provider supports it.
+    link: bool = True
+
+
+class CaseResultOut(ApiModel):
+    title: str = ""
+    external_id: str = ""
+    url: str = ""
+    status: str = ""
+    linked: bool = False
+    #: The provider's own reason, when this case failed. Empty on success.
+    error: str = ""
+
+
+class CreateTestCasesOut(ApiModel):
+    created: list[CaseResultOut] = Field(default_factory=list)
+    #: How many of ``cases`` actually landed. Partial success is normal, so a 2xx
+    #: does **not** mean everything worked — read this, or each ``error``.
+    succeeded: int = 0
+    failed: int = 0
+
+
 def _csv(value: str | None) -> list[str]:
     return [part.strip() for part in (value or "").split(",") if part.strip()]
 
@@ -182,6 +236,23 @@ def _provider_read(call, db: Session, ticket):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ticket_provider.ProviderUnavailable as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+def _provider_write_error(exc: Exception) -> HTTPException:
+    """The status code for a failed provider write.
+
+    Same mapping as the reads. A rejected write — an unresolvable target state, a
+    transition the workflow does not offer — arrives as ``ProviderUnavailable``
+    and surfaces as ``502`` carrying **the provider's own reason**, because that
+    reason is the only actionable part and an agent shows it to a human.
+    """
+    if isinstance(exc, HTTPException):
+        return exc
+    if isinstance(exc, ticket_provider.NoWorkItemConnection):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, ticket_provider.AdapterLayerMissing):
+        return HTTPException(status_code=503, detail=str(exc))
+    return HTTPException(status_code=502, detail=str(exc))
 
 
 # ---------------------------------------------------------------- endpoints
@@ -287,6 +358,165 @@ def list_ticket_test_cases(
         items=[TestCaseOut.model_validate(c) for c in read.items],
         supported=read.supported,
         project_wide=read.project_wide,
+    )
+
+
+# ------------------------------------------------------------- provider writes
+def _audit_write(
+    principal: User, db: Session, *, action: str, target: str, status: str, meta: str = ""
+) -> None:
+    """Record an agent-initiated provider write.
+
+    These are the first writes an agent causes to leave the hub for a third
+    party, so the audit row is the only record that it happened. ``source`` is the
+    calling audience, so a comment posted by QAgent is distinguishable from one
+    posted in the hub UI.
+    """
+    audit_service.record(
+        category="ticket",
+        action=action,
+        actor_type="user",
+        actor=principal.email,
+        actor_id=principal.id,
+        source=getattr(principal, "_aud", None),
+        target=target,
+        status=status,
+        meta=meta,
+        owner_id=principal.id,
+        db=db,
+    )
+
+
+@router.post("/{external_id}/comments", response_model=PublishCommentOut, status_code=201)
+def publish_ticket_comment(
+    external_id: str,
+    payload: PublishCommentIn,
+    provider_kind: str | None = Query(None, alias="providerKind"),
+    principal: User = Depends(require_principal),
+    db: Session = Depends(get_db),
+) -> PublishCommentOut:
+    """Post a comment on the work item, through the hub's own PAT.
+
+    Separate from the transition below on purpose: QAgent's publish flow posts a
+    comment and *then* transitions, and has to be able to report a comment that
+    published while its transition failed. One combined endpoint could not express
+    that state.
+    """
+    ticket = _ticket_or_404(db, principal, external_id, provider_kind)
+    try:
+        comment_id = ticket_provider.publish_comment(
+            db,
+            ticket,
+            body=payload.body,
+            attachments=payload.attachments or None,
+            author=principal.email,
+        )
+    except Exception as exc:
+        _audit_write(
+            principal,
+            db,
+            action="Posted a comment",
+            target=external_id,
+            status="error",
+            meta=str(exc)[:200],
+        )
+        raise _provider_write_error(exc) from exc
+    _audit_write(principal, db, action="Posted a comment", target=external_id, status="success")
+    return PublishCommentOut(external_comment_id=comment_id)
+
+
+@router.post("/{external_id}/state", response_model=TicketDetailOut)
+def transition_ticket(
+    external_id: str,
+    payload: TransitionIn,
+    provider_kind: str | None = Query(None, alias="providerKind"),
+    principal: User = Depends(require_principal),
+    db: Session = Depends(get_db),
+) -> TicketDetailOut:
+    """Transition the work item, and bring the hub's own row into line.
+
+    Returns the ticket as the hub now holds it. The local row is updated **only**
+    after the provider accepted the transition — a rejected transition leaves the
+    stored status untouched rather than recording a state the provider never
+    reached.
+    """
+    ticket = _ticket_or_404(db, principal, external_id, provider_kind)
+    try:
+        updated = ticket_provider.transition(db, ticket, target_status=payload.target_status)
+    except Exception as exc:
+        _audit_write(
+            principal,
+            db,
+            action=f"Transitioned to '{payload.target_status}'",
+            target=external_id,
+            status="error",
+            meta=str(exc)[:200],
+        )
+        raise _provider_write_error(exc) from exc
+    _audit_write(
+        principal,
+        db,
+        action=f"Transitioned to '{payload.target_status}'",
+        target=external_id,
+        status="success",
+    )
+    return TicketDetailOut.model_validate(updated)
+
+
+@router.post("/{external_id}/test-cases", response_model=CreateTestCasesOut, status_code=201)
+def create_ticket_test_cases(
+    external_id: str,
+    payload: CreateTestCasesIn,
+    provider_kind: str | None = Query(None, alias="providerKind"),
+    principal: User = Depends(require_principal),
+    db: Session = Depends(get_db),
+) -> CreateTestCasesOut:
+    """Create provider-side test cases for this work item, in one pass.
+
+    **Batched, and partially successful by design.** An agent creates every case
+    for a ticket together, and one rejected case must not discard the ones already
+    created — so this answers ``201`` with a per-case outcome, and the caller reads
+    ``failed`` or each ``error``. A failure that stops *any* case being attempted
+    (unroutable ticket, undecryptable PAT) is still a 4xx/5xx.
+    """
+    ticket = _ticket_or_404(db, principal, external_id, provider_kind)
+    requested = [
+        ticket_provider.CaseRequest(
+            title=case.title,
+            precondition=case.precondition,
+            steps=case.steps,
+            priority=case.priority,
+        )
+        for case in payload.cases
+    ]
+    try:
+        results = ticket_provider.create_test_cases(
+            db, ticket, cases=requested, link=payload.link
+        )
+    except Exception as exc:
+        _audit_write(
+            principal,
+            db,
+            action="Created test cases",
+            target=external_id,
+            status="error",
+            meta=str(exc)[:200],
+        )
+        raise _provider_write_error(exc) from exc
+
+    failed = sum(1 for r in results if r.error)
+    _audit_write(
+        principal,
+        db,
+        action="Created test cases",
+        target=external_id,
+        status="warning" if failed else "success",
+        meta=f"{len(results) - failed} created, {failed} failed",
+    )
+    return CreateTestCasesOut(
+        created=[CaseResultOut.model_validate(r._asdict()) for r in results],
+        succeeded=len(results) - failed,
+        failed=failed,
     )
 
 

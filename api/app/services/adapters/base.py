@@ -246,7 +246,17 @@ class ProviderAdapter(ABC):
         """Post a comment on the work item. Returns the external comment id."""
 
     def update_status(self, ticket_external_id: str, target_status: str) -> None:
-        """Transition the work item. No-op where the provider has no workflow."""
+        """Transition the work item.
+
+        **Raises by default rather than doing nothing.** A silent no-op reports
+        success for a transition that never happened, and a caller then records a
+        status the provider does not have — which is worse than a clean failure.
+        Every shipped adapter overrides this; a provider with no workflow should
+        say so here.
+        """
+        raise ProviderError(
+            f"Transitioning a work item is not supported for '{self.kind or 'this provider'}'"
+        )
 
     def create_test_case(
         self,

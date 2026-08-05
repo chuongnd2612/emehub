@@ -127,6 +127,9 @@ noted.
 | `GET` | `/tickets/{external_id}` | One ticket, normalised. Optional `?providerKind=` disambiguates the same id across providers. |
 | `GET` | `/tickets/{external_id}/comments` | The work item's comment thread, read **live** from the provider through the hub's own PAT. `{items, supported}`. |
 | `GET` | `/tickets/{external_id}/test-cases` | Provider-side test cases, for continuing existing numbering when generating. `{items, supported, projectWide}`. |
+| `POST` | `/tickets/{external_id}/comments` | **Write, to the provider.** Post a comment on the work item. `{body, attachments?}` → `{externalCommentId}`. |
+| `POST` | `/tickets/{external_id}/state` | **Write, to the provider.** Transition the work item. `{targetStatus}` → the ticket as the hub now holds it. |
+| `POST` | `/tickets/{external_id}/test-cases` | **Write, to the provider.** Create test cases in one pass. `{cases[], link?}` → per-case outcomes. |
 | `POST` | `/tickets/sync` | **Write.** Pull work items from a provider and upsert them. **The hub makes the provider call with its own stored PAT** — see below. |
 | `DELETE` | `/tickets/{external_id}` | **Write.** Drop a mirrored row the caller can already see. Local only: it never touches the provider, so a re-sync restores it. |
 | `POST` | `/audit/events` | **Write.** Append an audit event attributed to the calling agent. |
@@ -183,6 +186,50 @@ treat them as scoped and you will over-count.
 The comment shape is `{who, when, text}`, deliberately identical to the `comments` snapshot on
 `GET /tickets/{external_id}`. Same shape, different freshness: the snapshot is as of `syncedAt`,
 this endpoint is current. One concept, one shape.
+
+### Writing back to the provider
+
+The three `POST /tickets/{external_id}/…` writes are the reason an agent can stop holding provider
+credentials at all: they are the provider side of QAgent's Publish and Link screens, performed by
+the hub so the PAT never leaves. Same routing as the reads — the ticket selects the connection, the
+caller never names an upstream.
+
+**A comment and a transition are two calls, and that is deliberate.** A publish flow posts a comment
+and *then* transitions, and it must be able to report a comment that published while its transition
+failed. One combined endpoint could not express that state, so it is not offered.
+
+**Test-case creation is batched and partially successful by design.** An agent creates every case
+for a work item in one pass, and one rejected case must not discard the ones already created. So the
+response is per-case:
+
+```jsonc
+// 201
+{ "created": [ { "title": "Imports a valid file", "externalId": "9103",
+                 "url": "https://…", "status": "Design", "linked": true, "error": "" },
+               { "title": "Rejects a malformed row", "externalId": "",
+                 "error": "Provider rejected 'Rejects a malformed row'" } ],
+  "succeeded": 1, "failed": 1 }
+```
+
+**A `201` therefore does not mean everything worked.** Read `failed`, or each `error`. A failure that
+stops *any* case being attempted — an unroutable ticket, an undecryptable PAT — is a 4xx/5xx instead,
+because nothing about it is partial.
+
+**Two invariants on the hub's own copy.** A comment the hub published is appended to the stored
+`comments`, and an accepted transition updates the stored `status` — so `GET /tickets/{id}` reflects
+a change the hub made itself instead of waiting for the next sync to discover it. The status is
+updated **only after the provider accepted the transition**: a rejected transition leaves the stored
+status untouched rather than recording a state the provider never reached. (For the same reason, an
+adapter that cannot transition now *raises* instead of silently doing nothing.)
+
+**A rejected write is a `502` carrying the provider's own reason** — "No Azure DevOps state matching
+'Shipped' on work item 1428", "No Jira transition named 'Done' is available". That reason is the only
+actionable part, so it is propagated verbatim rather than replaced with a generic message; agents
+should surface it.
+
+Every one of these writes is audited with `source` set to the calling audience, so a comment posted
+by QAgent is distinguishable from one posted in the hub UI. These are the first writes an agent
+causes to leave the hub for a third party, and the audit row is the only record that it happened.
 
 ### Hub-only routes
 
@@ -279,8 +326,16 @@ argument: a narrow endpoint cannot be pointed at an arbitrary upstream, so it ca
 SSRF or header-leak risk that deferred the generic one. Prefer adding a narrow endpoint over
 reviving the proxy.
 
-Until an agent's provider operations are all covered that way, agents keep their own provider
-credentials and the hub's `/connections` is informational.
+**Where this now stands.** Every provider operation QAgent performs is covered by a narrow endpoint:
+work-item sync, comment reads, test-case reads, comment publishing, state transitions and test-case
+creation. So `/connections` staying informational is no longer what keeps an agent's
+`provider_connections` table alive — the remaining work is agent-side, cutting over to these
+endpoints and deleting the local table.
+
+Two things are still genuinely uncovered, and both are agent-side by nature rather than blocked here:
+**cloning a repository** (the PAT has to be injected into a git remote on the machine doing the
+clone) and **anything DAgent hands to an MCP server**, which needs the credential locally by
+construction. Those need the scoped-short-lived-token answer, per provider, or nothing.
 
 ---
 
