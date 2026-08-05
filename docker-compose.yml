@@ -23,6 +23,9 @@ services:
       EMEHUB_COOKIE_SECURE: ${EMEHUB_COOKIE_SECURE:-false}
       EMEHUB_COOKIE_DOMAIN: ${EMEHUB_COOKIE_DOMAIN:-}
       EMEHUB_COOKIE_PATH: ${EMEHUB_COOKIE_PATH:-/}
+      # Agent origins that may call POST /auth/agent-token cross-origin with
+      # credentials (ADR 0008). Unset is correct for a localhost-only stack.
+      EMEHUB_CORS_ORIGINS: ${EMEHUB_CORS_ORIGINS:-}
       EMEHUB_ACCESS_TOKEN_TTL_MINUTES: ${EMEHUB_ACCESS_TOKEN_TTL_MINUTES:-15}
       EMEHUB_REFRESH_TOKEN_TTL_DAYS: ${EMEHUB_REFRESH_TOKEN_TTL_DAYS:-30}
       EMEHUB_AGENT_QAGENT_URL: ${EMEHUB_AGENT_QAGENT_URL:-http://localhost:5174}
