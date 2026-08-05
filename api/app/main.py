@@ -39,6 +39,7 @@ from app.db import init_db
 from app.deps_auth import require_principal, require_user
 from app.logging import logger, setup_logging
 from app.routers import (
+    agents,
     audit,
     auth,
     connections,
@@ -63,6 +64,10 @@ PROTECTED = "protected"
 ROUTERS = (
     (health, PUBLIC),
     (auth, MIXED),
+    # PROTECTED: the launch registry is the hub UI's own, aud: emehub only.
+    # An agent has no business enumerating its siblings, so this is not in
+    # the contract and an agent token is refused.
+    (agents, PROTECTED),
     (me, CONTRACT),
     (audit, CONTRACT),
     # GET /connections is in the contract (INTEGRATION.md §3), so an agent's own
