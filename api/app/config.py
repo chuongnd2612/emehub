@@ -15,6 +15,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -179,6 +180,50 @@ class Settings(BaseSettings):
         if (self.agent_dagent_url or "").strip():
             out.append(AUDIENCE_DAGENT)
         return tuple(out)
+
+    def agent_url(self, audience: str) -> str:
+        """The configured origin for ``audience``, or ``""`` when unset."""
+        mapping = {
+            AUDIENCE_QAGENT: self.agent_qagent_url,
+            AUDIENCE_DAGENT: self.agent_dagent_url,
+        }
+        return (mapping.get(audience) or "").strip()
+
+    def handoff_ready(self, audience: str) -> bool:
+        """Whether the sign-in hand-off can actually work for ``audience``.
+
+        Registration (a URL) is necessary but **not sufficient**: the hand-off
+        also needs the refresh cookie to reach the agent's origin, which requires
+        ``EMEHUB_COOKIE_DOMAIN`` to be set to a domain the agent is a subdomain
+        of (ADR 0008). Without that the browser never sends the cookie and the
+        agent's call fails — so a UI that offered a launch would be lying.
+
+        Kept deliberately distinct from ``registered_audiences`` so "a URL is
+        set" can never silently come to mean "single sign-on works".
+        """
+        url = self.agent_url(audience)
+        if not url or audience not in self.registered_audiences:
+            return False
+        domain = (self.cookie_domain or "").strip().lstrip(".").lower()
+        if not domain:
+            return False
+        host = urlsplit(url if "//" in url else f"//{url}").hostname or ""
+        host = host.lower()
+        return host == domain or host.endswith(f".{domain}")
+
+    def handoff_blocker(self, audience: str) -> str | None:
+        """Why the hand-off is unavailable for ``audience`` — ``None`` if it is.
+
+        Returned to the UI so a disabled launch button can name the missing
+        configuration instead of just being dead.
+        """
+        if not self.agent_url(audience):
+            return "no_url"
+        if not (self.cookie_domain or "").strip():
+            return "no_cookie_domain"
+        if not self.handoff_ready(audience):
+            return "domain_mismatch"
+        return None
 
     @property
     def workspace_path(self) -> Path:

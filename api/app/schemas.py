@@ -118,6 +118,28 @@ class RefreshResponse(ApiModel):
     user: UserOut
 
 
+class AgentOut(ApiModel):
+    """One entry in the launch registry (``GET /agents``).
+
+    ``registered`` means the hub will mint a token for it; ``handoffReady`` means
+    single sign-on can actually work, which additionally needs the cookie domain
+    (ADR 0008). ``reason`` names the missing configuration so a disabled launch
+    button can explain itself instead of being dead.
+    """
+
+    id: str
+    key: str
+    name: str
+    url: str | None = None
+    registered: bool = False
+    handoff_ready: bool = False
+    reason: str | None = None
+
+
+class AgentListOut(ApiModel):
+    agents: list[AgentOut] = Field(default_factory=list)
+
+
 class AgentTokenRequest(ApiModel):
     """Body for ``POST /auth/agent-token``.
 
