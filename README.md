@@ -152,6 +152,7 @@ which would only be needed for browser automation the hub does not do.
 | [0005](docs/adr/0005-secret-and-key-management.md) | Separate the signing secret from the encryption key. |
 | [0006](docs/adr/0006-implementing-the-emehub-design-handoff.md) | The design handoff is binding; supersedes 0004. |
 | [0007](docs/adr/0007-knowledge-builds-run-on-the-hub.md) | Knowledge builds run on the hub; narrows 0001 and supersedes the Phase 4 filesystem split. |
+| [0008](docs/adr/0008-cross-app-session-handoff.md) | Cross-app sign-in via a shared cookie and a **non-rotating** token mint. |
 
 ---
 

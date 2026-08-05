@@ -36,6 +36,8 @@ from app.schemas import (
     AdminInviteUserResponse,
     AdminUpdateUserRequest,
     AdminUserOut,
+    AgentTokenRequest,
+    AgentTokenResponse,
     ChangePasswordRequest,
     LoginRequest,
     LoginResponse,
@@ -222,6 +224,74 @@ def refresh(
     return RefreshResponse(
         access_token=tokens[AUDIENCE_HUB],
         tokens=tokens,
+        expires_in=int(auth_service.access_ttl().total_seconds()),
+        user=UserOut.model_validate(user),
+    )
+
+
+@router.post("/auth/agent-token", response_model=AgentTokenResponse)
+def agent_token(
+    request: Request,
+    body: AgentTokenRequest,
+    db: Session = Depends(get_db),
+) -> AgentTokenResponse:
+    """Mint **one** agent-audience access token from the shared refresh cookie.
+
+    This is the cross-app sign-in hand-off (ADR 0008). An agent served from a
+    sibling subdomain of the cookie's domain calls this from the browser with
+    ``credentials: 'include'``; it gets an access token for its own audience and
+    nothing else, then establishes its own session from it.
+
+    **It deliberately does not rotate the refresh token.** ``/auth/refresh``
+    does (``auth_service.rotate``), and a rotating credential shared by two SPAs
+    races: whichever silent refresh lands second presents a dead token and logs
+    a live session out. Minting without rotating is what makes the cookie safe
+    to share. Anything added here must preserve that — see the regression test
+    asserting the stored hash is unchanged.
+
+    No cookies are set or cleared, and no refresh material is returned.
+    """
+    audience = (body.audience or "").strip()
+    if audience == AUDIENCE_HUB:
+        # The hub's own SPA has /auth/refresh. Handing out a hub-audience token
+        # here would let an agent origin mint credentials for hub-only routes.
+        raise HTTPException(status_code=400, detail="Audience must be an agent, not the hub")
+    if audience not in auth_service.registered_audiences():
+        raise HTTPException(status_code=400, detail=f"Unregistered audience: {audience}")
+
+    token = read_refresh_cookie(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing refresh token")
+    if not auth_service.verify_csrf(read_csrf_cookie(request), request.headers.get(CSRF_HEADER)):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+    session = auth_service.find_session_by_refresh(db, token)
+    if session is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    user = db.get(User, session.user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+
+    access = auth_service.create_access_token(user, session.id, audience)
+    session.last_seen_at = utcnow()
+    user.last_active = utcnow()
+    db.add(session)
+    db.add(user)
+    db.commit()
+
+    # Audited on every call: this path accepts the refresh token without
+    # rotating it, so its use must be visible (ADR 0008).
+    audit_service.record(
+        category="auth",
+        action="Minted an agent token",
+        actor=user.email,
+        actor_id=user.id,
+        target=audience,
+        ip=request.client.host if request.client else None,
+        db=db,
+    )
+    return AgentTokenResponse(
+        access_token=access,
+        audience=audience,
         expires_in=int(auth_service.access_ttl().total_seconds()),
         user=UserOut.model_validate(user),
     )
