@@ -168,7 +168,9 @@ noted.
 | `POST` | `/tickets/{external_id}/comments` | **Write, to the provider.** Post a comment on the work item. `{body, attachments?}` → `{externalCommentId}`. |
 | `POST` | `/tickets/{external_id}/state` | **Write, to the provider.** Transition the work item. `{targetStatus}` → the ticket as the hub now holds it. |
 | `POST` | `/tickets/{external_id}/test-cases` | **Write, to the provider.** Create test cases in one pass. `{cases[], link?}` → per-case outcomes. |
-| `POST` | `/tickets/sync` | **Write.** Pull work items from a provider and upsert them. **The hub makes the provider call with its own stored PAT** — see below. |
+| `POST` | `/tickets/sync` | **Write.** Pull work items from a provider and upsert them. Takes a **clause query** or `ticketIds` — see *Saying what to sync* below; the legacy `mode`/`sprint`/`states` fields are gone (#130). **The hub makes the provider call with its own stored PAT.** |
+| `POST` | `/tickets/query/preview` | What a clause query *would* pull, without importing it. `{total, sample[], description}`. |
+| `POST` | `/tickets/search` | The same clause query over the hub's own mirror, paged. A POST because a clause list does not fit a query string. |
 | `DELETE` | `/tickets/{external_id}` | **Write.** Drop a mirrored row the caller can already see. Local only: it never touches the provider, so a re-sync restores it. |
 | `POST` | `/audit/events` | **Write.** Append an audit event attributed to the calling agent. |
 
@@ -224,6 +226,65 @@ treat them as scoped and you will over-count.
 The comment shape is `{who, when, text}`, deliberately identical to the `comments` snapshot on
 `GET /tickets/{external_id}`. Same shape, different freshness: the snapshot is as of `syncedAt`,
 this endpoint is current. One concept, one shape.
+
+### Saying what to sync: a clause query
+
+**Breaking change, emehub#130.** `POST /tickets/sync` used to take a small filter language —
+`mode` / `sprint` / `sprintPath` / `areaPath` / `states` / `workItemTypes`. Those fields are **gone**,
+and the body now `extra="forbid"`s them, so a caller still sending one gets a `422` naming it rather
+than a silent whole-project pull. Refusing is the point: an *ignored* filter returns **more** work
+items than were asked for, which is the failure a caller is least likely to notice.
+
+A body now names one of exactly two things:
+
+| Field | Means |
+|---|---|
+| `query` | a **clause query** — the filter. Validated, then compiled per provider. |
+| `ticketIds` | known work items by external id. Not a filter; there is no clause for it. |
+
+With neither, the request is a `422` (*"Say what to import…"*). "Everything in the project" is
+expressible — it is a `query` of `state is not <the finished states>` — but it has to be *asked for*
+rather than arrived at by omitting every field.
+
+```jsonc
+// POST /tickets/sync
+{ "providerKind": "azure_devops",          // or "connectionId": 7
+  "query": {
+    "clauses": [ { "field": "assignee", "operator": "is",    "values": ["@Me"] },
+                 { "field": "state",    "operator": "in",    "values": ["Active", "Committed"] } ],
+    "match": "all",                        // "any" ORs them. Not accepted for GitHub — see below.
+    "sort":  { "field": "changedDate", "direction": "desc" } } }
+```
+
+**Fields**: `workItemType` `state` `assignee` `areaPath` `iterationPath` `tags` `title`
+`changedSince` `createdSince` `parentId` `priority` `epic`.
+**Operators**: `is` `isNot` `in` `notIn` `contains` `notContains` `under` `onOrAfter` `onOrBefore`.
+
+The clause list is **flat**, with one global `match`. No nesting, deliberately: mixed AND/OR trees
+are a large jump in both UI and compiler complexity and nothing anyone has asked for needs them.
+
+**Macros are provider-neutral.** `@Me`, `@CurrentIteration`, `@Today`, `@Today - N` are written the
+same way whatever the destination, and each compiler translates: Azure DevOps sees `@Me`, Jira
+`currentUser()`, GitHub `@me`. Anything else beginning with `@` is a literal value — the compilers
+match an exact allow-list, never a leading `@`, so `@Me OR 1=1` is quoted as the string it is.
+
+**Not every provider can express every clause, and the hub says so rather than dropping one.** A
+clause a destination cannot run is a `422` carrying `{problems: [{message, clauseIndex}]}` — the same
+validation the hub's own UI greys out its Apply button with, so "the button was disabled" and
+"400 Bad Request" always agree. The differences are real:
+
+| Destination | Cannot | Because |
+|---|---|---|
+| Azure DevOps | — | full WIQL |
+| Jira | `areaPath`; `under` on `iterationPath` | no area tree; a sprint is matched by name or id, not a path prefix |
+| GitHub | `areaPath` `iterationPath` `parentId` `priority` `epic`; **`match: "any"`** | search takes qualifiers, not a query language — and every qualifier ANDs, with no OR and no grouping |
+
+Ask what a query *would* pull before pulling it with **`POST /tickets/query/preview`**
+(`{connectionId?, providerKind?, project?, query}` → `{total, sample[], description}`). Nothing is
+written, the count is the provider's own uncapped total rather than the capped fetch, and
+`description` is the query in prose. And **`POST /tickets/search`** runs the same clause model over
+the hub's *mirror* (`{query, q?, providerKind?, projectId?, page?, pageSize?}` → a ticket page) — a
+POST because a clause list does not fit a query string honestly. `GET /tickets` is unchanged.
 
 ### Writing back to the provider
 

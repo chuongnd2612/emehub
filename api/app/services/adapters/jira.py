@@ -30,7 +30,8 @@ from app.services.adapters.base import (
     ProviderError,
     scrub,
 )
-from app.services.jql import build_jql, issue_keys_jql, quote
+from app.services.jql import build_jql, issue_keys_jql
+from app.services.ticket_query import TicketQuery
 
 API_PREFIX = "/rest/api/3"
 AGILE_PREFIX = "/rest/agile/1.0"
@@ -256,27 +257,12 @@ class JiraAdapter(ProviderAdapter):
     def fetch_tickets(
         self,
         *,
-        mode: str = "sprint",
-        sprint: str | None = None,
-        sprint_path: str | None = None,
-        area_path: str | None = None,  # ADO-only; unused
-        states: list[str] | None = None,
-        work_item_types: list[str] | None = None,
+        spec: Any = None,
         ticket_ids: list[str] | None = None,
         include_comments: bool = False,  # Jira returns comments inline
         project: str | None = None,
-        spec: Any = None,
     ) -> list[NormalizedTicket]:
-        jql = self._compile(
-            spec=spec,
-            mode=mode,
-            sprint=sprint,
-            sprint_path=sprint_path,
-            states=states,
-            work_item_types=work_item_types,
-            ticket_ids=ticket_ids,
-            project=project,
-        )
+        jql = self._compile(spec=spec, ticket_ids=ticket_ids, project=project)
         with self._client() as client:
             resp = client.post(
                 f"{API_PREFIX}/search/jql",
@@ -308,63 +294,23 @@ class JiraAdapter(ProviderAdapter):
         self,
         *,
         spec: Any = None,
-        mode: str = "all",
-        sprint: str | None = None,
-        sprint_path: str | None = None,
-        states: list[str] | None = None,
-        work_item_types: list[str] | None = None,
         ticket_ids: list[str] | None = None,
         project: str | None = None,
     ) -> str:
-        """The JQL to run: the compiled clause query when there is one.
+        """The JQL to run: a compiled clause query, known keys, or the project.
 
-        A compiled query **replaces** the legacy selection outright rather than
-        blending with it. Mixing the two would silently re-apply a condition the
-        user had removed, which is the same rule the Azure DevOps adapter follows.
+        Explicit keys are **not** scoped to the project, and deliberately so: a
+        caller naming ``AB-1`` has already said which issue it means, and ANDing a
+        project onto it could only turn a valid selection into an empty result.
         """
-        if spec is not None:
-            return build_jql(spec, (project or "").strip() or self.project)
-        return self._build_jql(
-            mode=mode,
-            sprint=sprint,
-            sprint_path=sprint_path,
-            states=states,
-            work_item_types=work_item_types,
-            ticket_ids=ticket_ids,
-            project=project,
-        )
-
-    def _build_jql(
-        self,
-        *,
-        mode: str,
-        sprint: str | None,
-        sprint_path: str | None = None,
-        states: list[str] | None = None,
-        work_item_types: list[str] | None = None,
-        ticket_ids: list[str] | None = None,
-        project: str | None = None,
-    ) -> str:
-        if mode == "selected" and ticket_ids:
-            return issue_keys_jql(ticket_ids)
-
-        conditions: list[str] = []
         proj = (project or "").strip() or self.project
-        if proj:
-            conditions.append(f"project = {quote(proj)}")
-        if mode == "sprint" and (sprint_path or sprint):
-            if sprint_path and str(sprint_path).isdigit():
-                # A sprint id is an integer field; digits cannot carry an injection.
-                conditions.append(f"sprint = {sprint_path}")
-            else:
-                conditions.append(f"sprint = {quote(str(sprint or sprint_path))}")
-        elif mode == "assigned":
-            conditions.append("assignee = currentUser()")
-        if states:
-            conditions.append("status IN (" + ", ".join(quote(s) for s in states) + ")")
-        if work_item_types:
-            conditions.append("issuetype IN (" + ", ".join(quote(t) for t in work_item_types) + ")")
-        return " AND ".join(conditions) if conditions else "order by created DESC"
+        if spec is not None:
+            return build_jql(spec, proj)
+        if ticket_ids:
+            keys = issue_keys_jql(ticket_ids)
+            if keys:
+                return f"{keys} ORDER BY updated DESC"
+        return build_jql(TicketQuery(), proj)
 
     # -- Normalisation ----------------------------------------------------
     def _normalize(self, issue: dict[str, Any]) -> NormalizedTicket:

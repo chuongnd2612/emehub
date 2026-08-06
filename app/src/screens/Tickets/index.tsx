@@ -446,7 +446,6 @@ export default function TicketsScreen() {
       <ImportDialog
         open={modal === "import"}
         provider={provider}
-        schema={fields}
         onClose={() => setModal(null)}
         onImport={run}
       />

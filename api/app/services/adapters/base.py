@@ -163,44 +163,39 @@ class ProviderAdapter(ABC):
     def fetch_tickets(
         self,
         *,
-        mode: str = "sprint",
-        sprint: str | None = None,
-        sprint_path: str | None = None,
-        area_path: str | None = None,
-        states: list[str] | None = None,
-        work_item_types: list[str] | None = None,
+        spec: Any = None,
         ticket_ids: list[str] | None = None,
         include_comments: bool = False,
         project: str | None = None,
-        spec: Any = None,
     ) -> list[NormalizedTicket]:
         """Fetch and normalise tickets for the given selection.
 
-        ``spec`` is a ``services.ticket_query.TicketQuery``. When given it
-        **replaces** the ``mode``/``sprint``/``states``/… selection entirely — an
-        adapter must not blend the two, or a clause the user removed would still
-        be applied from a legacy argument. Typed ``Any`` so the adapter layer keeps
-        no import-time dependency on the query module.
-
-        An adapter whose provider cannot express clauses ignores ``spec``; the
-        capability matrix is what stops the UI offering one in the first place.
+        **Two ways to say what to pull, and no third.** The
+        ``mode``/``sprint``/``area_path``/``states``/``work_item_types`` arguments
+        this method used to take are gone: they were a filter language that could
+        express a fraction of what a clause query can, and keeping them alongside
+        one meant every adapter carried two query builders and had to be told, in a
+        comment, not to blend them.
 
         Args:
-            mode: ``sprint`` (the sprint named below), ``assigned`` (the
-                authenticated identity's items) or ``selected`` (``ticket_ids``).
-            sprint: the human sprint name.
-            sprint_path: the provider-native identifier from
-                :meth:`list_sprints` (ADO iteration path, Jira sprint id).
-                Preferred over ``sprint`` when present.
-            area_path: ADO area path filter; ignored elsewhere.
-            states: provider-native state names to include.
-            work_item_types: provider-native type names to include.
-            ticket_ids: external ids, for ``mode="selected"``.
+            spec: a ``services.ticket_query.TicketQuery`` — the filter. Compiled by
+                each adapter into its own dialect (WIQL / JQL / search qualifiers).
+                Typed ``Any`` so the adapter layer keeps no import-time dependency
+                on the query module.
+            ticket_ids: external ids, for pulling *known* work items. Not a filter,
+                which is why it is not a clause: the query model has no id field,
+                and giving it one would make a list pretend to be a query. Ignored
+                when ``spec`` is given.
             include_comments: ``False`` for bulk sync — comments cost one extra
                 request per ticket, an N+1 that makes a sprint sync crawl. The
                 detail view loads them lazily via :meth:`fetch_comments`.
             project: override the connection's configured default project.
                 Providers with no project concept ignore it.
+
+        With neither ``spec`` nor ``ticket_ids``, an adapter returns everything in
+        the project it can see. Callers are expected to require one of the two — see
+        ``routers.tickets.SyncRequest`` — because "everything" is a decision worth
+        making explicitly rather than by omission.
         """
 
     def count_tickets(self, *, spec: Any = None, project: str | None = None) -> int:

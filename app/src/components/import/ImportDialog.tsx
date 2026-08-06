@@ -4,24 +4,26 @@
 //
 //   580px wide, var(--pop), radius 22, shadow-dialog, scaleIn .22s; scrim
 //   rgba(6,6,10,.62) + blur(7px) + fadeIn .2s          → <Modal size="dialog">
-//   Basic  → WHAT TO PULL + three radio rows
-//   Advanced → FILTER BY FIELD, a 2-column grid of the SAME provider schema the
-//   Tickets toolbar renders, each showing `Any` until set; Jira adds a mono JQL
-//   field, GitHub a mono search-query field.
+//   Basic    → WHAT TO PULL, three radio rows
+//   Advanced → BUILD A QUERY, the clause builder
 //
-// ## The schema is passed in, and Advanced can be empty
+// ## Both tabs produce the same thing
 //
-// Filter options are distinct values present in the hub's ticket store, which
-// the Tickets screen has already loaded (`buildTicketFilterSchema`). Passing it
-// in avoids a second fetch and keeps the two lists identical. A caller with no
-// tickets yet passes nothing, and Advanced says why it is empty rather than
-// showing dropdowns with no options.
+// A clause query. Basic is a shortcut to three common ones (`scopes.ts`), Advanced
+// builds one by hand — and since the hub has no other way to be told what to pull
+// (#130), there is exactly one code path behind both.
 //
-// ## JQL and the GitHub search query are gone
+// The old Advanced was a grid of single-value dropdowns whose options came from
+// work items **already mirrored**, which is why it could not help you import: no
+// synced tickets meant no options. The builder reads the provider's own metadata
+// instead, which is the whole point of the change.
 //
-// `SyncRequest` has no `jql` and no `searchQuery` field, and the adapters build
-// their own query from `mode` + the field filters. An input that is collected
-// and then dropped on the floor is worse than no input.
+// ## No JQL or search-query field
+//
+// `SyncRequest` has no `jql` and no `searchQuery`. The compilers generate both from
+// clauses, and a hand-written query string would be an unescaped one — see
+// `services/jql.py` on why that field's posture does not carry over from
+// dev-assistant.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -34,8 +36,6 @@ import {
   type ImportScope,
   type ProviderKey,
   type SavedQuery,
-  type TicketFilterField,
-  type TicketFilters,
   type WorkItemMetadata,
 } from "@/data";
 import {
@@ -52,12 +52,10 @@ import {
   Pill,
   RadioGroup,
   Segmented,
-  Dropdown,
   toast,
 } from "@/components/ui";
 import { QueryBuilder } from "@/components/query";
-import { cn } from "@/lib/cn";
-import { IMPORT_SCOPE_OPTIONS } from "./scopes";
+import { scopesFor } from "./scopes";
 
 /** Which compiler a provider's query is destined for. */
 const DESTINATION: Record<ProviderKey, Destination> = {
@@ -86,11 +84,6 @@ export interface ImportDialogProps {
   open: boolean;
   /** Which provider to pull from. Exactly one is active at a time. */
   provider: ProviderKey;
-  /**
-   * The provider's filter fields, already resolved against the store. Omit when
-   * the caller has none — Advanced then explains itself.
-   */
-  schema?: TicketFilterField[];
   /** Scrim click, ✕, Esc and Cancel. */
   onClose: () => void;
   /**
@@ -110,7 +103,7 @@ const MODE_OPTIONS = [
   { value: "advanced" as const, label: "Advanced" },
 ];
 
-/** Small tracked uppercase section label — `WHAT TO PULL` / `FILTER BY FIELD`. */
+/** Small tracked uppercase section label — `WHAT TO PULL` / `BUILD A QUERY`. */
 function SectionLabel({ children }: { children: string }) {
   return (
     <div className="text-[10.5px] font-bold tracking-[.11em] text-label">
@@ -119,57 +112,9 @@ function SectionLabel({ children }: { children: string }) {
   );
 }
 
-/** One full-width field dropdown in the Advanced grid. Shows `Any` until set. */
-function FieldSelect({
-  field,
-  value,
-  onPick,
-}: {
-  field: TicketFilterField;
-  value: string | undefined;
-  onPick: (value: string) => void;
-}) {
-  const set = Boolean(value);
-  return (
-    <div className="flex flex-col gap-[7px]">
-      <span className="text-[11.5px] font-semibold text-muted">
-        {field.label}
-      </span>
-      <Dropdown
-        ddKey={`import-field-${field.key}`}
-        width={264}
-        value={value ?? null}
-        onSelect={onPick}
-        items={field.options.map((o) => ({ value: o, label: o }))}
-        // The dialog sits at z-1100; the panel has to clear it.
-        className="z-[1200]"
-        trigger={({ ref, toggle }) => (
-          <button
-            ref={ref}
-            type="button"
-            data-surface
-            onClick={toggle}
-            className={cn(
-              "flex w-full cursor-pointer items-center justify-between gap-1.5 rounded-control-lg",
-              "border px-3.5 py-[10px] text-[12.5px] font-semibold",
-              set
-                ? "border-pb bg-pt text-p-on"
-                : "border-bd2 bg-inset text-txt4 hover:bg-card3",
-            )}
-          >
-            <span className="min-w-0 truncate">{value ?? "Any"}</span>
-            <Icon name="chevronDown" size={12} strokeWidth={2.2} />
-          </button>
-        )}
-      />
-    </div>
-  );
-}
-
 export function ImportDialog({
   open,
   provider,
-  schema = [],
   onClose,
   onImport,
   defaultMode = "basic",
@@ -177,7 +122,6 @@ export function ImportDialog({
 }: ImportDialogProps) {
   const [mode, setMode] = useState<ImportMode>(defaultMode);
   const [scope, setScope] = useState<ImportScope>(defaultScope);
-  const [filters, setFilters] = useState<TicketFilters>({});
 
   const meta = PROVIDERS[provider];
   const destination = DESTINATION[provider];
@@ -266,7 +210,6 @@ export function ImportDialog({
   // capability matrix, so a clause built for ADO can be one Jira has no column for
   // — carrying it over would show a row that only fails on Apply.
   useEffect(() => {
-    setFilters({});
     setDraft(emptyQuery(destination));
     setPreviewed(null);
     setCount(null);
@@ -279,14 +222,20 @@ export function ImportDialog({
     setScope(defaultScope);
   }, [open, defaultMode, defaultScope]);
 
-  const pick = useCallback((key: string, value: string) => {
-    // Picking the same value again clears the field.
-    setFilters((f) => ({ ...f, [key]: f[key] === value ? undefined : value }));
-  }, []);
+  // Only the scopes this provider can express. GitHub has no sprints, so there is
+  // no honest "Active sprint" for it — see `scopes.ts`.
+  const available = useMemo(() => scopesFor(destination), [destination]);
+
+  // A scope the new provider cannot express must not stay selected.
+  useEffect(() => {
+    if (!available.some((o) => o.key === scope)) {
+      setScope(available[0]?.key ?? "all");
+    }
+  }, [available, scope]);
 
   const scopeOptions = useMemo(
     () =>
-      IMPORT_SCOPE_OPTIONS.map((o) => ({
+      available.map((o) => ({
         value: o.key,
         label: (
           <span className="flex flex-col gap-[2px]">
@@ -297,7 +246,15 @@ export function ImportDialog({
           </span>
         ),
       })),
-    [meta.name],
+    [available, meta.name],
+  );
+
+  // Basic and Advanced both come out as a clause query — Basic is a shortcut to a
+  // common one, not a different way of asking. The hub has no other way to be told
+  // what to pull (#130).
+  const scopeQuery = useMemo(
+    () => available.find((o) => o.key === scope)?.query(destination) ?? null,
+    [available, scope, destination],
   );
 
   const submit = () => {
@@ -305,14 +262,18 @@ export function ImportDialog({
       provider,
       mode,
       scope,
-      filters: {},
       // Only a query that has been APPLIED is imported. Importing the draft would
       // pull something the user never saw a count for.
-      query: mode === "advanced" && previewed ? previewed : undefined,
+      query: (mode === "advanced" ? previewed : scopeQuery) ?? undefined,
     };
     onClose();
     onImport(request);
   };
+
+  // Nothing to import is not a state the dialog should let you press through: in
+  // Advanced that means the query has not been applied yet, so the count on screen
+  // would not belong to what got pulled.
+  const canImport = mode === "advanced" ? previewed !== null : scopeQuery !== null;
 
   return (
     <Modal
@@ -333,6 +294,8 @@ export function ImportDialog({
           <Button
             variant="primary"
             onClick={submit}
+            disabled={!canImport}
+            title={canImport ? undefined : "Apply the query first"}
             icon={<Icon name="download" size={14} strokeWidth={2.3} />}
           >
             Import now

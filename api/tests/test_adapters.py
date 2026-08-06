@@ -20,6 +20,7 @@ from app.services.adapters.azure_devops import AzureDevOpsAdapter, parse_org_url
 from app.services.adapters.base import REDACTED, ProviderError, scrub
 from app.services.adapters.github import GitHubAdapter
 from app.services.adapters.jira import JiraAdapter
+from app.services.ticket_query import QueryClause, TicketQuery
 
 PAT = "pat-0123456789-abcdef"
 
@@ -106,7 +107,17 @@ def test_azure_devops_normalizes_a_recorded_work_item():
             ("GET", "/_apis/wit/workitems"): ADO_WORK_ITEMS,
         }
     )
-    [ticket] = ado_adapter(mock).fetch_tickets(mode="sprint", sprint_path="Surveyor\\Release 1\\Sprint 3")
+    [ticket] = ado_adapter(mock).fetch_tickets(
+        spec=TicketQuery(
+            clauses=(
+                QueryClause(
+                    field="iterationPath",
+                    operator="under",
+                    values=("Surveyor\\Release 1\\Sprint 3",),
+                ),
+            )
+        )
+    )
 
     assert ticket["external_id"] == "4821"
     assert ticket["provider_kind"] == "azure_devops"
@@ -131,26 +142,32 @@ def test_azure_devops_normalizes_a_recorded_work_item():
     assert ticket["comments"] == []
 
 
-def test_azure_devops_wiql_retries_without_the_iteration_filter():
-    """A sprint that does not exist in the project is the commonest WIQL 400;
-    the sync degrades to the project scope instead of returning nothing."""
+def test_azure_devops_does_not_retry_a_rejected_query_unscoped():
+    """The old sprint retry existed because `mode="sprint"` DERIVED an iteration path
+    the caller never saw, so it could be wrong through no fault of theirs. A clause
+    query holds only paths the user picked from this project's own metadata — so a
+    400 is a real answer, and dropping the condition to "succeed" would return more
+    work items than were asked for.
+    """
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/wiql"):
-            query = json.loads(request.content)["query"]
-            calls.append(query)
-            if "IterationPath" in query:
-                return httpx.Response(400, json={"message": "TF51011: unknown iteration"})
-            return httpx.Response(200, json=ADO_WIQL)
+            calls.append(json.loads(request.content)["query"])
+            return httpx.Response(400, json={"message": "TF51011: unknown iteration"})
         return httpx.Response(200, json=ADO_WORK_ITEMS)
 
-    tickets = ado_adapter(httpx.MockTransport(handler)).fetch_tickets(
-        mode="sprint", sprint="Sprint 99"
-    )
-    assert len(calls) == 2
-    assert "IterationPath" not in calls[1]
-    assert len(tickets) == 1
+    with pytest.raises(ProviderError, match="rejected the query"):
+        ado_adapter(httpx.MockTransport(handler)).fetch_tickets(
+            spec=TicketQuery(
+                clauses=(
+                    QueryClause(
+                        field="iterationPath", operator="under", values=("Surveyor\Sprint 99",)
+                    ),
+                )
+            )
+        )
+    assert len(calls) == 1, "the condition was silently dropped and retried"
 
 
 def test_azure_devops_resolves_the_state_against_the_work_item_type():
@@ -427,7 +444,13 @@ def jira_adapter(mock, **config):
 
 def test_jira_normalizes_a_recorded_issue():
     mock = transport({("POST", "/rest/api/3/search/jql"): JIRA_SEARCH})
-    [ticket] = jira_adapter(mock).fetch_tickets(mode="sprint", sprint_path="41")
+    [ticket] = jira_adapter(mock).fetch_tickets(
+        spec=TicketQuery(
+            clauses=(
+                QueryClause(field="iterationPath", operator="is", values=("Sprint 3",)),
+            )
+        )
+    )
 
     assert ticket["external_id"] == "SUR-412"
     assert ticket["provider_kind"] == "jira"
@@ -451,23 +474,20 @@ def test_jira_normalizes_a_recorded_issue():
     assert ticket["labels"] == ["security"]
 
 
-def test_jira_builds_jql_from_the_selection():
-    """Every value quoted, including the issue keys and the sprint name.
-
-    They used to go in bare, which was an injection waiting for a caller: this legacy
-    path builds JQL from a request body exactly as the clause path does. Jira accepts
-    a quoted key, so the quoting costs nothing. ``test_jql.py`` covers why the quote
-    is a double one and why the backslash is escaped first.
+def test_jira_compiles_the_selection_it_is_given():
+    """The legacy `_build_jql` is gone with the `mode`/`sprint`/`states` fields it
+    served (#130). Its replacement is `services.jql`, which is tested there — what is
+    worth asserting here is that the adapter reaches for it.
     """
     adapter = jira_adapter(transport({}))
-    assert adapter._build_jql(mode="selected", sprint=None, ticket_ids=["SUR-1", "SUR-2"]) == (
-        'key in ("SUR-1", "SUR-2")'
+    assert adapter._compile(ticket_ids=["SUR-1", "SUR-2"]) == (
+        'key in ("SUR-1", "SUR-2") ORDER BY updated DESC'
     )
-    # The numeric sprint id is preferred — two boards can share a sprint name — and
-    # digits are the one operand that can safely go in bare.
-    assert "sprint = 41" in adapter._build_jql(mode="sprint", sprint="Sprint 3", sprint_path="41")
-    assert 'sprint = "Sprint 3"' in adapter._build_jql(mode="sprint", sprint="Sprint 3")
-    assert "assignee = currentUser()" in adapter._build_jql(mode="assigned", sprint=None)
+    assert adapter._compile(
+        spec=TicketQuery(
+            clauses=(QueryClause(field="state", operator="is", values=("Done",)),)
+        )
+    ) == 'project = "SUR" AND status = "Done" ORDER BY updated DESC'
 
 
 def test_jira_reads_the_email_from_config_not_from_the_secret_store():

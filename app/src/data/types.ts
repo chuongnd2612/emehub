@@ -366,17 +366,15 @@ export type ImportScope = "sprint" | "assigned" | "all";
 
 export interface ImportRequest {
   provider: ProviderKey;
+  /** Which tab composed the query. Only affects the wording of the result. */
   mode: "basic" | "advanced";
+  /** Which Basic preset was chosen. Only affects the wording of the result. */
   scope: ImportScope;
-  filters: TicketFilters;
-  /** Jira only. */
-  jql?: string;
-  /** GitHub only. */
-  searchQuery?: string;
   /**
-   * A clause query (`data/ticketQuery`). When present the hub uses it and ignores
-   * `mode`/`scope`/`filters` entirely — blending them would silently re-apply a
-   * condition the user had removed.
+   * The clause query to import (`data/ticketQuery`) — the **only** selection the
+   * hub accepts (#130). Basic composes one from its scope
+   * (`components/import/scopes.ts`), Advanced from the builder. Absent means
+   * nothing was applied, and the dialog will not let it be submitted.
    */
   query?: import("./ticketQuery").TicketQuery;
 }

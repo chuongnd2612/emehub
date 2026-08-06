@@ -45,6 +45,18 @@ def member(client, make_user, auth_headers):
     return user, auth_headers("syncer@emesoft.net", "password12345")
 
 
+#: A clause query, for the tests that are about queries.
+QUERY = {
+    "clauses": [{"field": "state", "operator": "is", "values": ["Active"]}],
+    "match": "all",
+    "sort": {"field": "changedDate", "direction": "desc"},
+}
+
+#: What to pull, for the tests that are about the STORE rather than the selection.
+#: Named ids rather than a query: they need `sync` to reach the source at all, and
+#: an id list is the selection that needs no destination to validate against.
+PULL = {"ticketIds": ["SUR-1428"]}
+
 ITEM = {
     "external_id": "SUR-1428",
     "title": "Eligibility import fails",
@@ -79,7 +91,7 @@ def test_the_seam_is_resolved_at_call_time_not_import_time(client, member):
     source = FakeSource([[ITEM]])
     with ticket_service.use_ticket_source_resolver(resolver_for(source)):
         assert (
-            client.post("/tickets/sync", json={"providerKind": "ado"}, headers=headers).json()[
+            client.post("/tickets/sync", json={"providerKind": "ado", **PULL}, headers=headers).json()[
                 "synced"
             ]
             == 1
@@ -98,14 +110,14 @@ def test_the_default_resolver_reaches_the_real_connections_layer(client, member)
     is missing") and never a 200 with zero tickets.
     """
     _, headers = member
-    response = client.post("/tickets/sync", json={"providerKind": "ado"}, headers=headers)
+    response = client.post("/tickets/sync", json={"providerKind": "ado", **PULL}, headers=headers)
     assert response.status_code == 404
     detail = response.json()["detail"]
     assert "connection" in detail.lower()
     assert "not available in this deployment" not in detail
 
 
-def test_the_selection_is_passed_through_to_the_source(client, member):
+def test_a_query_is_passed_through_to_the_source(client, member):
     _, headers = member
     source = FakeSource([[]])
     with ticket_service.use_ticket_source_resolver(resolver_for(source)):
@@ -113,28 +125,60 @@ def test_the_selection_is_passed_through_to_the_source(client, member):
             "/tickets/sync",
             json={
                 "connectionId": 3,
-                "mode": "query",
-                "sprint": "Sprint 12",
-                "sprintPath": "Surency\\Iteration 12",
-                "areaPath": "Surency\\Data Platform",
-                "states": ["Active"],
-                "workItemTypes": ["Bug"],
-                "ticketIds": ["SUR-1"],
+                "providerKind": "azure_devops",
                 "project": "Surency",
+                "query": QUERY,
             },
             headers=headers,
         )
     call = source.calls[0]
-    assert call["mode"] == "query"
-    assert call["sprint"] == "Sprint 12"
-    assert call["sprint_path"] == "Surency\\Iteration 12"
-    assert call["area_path"] == "Surency\\Data Platform"
-    assert call["states"] == ["Active"]
-    assert call["work_item_types"] == ["Bug"]
-    assert call["ticket_ids"] == ["SUR-1"]
     assert call["project"] == "Surency"
+    assert call["spec"].clauses[0].field == "state"
     # Comments are an N+1 during bulk sync; they are never requested here.
     assert call["include_comments"] is False
+
+
+def test_named_ids_are_passed_through_to_the_source(client, member):
+    """Selecting known work items is not filtering, so it is not a clause — and it
+    is the one selection that survived the removal of the legacy filter fields."""
+    _, headers = member
+    source = FakeSource([[]])
+    with ticket_service.use_ticket_source_resolver(resolver_for(source)):
+        client.post(
+            "/tickets/sync",
+            json={"connectionId": 3, "ticketIds": ["SUR-1", "SUR-2"]},
+            headers=headers,
+        )
+    call = source.calls[0]
+    assert call["ticket_ids"] == ["SUR-1", "SUR-2"]
+    assert call["spec"] is None
+
+
+def test_a_sync_that_says_nothing_about_what_to_pull_is_refused(client, member):
+    """422 rather than read as "everything". A sync that pulls a whole project
+    because a field was left out is expensive, surprising, and indistinguishable
+    from a caller that meant to send a filter."""
+    _, headers = member
+    source = FakeSource([[ITEM]])
+    with ticket_service.use_ticket_source_resolver(resolver_for(source)):
+        response = client.post("/tickets/sync", json={"connectionId": 7}, headers=headers)
+    assert response.status_code == 422
+    assert "Say what to import" in response.json()["detail"]
+    assert source.calls == [], "the provider was called anyway"
+
+
+def test_a_legacy_selection_field_is_refused_rather_than_ignored(client, member):
+    """`mode`/`sprint`/`states`/… are gone (#130). `extra="forbid"` is what makes
+    that a 422 instead of a silent whole-project pull — an ignored filter returns
+    MORE work items than were asked for."""
+    _, headers = member
+    for legacy in ("mode", "sprint", "sprintPath", "areaPath"):
+        response = client.post(
+            "/tickets/sync",
+            json={"connectionId": 7, **PULL, legacy: "Sprint 12"},
+            headers=headers,
+        )
+        assert response.status_code == 422, legacy
 
 
 # ---------------------------------------------------------------- upsert
@@ -145,7 +189,7 @@ def test_sync_stores_every_normalised_field(client, member, db_session):
     source = FakeSource([[ITEM]])
     with ticket_service.use_ticket_source_resolver(resolver_for(source)):
         body = client.post(
-            "/tickets/sync", json={"connectionId": 7, "projectId": 5}, headers=headers
+            "/tickets/sync", json={"connectionId": 7, "projectId": 5, **PULL}, headers=headers
         ).json()
 
     assert body["synced"] == 1
@@ -170,8 +214,8 @@ def test_resync_updates_in_place_rather_than_duplicating(client, member, db_sess
     source = FakeSource([[ITEM], [changed]])
 
     with ticket_service.use_ticket_source_resolver(resolver_for(source)):
-        first = client.post("/tickets/sync", json={"connectionId": 7}, headers=headers).json()
-        second = client.post("/tickets/sync", json={"connectionId": 7}, headers=headers).json()
+        first = client.post("/tickets/sync", json={"connectionId": 7, **PULL}, headers=headers).json()
+        second = client.post("/tickets/sync", json={"connectionId": 7, **PULL}, headers=headers).json()
 
     assert first["synced"] == second["synced"] == 1
     assert first["tickets"][0]["id"] == second["tickets"][0]["id"]  # same row
@@ -191,8 +235,8 @@ def test_resync_of_a_partial_payload_clears_rather_than_keeps_stale_values(
     _, headers = member
     source = FakeSource([[ITEM], [{"external_id": "SUR-1428", "title": "Bare"}]])
     with ticket_service.use_ticket_source_resolver(resolver_for(source)):
-        client.post("/tickets/sync", json={"connectionId": 7}, headers=headers)
-        client.post("/tickets/sync", json={"connectionId": 7}, headers=headers)
+        client.post("/tickets/sync", json={"connectionId": 7, **PULL}, headers=headers)
+        client.post("/tickets/sync", json={"connectionId": 7, **PULL}, headers=headers)
 
     ticket = db_session.query(Ticket).one()
     assert ticket.title == "Bare"
@@ -209,11 +253,11 @@ def test_the_same_external_id_in_two_providers_is_two_rows(client, member, db_se
     with ticket_service.use_ticket_source_resolver(
         resolver_for(FakeSource([[item]]), provider_kind="ado")
     ):
-        client.post("/tickets/sync", json={"providerKind": "ado"}, headers=headers)
+        client.post("/tickets/sync", json={"providerKind": "ado", **PULL}, headers=headers)
     with ticket_service.use_ticket_source_resolver(
         resolver_for(FakeSource([[item]]), provider_kind="jira")
     ):
-        client.post("/tickets/sync", json={"providerKind": "jira"}, headers=headers)
+        client.post("/tickets/sync", json={"providerKind": "jira", **PULL}, headers=headers)
 
     assert db_session.query(Ticket).count() == 2
 
@@ -224,7 +268,7 @@ def test_an_item_without_an_external_id_is_skipped(client, member, db_session):
     _, headers = member
     source = FakeSource([[{"title": "nameless"}, ITEM]])
     with ticket_service.use_ticket_source_resolver(resolver_for(source)):
-        body = client.post("/tickets/sync", json={"connectionId": 7}, headers=headers).json()
+        body = client.post("/tickets/sync", json={"connectionId": 7, **PULL}, headers=headers).json()
 
     assert body["synced"] == 1
     assert db_session.query(Ticket).count() == 1
@@ -247,7 +291,7 @@ def test_a_resync_never_touches_another_members_identical_ticket(
     with ticket_service.use_ticket_source_resolver(resolver_for(source)):
         client.post(
             "/tickets/sync",
-            json={"connectionId": 7},
+            json={"connectionId": 7, **PULL},
             headers=auth_headers("bob-s@emesoft.net", "password12345"),
         )
 
@@ -266,7 +310,7 @@ def test_a_sync_updates_a_shared_ticket_rather_than_shadowing_it(client, member,
     db_session.commit()
 
     with ticket_service.use_ticket_source_resolver(resolver_for(FakeSource([[ITEM]]))):
-        client.post("/tickets/sync", json={"connectionId": 7}, headers=headers)
+        client.post("/tickets/sync", json={"connectionId": 7, **PULL}, headers=headers)
 
     ticket = db_session.query(Ticket).one()
     assert ticket.owner_id is None
@@ -282,7 +326,7 @@ def test_a_provider_failure_is_a_502(client, member):
             raise RuntimeError("ADO returned 500")
 
     with ticket_service.use_ticket_source_resolver(resolver_for(Exploding())):
-        response = client.post("/tickets/sync", json={"connectionId": 7}, headers=headers)
+        response = client.post("/tickets/sync", json={"connectionId": 7, **PULL}, headers=headers)
     assert response.status_code == 502
     assert "ADO returned 500" in response.json()["detail"]
 
@@ -294,7 +338,7 @@ def test_no_such_connection_is_a_404(client, member):
         raise LookupError("No work-item connection is configured for 'jira'")
 
     with ticket_service.use_ticket_source_resolver(_missing):
-        response = client.post("/tickets/sync", json={"providerKind": "jira"}, headers=headers)
+        response = client.post("/tickets/sync", json={"providerKind": "jira", **PULL}, headers=headers)
     assert response.status_code == 404
 
 
@@ -302,7 +346,7 @@ def test_no_such_connection_is_a_404(client, member):
 def test_synced_tickets_are_immediately_readable(client, member):
     _, headers = member
     with ticket_service.use_ticket_source_resolver(resolver_for(FakeSource([[ITEM]]))):
-        client.post("/tickets/sync", json={"connectionId": 7}, headers=headers)
+        client.post("/tickets/sync", json={"connectionId": 7, **PULL}, headers=headers)
 
     listed = client.get("/tickets?providerKind=ado", headers=headers).json()
     assert [t["externalId"] for t in listed["items"]] == ["SUR-1428"]
@@ -316,12 +360,14 @@ def test_sync_is_audited_as_a_ticket_event(client, member, db_session):
     user, headers = member
     with ticket_service.use_ticket_source_resolver(resolver_for(FakeSource([[ITEM]]))):
         client.post(
-            "/tickets/sync", json={"connectionId": 7, "sprint": "Sprint 12"}, headers=headers
+            "/tickets/sync", json={"connectionId": 7, **PULL}, headers=headers
         )
 
     event = db_session.query(AuditLog).filter(AuditLog.category == "ticket").one()
     assert event.action == "Synced tickets"
-    assert event.target == "Sprint 12"
-    assert event.meta == "1 work items"
+    # The connection's label, not a sprint name: the selection is no longer one
+    # field, so the audit row names the source and describes the ask separately.
+    assert event.target == "ADO — Surency"
+    assert event.meta == "1 work items · 1 named"
     assert event.actor_id == user.id
     assert event.owner_id == user.id
