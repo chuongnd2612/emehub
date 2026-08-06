@@ -575,16 +575,6 @@ export type LoginOutcome =
   | { kind: "authed"; user: AuthUser }
   | { kind: "mfa"; mfaToken: string };
 
-export interface ApiKey {
-  id: string;
-  name: string;
-  /** Visible key prefix; the remainder is never returned. */
-  prefix: string;
-  scope: string;
-  used: string;
-  created: string;
-}
-
 /* ── Overview ────────────────────────────────────────────────────────────── */
 
 export type ActivityKind = "q" | "d" | "sync" | "kb" | "warn" | "key";

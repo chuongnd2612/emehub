@@ -1,20 +1,25 @@
 // Handoff § 7. Authentication (`/app/auth`).
 //
-// Tabs: Single sign-on · Sessions · API keys · Login providers.
+// The handoff has four tabs: Single sign-on · Sessions · API keys · Login
+// providers. **Two are gone.**
+//
+// `Single sign-on` hardcoded an entity id, an ACS URL, a certificate expiry and a
+// seven-bar sign-ins chart; `API keys` listed three `ehk_live_…` keys with usage
+// times. The hub has neither feature — no endpoint, no model, no config — so both
+// tabs were pure invention, and a tab leading to a feature that does not exist is
+// the same lying-control problem the ticket filters already refuse. They come back
+// with the features, not before.
+//
 // The active tab is intra-screen SELECTION, so it lives in the URL as `?tab=`
 // — not in Zustand (CLAUDE.md › Frontend conventions).
 
 import { useSearchParams } from "react-router-dom";
-import { ApiKeysPanel } from "./ApiKeysPanel";
 import { LoginProvidersPanel } from "./LoginProvidersPanel";
 import { SessionsPanel } from "./SessionsPanel";
-import { SsoPanel } from "./SsoPanel";
 import { TabStrip } from "./TabStrip";
 
 const TABS = [
-  { value: "sso", label: "Single sign-on" },
   { value: "sessions", label: "Sessions" },
-  { value: "keys", label: "API keys" },
   { value: "providers", label: "Login providers" },
 ] as const;
 
@@ -26,7 +31,8 @@ const isTab = (value: string | null): value is AuthTab =>
 export default function AuthScreen() {
   const [params, setParams] = useSearchParams();
   const raw = params.get("tab");
-  const tab: AuthTab = isTab(raw) ? raw : "sso";
+  // A bookmarked `?tab=sso` or `?tab=keys` lands on Sessions rather than blank.
+  const tab: AuthTab = isTab(raw) ? raw : "sessions";
 
   const setTab = (next: AuthTab) => {
     const p = new URLSearchParams(params);
@@ -38,9 +44,7 @@ export default function AuthScreen() {
     <div className="animate-fade-in-up flex flex-col gap-3.5">
       <TabStrip tabs={TABS} value={tab} onChange={setTab} />
 
-      {tab === "sso" && <SsoPanel />}
       {tab === "sessions" && <SessionsPanel />}
-      {tab === "keys" && <ApiKeysPanel />}
       {tab === "providers" && <LoginProvidersPanel />}
     </div>
   );

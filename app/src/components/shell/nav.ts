@@ -78,7 +78,7 @@ export const ROUTE_HEADER: Record<string, HeaderContent> = {
   },
   "/app/auth": {
     title: "Authentication",
-    subtitle: "SSO, sessions, API keys and login providers",
+    subtitle: "Sessions and sign-in methods",
   },
   "/app/users": {
     title: "User Management",

@@ -13,7 +13,6 @@ import { useNavigate } from "react-router-dom";
 import { useUi } from "@/store/ui";
 import { AddKnowledgeModal } from "./AddKnowledgeModal";
 import { InviteMemberModal } from "./InviteMemberModal";
-import { NewApiKeyModal } from "./NewApiKeyModal";
 import { NewProjectModal } from "./NewProjectModal";
 
 export function ModalHost() {
@@ -26,7 +25,6 @@ export function ModalHost() {
     <>
       <NewProjectModal open={modal === "project"} onClose={close} />
       <AddKnowledgeModal open={modal === "knowledge"} onClose={close} />
-      <NewApiKeyModal open={modal === "apiKey"} onClose={close} />
       <InviteMemberModal
         open={modal === "invite"}
         onClose={close}
