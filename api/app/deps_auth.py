@@ -198,11 +198,46 @@ def current_user(
 
 
 # ---------------------------------------------------------------- cookies
+def cookie_domain_for(request: Request | None) -> str | None:
+    """The ``Domain`` attribute to send, or ``None`` for a host-only cookie.
+
+    ``EMEHUB_COOKIE_DOMAIN`` exists so the refresh cookie is shared with an agent
+    on a sibling subdomain — that is the whole mechanism of the sign-in hand-off
+    (ADR 0008), and it must keep working exactly as it does.
+
+    But a cookie whose ``Domain`` is not the request's host or a parent of it is
+    **rejected outright by every browser**. Sending it unconditionally meant the
+    hub could not hold a session on any *other* host: reached at
+    ``http://localhost:5180`` it set ``Domain=.chuongnd.click``, the browser
+    stored nothing, and the next load called ``/auth/refresh`` with no cookie,
+    got a 401 and rendered the login screen. Logging in appeared to work and
+    never stuck.
+
+    So the attribute is sent only when it can be honoured, and otherwise omitted
+    for a host-only cookie. Nothing is lost by that: on a host outside the
+    configured domain the shared cookie was never stored in the first place, and
+    such a host cannot do a cross-origin hand-off anyway.
+    """
+    configured = (settings.cookie_domain or "").strip()
+    if not configured:
+        return None
+    host = ((request.url.hostname if request else None) or "").lower()
+    parent = configured.lstrip(".").lower()
+    if host and (host == parent or host.endswith(f".{parent}")):
+        return configured
+    return None
+
+
 def set_auth_cookies(
-    response: Response, *, refresh_token: str, csrf_token: str, remember: bool
+    response: Response,
+    *,
+    refresh_token: str,
+    csrf_token: str,
+    remember: bool,
+    request: Request | None = None,
 ) -> None:
     max_age = int(auth_service.refresh_ttl(remember).total_seconds())
-    domain = settings.cookie_domain or None
+    domain = cookie_domain_for(request)
     response.set_cookie(
         REFRESH_COOKIE,
         refresh_token,
@@ -225,8 +260,13 @@ def set_auth_cookies(
     )
 
 
-def clear_auth_cookies(response: Response) -> None:
-    domain = settings.cookie_domain or None
+def clear_auth_cookies(response: Response, request: Request | None = None) -> None:
+    """Delete both cookies.
+
+    The ``Domain`` has to match how they were *set* or the deletion silently
+    misses — hence the same :func:`cookie_domain_for` decision here.
+    """
+    domain = cookie_domain_for(request)
     response.delete_cookie(REFRESH_COOKIE, path=settings.cookie_path, domain=domain)
     response.delete_cookie(CSRF_COOKIE, path=settings.cookie_path, domain=domain)
 

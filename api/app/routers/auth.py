@@ -112,7 +112,11 @@ def _issue_login(
     db.commit()
     csrf = auth_service.generate_csrf_token()
     set_auth_cookies(
-        response, refresh_token=refresh_token, csrf_token=csrf, remember=remember
+        response,
+        refresh_token=refresh_token,
+        csrf_token=csrf,
+        remember=remember,
+        request=request,
     )
     tokens = auth_service.create_access_tokens(user, session.id, audiences)
     return LoginResponse(
@@ -222,7 +226,13 @@ def refresh(
         if session.expires_at and session.created_at
         else False
     )
-    set_auth_cookies(response, refresh_token=new_token, csrf_token=csrf, remember=remember)
+    set_auth_cookies(
+        response,
+        refresh_token=new_token,
+        csrf_token=csrf,
+        remember=remember,
+        request=request,
+    )
     tokens = auth_service.create_access_tokens(user, session.id, audiences)
     return RefreshResponse(
         access_token=tokens[AUDIENCE_HUB],
@@ -432,6 +442,7 @@ def update_me(
 
 @router.delete("/auth/me", response_model=OkResponse)
 def delete_me(
+    request: Request,
     response: Response,
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
@@ -446,7 +457,7 @@ def delete_me(
     email = user.email
     db.delete(user)
     db.commit()
-    clear_auth_cookies(response)
+    clear_auth_cookies(response, request)
     audit_service.record(category="auth", action="Deleted account", target=email, actor=email)
     return OkResponse()
 
@@ -471,6 +482,7 @@ def change_password(
 
 @router.post("/auth/logout", response_model=OkResponse)
 def logout(
+    request: Request,
     response: Response,
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
@@ -478,7 +490,7 @@ def logout(
     sid = getattr(user, "_sid", None)
     if sid:
         auth_service.revoke(db, sid)
-    clear_auth_cookies(response)
+    clear_auth_cookies(response, request)
     audit_service.record(category="auth", action="Signed out", target=user.email)
     return OkResponse()
 
