@@ -325,32 +325,65 @@ class AzureDevOpsAdapter(ProviderAdapter):
         ]
 
     def list_work_item_metadata(self) -> dict[str, Any]:
-        """Area paths, work item types and the union of their states."""
-        empty = {"area_paths": [], "work_item_types": [], "states": [], "epics": []}
+        """Everything the query builder's pickers need about this project.
+
+        Beyond the flat lists this used to return:
+
+        * **states per work item type.** A Bug and a User Story do not share a
+          state set, so offering ``Committed`` on a Bug builds a query matching
+          nothing — which reads to the user as "there is no work" rather than as
+          the mistake it is. The flat ``states`` union is kept for the existing
+          callers, but ``work_item_types`` now carries each type's own list.
+        * **depth on the trees.** Area and iteration paths are trees, and a picker
+          has to indent them without walking a nested structure, so each node
+          carries its full ``path`` (what a clause actually uses) and its
+          ``depth`` (0 for the project root), in pre-order.
+        * **members and tags**, which had no source at all before — an assignee
+          picker offering nothing is why that clause was free text.
+
+        Sub-400 tolerant per section: one failed read yields an empty section
+        rather than an empty payload, because a partial picker still beats none.
+        """
+        empty = {
+            "area_paths": [],
+            "iteration_paths": [],
+            "work_item_types": [],
+            "states": [],
+            "members": [],
+            "tags": [],
+            "epics": [],
+        }
         if not self.project:
             return empty
+
         area_paths: list[dict[str, Any]] = []
-        types: list[str] = []
+        iteration_paths: list[dict[str, Any]] = []
+        types: list[dict[str, Any]] = []
         states: set[str] = set()
+        members: list[dict[str, str]] = []
+        tags: list[str] = []
+
+        def collect(node: dict[str, Any], into: list[dict[str, Any]], depth: int = 0) -> None:
+            """Flatten a classification tree in pre-order, keeping the depth."""
+            for child in node.get("children") or []:
+                into.append(
+                    {
+                        "id": str(child.get("identifier") or child.get("id", "")),
+                        "name": child.get("name", ""),
+                        "path": _classification_path_to_iteration(child.get("path", "")),
+                        "depth": depth,
+                    }
+                )
+                collect(child, into, depth + 1)
+
         with self._client() as client:
-            areas = client.get(
-                f"/{quote(self.project)}/_apis/wit/classificationnodes/areas",
-                params={"$depth": 10, "api-version": API_VERSION},
-            )
-            if areas.status_code < 400:
-
-                def walk(node: dict[str, Any]) -> None:
-                    for child in node.get("children") or []:
-                        area_paths.append(
-                            {
-                                "id": str(child.get("identifier") or child.get("id", "")),
-                                "name": child.get("name", ""),
-                                "path": _classification_path_to_iteration(child.get("path", "")),
-                            }
-                        )
-                        walk(child)
-
-                walk(areas.json())
+            for kind, into in (("areas", area_paths), ("iterations", iteration_paths)):
+                resp = client.get(
+                    f"/{quote(self.project)}/_apis/wit/classificationnodes/{kind}",
+                    params={"$depth": 10, "api-version": API_VERSION},
+                )
+                if resp.status_code < 400:
+                    collect(resp.json(), into)
 
             wits = client.get(
                 f"/{quote(self.project)}/_apis/wit/workitemtypes",
@@ -358,15 +391,60 @@ class AzureDevOpsAdapter(ProviderAdapter):
             )
             if wits.status_code < 400:
                 for wit in wits.json().get("value", []):
-                    if wit.get("name"):
-                        types.append(wit["name"])
-                    for state in wit.get("states") or []:
-                        if state.get("name"):
-                            states.add(state["name"])
+                    name = wit.get("name")
+                    if not name:
+                        continue
+                    own = [s["name"] for s in (wit.get("states") or []) if s.get("name")]
+                    types.append({"name": name, "states": own})
+                    states.update(own)
+
+            # Team members. The org-level read needs no team context and covers
+            # everyone who can be assigned work here.
+            people = client.get(
+                f"/{quote(self.project)}/_apis/projects/{quote(self.project)}/teams",
+                params={"api-version": API_VERSION},
+            )
+            seen: set[str] = set()
+            if people.status_code < 400:
+                for team in people.json().get("value", []):
+                    team_id = team.get("id")
+                    if not team_id:
+                        continue
+                    resp = client.get(
+                        f"/_apis/projects/{quote(self.project)}/teams/{quote(str(team_id))}/members",
+                        params={"api-version": API_VERSION},
+                    )
+                    if resp.status_code >= 400:
+                        continue
+                    for entry in resp.json().get("value", []):
+                        identity = entry.get("identity") or {}
+                        unique = identity.get("uniqueName") or identity.get("mailAddress") or ""
+                        if not unique or unique in seen:
+                            continue
+                        seen.add(unique)
+                        members.append(
+                            {
+                                "display_name": identity.get("displayName", "") or unique,
+                                "unique_name": unique,
+                            }
+                        )
+
+            tag_resp = client.get(
+                f"/{quote(self.project)}/_apis/wit/tags",
+                params={"api-version": f"{API_VERSION}-preview"},
+            )
+            if tag_resp.status_code < 400:
+                tags = sorted(
+                    {t["name"] for t in tag_resp.json().get("value", []) if t.get("name")}
+                )
+
         return {
             "area_paths": area_paths,
+            "iteration_paths": iteration_paths,
             "work_item_types": types,
             "states": sorted(states),
+            "members": sorted(members, key=lambda m: m["display_name"].lower()),
+            "tags": tags,
             "epics": [],
         }
 

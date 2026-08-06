@@ -48,7 +48,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import Field
 from sqlalchemy.orm import Session
 
@@ -63,8 +63,8 @@ from app.models.provider_connection import (
     ProviderConnection,
 )
 from app.models.user import User
-from app.schemas import ApiModel
-from app.services import audit_service, connection_service
+from app.schemas import ApiModel, OkResponse
+from app.services import audit_service, connection_service, metadata_cache
 from app.services.adapters.base import ProviderAdapter, ProviderError
 from app.services.ownership import can_write_shared, get_owned_or_404
 
@@ -160,11 +160,55 @@ class EpicOut(ApiModel):
     name: str = ""
 
 
-class WorkItemMetadataOut(ApiModel):
-    area_paths: list[AreaPathOut] = Field(default_factory=list)
-    work_item_types: list[str] = Field(default_factory=list)
+class ClassificationNodeOut(ApiModel):
+    """One node of the area or iteration tree, flattened.
+
+    Both are trees, and a picker has to indent them without walking a nested
+    structure — so each node carries the full ``path`` a clause actually uses and
+    its ``depth`` (0 for the project root), in pre-order.
+    """
+
+    id: str = ""
+    name: str = ""
+    path: str = ""
+    depth: int = 0
+
+
+class WorkItemTypeOut(ApiModel):
+    """A work item type with **its own** states.
+
+    States are grouped per type because a Bug and a User Story do not share a
+    state set: offering ``Committed`` on a Bug builds a query that matches
+    nothing, which reads to the user as "there is no work" rather than as the
+    mistake it is.
+    """
+
+    name: str = ""
     states: list[str] = Field(default_factory=list)
+
+
+class MemberOut(ApiModel):
+    display_name: str = ""
+    #: The account a query matches on, e.g. ``duna@emesoft.net``.
+    unique_name: str = ""
+
+
+class WorkItemMetadataOut(ApiModel):
+    area_paths: list[ClassificationNodeOut] = Field(default_factory=list)
+    iteration_paths: list[ClassificationNodeOut] = Field(default_factory=list)
+    work_item_types: list[WorkItemTypeOut] = Field(default_factory=list)
+    #: Every state across every type, for a picker that has not narrowed by type.
+    states: list[str] = Field(default_factory=list)
+    members: list[MemberOut] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     epics: list[EpicOut] = Field(default_factory=list)
+    #: When the provider was really read — what "read 4 minutes ago" is computed
+    #: from, and null when nothing has ever been read.
+    fetched_at: datetime | None = None
+    #: The TTL passed and the refresh we tried failed. The payload is the last good
+    #: one, not an empty shell — so the panel stays usable and says why.
+    stale: bool = False
+    message: str = ""
 
 
 class RepoOut(ApiModel):
@@ -463,18 +507,53 @@ def list_projects(
 @router.get("/{connection_id}/work-item-metadata", response_model=WorkItemMetadataOut)
 def work_item_metadata(
     connection_id: int,
+    refresh: bool = Query(False, description="Read the provider again, ignoring the cache"),
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> WorkItemMetadataOut:
-    """Filter options — area paths, work item types, states, epics."""
+    """Everything the query builder's pickers need, cached per connection.
+
+    Served from the cache inside ``EMEHUB_METADATA_TTL_MINUTES``; ``?refresh=true``
+    forces a read. A refresh that **fails** still returns the last good payload
+    with ``stale: true`` and the reason — the values from an hour ago are almost
+    certainly still right, and offering them beats an empty picker that silently
+    builds a query matching nothing.
+    """
     conn = _load(db, connection_id, user)
     _require_capability(conn, WORK_ITEM)
+    adapter = _adapter(conn)
     try:
-        meta = _adapter(conn).list_work_item_metadata()
-    except Exception as exc:  # noqa: BLE001
+        result = metadata_cache.read(
+            db, conn, adapter.list_work_item_metadata, refresh=refresh
+        )
+    except Exception as exc:  # noqa: BLE001 — a first read with nothing cached
         _log_unavailable("work-item metadata", conn, exc)
-        return WorkItemMetadataOut()
-    return WorkItemMetadataOut.model_validate(meta)
+        return WorkItemMetadataOut(stale=True, message=str(exc) or "The provider did not answer.")
+    return WorkItemMetadataOut.model_validate(
+        {
+            **result.payload,
+            "fetched_at": result.fetched_at,
+            "stale": result.stale,
+            "message": result.message,
+        }
+    )
+
+
+@router.delete("/{connection_id}/metadata/cache", response_model=OkResponse)
+def clear_metadata_cache(
+    connection_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> OkResponse:
+    """Drop this connection's cached metadata.
+
+    ``?refresh=true`` covers the ordinary "these look out of date" case; this is
+    for the other one — a payload that is *wrong* rather than merely old, after the
+    project was reconfigured on the provider side.
+    """
+    conn = _load(db, connection_id, user)
+    metadata_cache.clear(db, conn.id)
+    return OkResponse()
 
 
 @router.get("/{connection_id}/repos", response_model=AvailableReposOut)
