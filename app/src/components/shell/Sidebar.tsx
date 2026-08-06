@@ -55,13 +55,17 @@ export function Sidebar({ onNavigate }: SidebarProps) {
             "[filter:drop-shadow(0_12px_20px_var(--shadow))]",
           )}
         >
-          {/* The handoff's diagonal `metalFlash` sheen was removed here and on
-              the landing header — it read as an animation glitch, not a shine. */}
+          {/* The handoff's `metalFlash` looped on its own and read as an
+              animation glitch, so it stays removed. This sheen is a different
+              thing: it only moves when the pointer does, and it is masked to the
+              logo's alpha so it glints on the metal instead of washing the
+              transparent background. See `.logo-sheen` + useLogoTilt. */}
           <img
             src="/assets/eme-3d-logo-cut.png"
             alt="EMESOFT"
             className="pointer-events-none block h-auto w-full"
           />
+          <span aria-hidden className="logo-sheen" />
         </div>
       </button>
 
