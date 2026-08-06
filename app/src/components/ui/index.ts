@@ -54,6 +54,7 @@ export {
   TableCell,
   TableEmpty,
   TableFootnote,
+  TablePager,
   TableRow,
 } from "./Table";
 export type {

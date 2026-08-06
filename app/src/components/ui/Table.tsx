@@ -118,6 +118,78 @@ export function TableEmpty({
   );
 }
 
+/**
+ * Page controls under a server-paged table — mirrors Q-Agent's ticket pager
+ * (`q-agent/app/src/screens/Tickets.tsx`): the total on the left, then
+ * previous / "Page n of m" / next on the right, each end disabled at its bound.
+ *
+ * Renders nothing when everything fits on one page. A pager that only ever shows
+ * "Page 1 of 1" is furniture, and the two disabled buttons read as broken.
+ */
+export function TablePager({
+  page,
+  pageSize,
+  total,
+  onPageChange,
+  busy = false,
+  noun = "row",
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  onPageChange: (page: number) => void;
+  /** Disables both buttons while a page is in flight. */
+  busy?: boolean;
+  /** Singular noun for the count line — "work item", "member". */
+  noun?: string;
+}) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  if (pages <= 1) return null;
+
+  const first = (page - 1) * pageSize + 1;
+  const last = Math.min(page * pageSize, total);
+
+  return (
+    <div className="flex items-center justify-between px-1 text-[12.5px] text-muted">
+      <span>
+        {first}–{last} of {total} {noun}
+        {total === 1 ? "" : "s"}
+      </span>
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          data-surface
+          onClick={() => onPageChange(Math.max(1, page - 1))}
+          disabled={busy || page <= 1}
+          className={PAGER_BUTTON}
+        >
+          <Icon name="chevronLeft" size={14} strokeWidth={2.4} />
+          Previous
+        </button>
+        <span className="font-semibold text-txt3">
+          Page {page} of {pages}
+        </span>
+        <button
+          type="button"
+          data-surface
+          onClick={() => onPageChange(Math.min(pages, page + 1))}
+          disabled={busy || page >= pages}
+          className={PAGER_BUTTON}
+        >
+          Next
+          <Icon name="chevronRight" size={14} strokeWidth={2.4} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const PAGER_BUTTON = [
+  "flex cursor-pointer items-center gap-1 rounded-control border border-bd2 bg-card3",
+  "px-3 py-1.5 text-[12.5px] font-semibold text-txt3 transition-colors hover:bg-bd3",
+  "disabled:cursor-not-allowed disabled:opacity-40",
+].join(" ");
+
 /** Small print under a table, e.g. the tickets read-only-mirror footnote. */
 export function TableFootnote({
   icon = "lock",

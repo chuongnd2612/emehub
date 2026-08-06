@@ -51,6 +51,7 @@ export const ICON_PATHS = {
   search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/>',
   arrowRight: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   arrowLeft: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+  chevronLeft: '<path d="M15 5l-7 7 7 7"/>',
   chevronRight: '<path d="M9 5l7 7-7 7"/>',
   chevronDown: '<path d="M6 9l6 6 6-6"/>',
   chevronUpDown: '<path d="M8 9l4-4 4 4M8 15l4 4 4-4"/>',
