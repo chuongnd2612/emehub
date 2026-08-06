@@ -550,3 +550,140 @@ def test_the_preview_total_is_the_real_count_not_the_capped_fetch(client, member
     assert body["total"] == 873
     assert len(body["sample"]) == 2, "the sample stays short; only the total is real"
     assert source.counted, "the count must not be derived from the fetch"
+
+
+# ─────────────────────────── the mirror over HTTP: POST /tickets/search
+def test_search_narrows_the_mirror_by_clauses(client, member, db_session, make_user):
+    from app.models.ticket import Ticket
+
+    owner = make_user("qb-search@emesoft.net", "password12345")
+    headers = None
+    # The member fixture owns the rows it can see, so seed against that principal.
+    from app.models.user import User
+
+    principal = db_session.query(User).filter(User.email == "qb-http@emesoft.net").one()
+    for external_id, kind, status in [
+        ("S-1", "Bug", "Active"),
+        ("S-2", "User Story", "Active"),
+        ("S-3", "Bug", "Closed"),
+    ]:
+        db_session.add(
+            Ticket(
+                external_id=external_id,
+                provider_kind="ado",
+                owner_id=principal.id,
+                work_item_type=kind,
+                status=status,
+                title=f"Row {external_id}",
+                labels=[],
+            )
+        )
+    db_session.commit()
+    assert owner is not None and headers is None  # fixture noise, kept explicit
+
+    response = client.post(
+        "/tickets/search",
+        json={
+            "query": {
+                "clauses": [
+                    {"field": "workItemType", "operator": "is", "values": ["Bug"]},
+                    {"field": "state", "operator": "is", "values": ["Active"]},
+                ],
+                "match": "all",
+                "sort": {"field": "changedDate", "direction": "desc"},
+            }
+        },
+        headers=member,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [row["externalId"] for row in body["items"]] == ["S-1"]
+    assert body["total"] == 1
+
+
+def test_search_refuses_a_clause_the_mirror_cannot_run(client, member):
+    """`parentId` has no column here, so the matrix omits it for the mirror."""
+    response = client.post(
+        "/tickets/search",
+        json={"query": {"clauses": [{"field": "parentId", "operator": "is", "values": ["7"]}]}},
+        headers=member,
+    )
+    assert response.status_code == 422
+    assert "cannot be filtered on this provider" in response.json()["detail"]["problems"][0]["message"]
+
+
+def test_search_cannot_see_another_members_rows(client, member, db_session, make_user):
+    """An `any` query widens within the visible set and never past it."""
+    from app.models.ticket import Ticket
+
+    other = make_user("qb-victim@emesoft.net", "password12345")
+    db_session.add(
+        Ticket(
+            external_id="SECRET-7",
+            provider_kind="ado",
+            owner_id=other.id,
+            status="Active",
+            title="Not yours",
+            labels=[],
+        )
+    )
+    db_session.commit()
+
+    response = client.post(
+        "/tickets/search",
+        json={
+            "query": {
+                "clauses": [
+                    {"field": "state", "operator": "is", "values": ["Active"]},
+                    {"field": "title", "operator": "contains", "values": ["Not yours"]},
+                ],
+                "match": "any",
+            }
+        },
+        headers=member,
+    )
+    assert response.status_code == 200
+    assert "SECRET-7" not in [row["externalId"] for row in response.json()["items"]]
+
+
+def test_search_still_honours_the_free_text_and_paging(client, member, db_session):
+    from app.models.ticket import Ticket
+    from app.models.user import User
+
+    principal = db_session.query(User).filter(User.email == "qb-http@emesoft.net").one()
+    for n in range(6):
+        db_session.add(
+            Ticket(
+                external_id=f"P-{n}",
+                provider_kind="ado",
+                owner_id=principal.id,
+                status="Active",
+                title="Pageable row",
+                labels=[],
+            )
+        )
+    db_session.commit()
+
+    first = client.post(
+        "/tickets/search",
+        json={"query": {}, "q": "Pageable", "page": 1, "pageSize": 4},
+        headers=member,
+    ).json()
+    assert len(first["items"]) == 4
+    assert first["total"] == 6
+
+    second = client.post(
+        "/tickets/search",
+        json={"query": {}, "q": "Pageable", "page": 2, "pageSize": 4},
+        headers=member,
+    ).json()
+    assert len(second["items"]) == 2
+
+
+def test_search_refuses_a_smuggled_sql_key(client, member):
+    response = client.post(
+        "/tickets/search",
+        json={"query": {}, "where": "1=1"},
+        headers=member,
+    )
+    assert response.status_code == 422

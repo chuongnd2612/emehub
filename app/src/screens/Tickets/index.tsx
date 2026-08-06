@@ -19,18 +19,25 @@ import { useSearchParams } from "react-router-dom";
 
 import {
   buildTicketFilterSchema,
+  getConnectionsWithCapability,
   getTicketPage,
+  getWorkItemMetadata,
+  searchTickets,
   PROVIDERS,
   type ProviderKey,
   type Ticket,
   type TicketFilters,
+  type WorkItemMetadata,
 } from "@/data";
+import { emptyQuery, type TicketQuery as ClauseQuery } from "@/data/ticketQuery";
+import { QueryBuilder } from "@/components/query";
 import {
   Button,
   EmptyState,
   ErrorState,
   GlassCard,
   Icon,
+  Pill,
   TableFootnote,
   TablePager,
   TableRowsSkeleton,
@@ -51,6 +58,20 @@ import { TicketsToolbar } from "./TicketsToolbar";
  * than its default costs nothing.
  */
 const PAGE_SIZE = 10;
+
+/** No metadata yet — the pickers fall back to free text, which still works. */
+const EMPTY_META: WorkItemMetadata = {
+  areaPaths: [],
+  iterationPaths: [],
+  workItemTypes: [],
+  states: [],
+  members: [],
+  tags: [],
+  epics: [],
+  fetchedAt: null,
+  stale: false,
+  message: "",
+};
 
 const isProvider = (value: string | null): value is ProviderKey =>
   value === "ado" || value === "jira" || value === "gh";
@@ -103,6 +124,17 @@ export default function TicketsScreen() {
    */
   const [turning, setTurning] = useState(false);
   const shownPage = useRef(1);
+  /**
+   * The clause query, and whether the panel is open.
+   *
+   * `applied` is what the table is showing; `draft` is what the user is editing.
+   * The row load reads `applied` only, so a half-built clause can never fetch —
+   * the same rule the Import dialog's preview follows.
+   */
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const [draftQuery, setDraftQuery] = useState<ClauseQuery>(() => emptyQuery("mirror"));
+  const [appliedQuery, setAppliedQuery] = useState<ClauseQuery | null>(null);
+  const [metadata, setMetadata] = useState<WorkItemMetadata>(EMPTY_META);
 
   const modal = useUi((s) => s.modal);
   const setModal = useUi((s) => s.setModal);
@@ -120,6 +152,30 @@ export default function TicketsScreen() {
     () => buildTicketFilterSchema(provider, facetRows),
     [provider, facetRows],
   );
+
+  // The pickers read the provider's own metadata, not the mirror's distinct
+  // values — so a state you have never imported is still offerable. Loaded only
+  // once the panel is opened, because it costs a provider round trip.
+  useEffect(() => {
+    if (!builderOpen) return;
+    let live = true;
+    void getConnectionsWithCapability("work_item")
+      .then((connections) => {
+        const match = connections.find((c) => c.provider === provider);
+        return match ? getWorkItemMetadata(match.id) : EMPTY_META;
+      })
+      .then((loaded) => {
+        if (live) setMetadata(loaded);
+      })
+      .catch(() => {
+        // A failed metadata read leaves free-text controls rather than blocking
+        // the panel: the query still runs, it just offers no pickers.
+        if (live) setMetadata(EMPTY_META);
+      });
+    return () => {
+      live = false;
+    };
+  }, [builderOpen, provider]);
 
   // Facets: one unfiltered page per provider.
   useEffect(() => {
@@ -143,7 +199,11 @@ export default function TicketsScreen() {
     if (turned) setTurning(true);
     else setStatus("loading");
 
-    void getTicketPage({ provider, filters, query, page, pageSize: PAGE_SIZE })
+    const load = appliedQuery
+      ? searchTickets({ query: appliedQuery, q: query, provider, page, pageSize: PAGE_SIZE })
+      : getTicketPage({ provider, filters, query, page, pageSize: PAGE_SIZE });
+
+    void load
       .then((loaded) => {
         if (!live) return;
         setTickets(loaded.items);
@@ -164,7 +224,7 @@ export default function TicketsScreen() {
     return () => {
       live = false;
     };
-  }, [provider, filters, query, page, reloadKey]);
+  }, [provider, filters, query, page, reloadKey, appliedQuery]);
 
   /**
    * Reset to page 1 whenever what is being *asked for* changes.
@@ -221,8 +281,18 @@ export default function TicketsScreen() {
   const clear = useCallback(() => {
     setFilters({});
     setQuery("");
+    setAppliedQuery(null);
+    setDraftQuery(emptyQuery("mirror"));
     resetPage();
   }, [resetPage]);
+
+  const applyQuery = useCallback(() => {
+    // The pills and a clause query answer the same question two ways, so applying
+    // one drops the other rather than silently intersecting them.
+    setFilters({});
+    setAppliedQuery(draftQuery);
+    resetPage();
+  }, [draftQuery, resetPage]);
 
   const openRow = useCallback(
     (ticket: Ticket) => {
@@ -232,7 +302,8 @@ export default function TicketsScreen() {
   );
 
   const providerName = PROVIDERS[provider].name;
-  const filtered = Object.values(filters).some(Boolean) || Boolean(query);
+  const filtered =
+    Object.values(filters).some(Boolean) || Boolean(query) || appliedQuery !== null;
   const importButton = (
     <Button
       variant="primary"
@@ -258,7 +329,39 @@ export default function TicketsScreen() {
         importing={importing}
         lastImport={lastImportLabel(facetRows)}
         onImport={() => setModal("import")}
+        builderOpen={builderOpen}
+        onToggleBuilder={() => setBuilderOpen((open) => !open)}
+        queryActive={appliedQuery !== null}
       />
+
+      {/* The clause builder over the mirror. Collapsed by default: the pills
+          answer the common case in one click, and a five-row panel above every
+          table would be in the way of simply reading it. */}
+      {builderOpen && (
+        <GlassCard radius="panel" className="flex flex-col gap-3.5 p-[18px]">
+          <QueryBuilder
+            draft={draftQuery}
+            onDraftChange={setDraftQuery}
+            applied={appliedQuery}
+            destination="mirror"
+            metadata={metadata}
+            busy={status === "loading" || turning}
+            onApply={applyQuery}
+            onReset={() => {
+              setDraftQuery(emptyQuery("mirror"));
+              setAppliedQuery(null);
+              resetPage();
+            }}
+            trailing={
+              appliedQuery !== null ? (
+                <Pill tone="ok" size="sm">
+                  {total} {total === 1 ? "match" : "matches"}
+                </Pill>
+              ) : null
+            }
+          />
+        </GlassCard>
+      )}
 
       {/* Skeleton rows rather than a centred spinner: the table's geometry is
           known, so the toolbar stays put and the rows fill in instead of the

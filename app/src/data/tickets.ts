@@ -406,3 +406,35 @@ export const previewTicketQuery = async (options: {
     description: wire.description ?? "",
   };
 };
+
+/**
+ * `POST /tickets/search` — one page of the mirror, narrowed by a clause query.
+ *
+ * A POST because a clause list does not fit a query string honestly. `GET /tickets`
+ * is untouched: it is a contract route agents already call, and the pill-style
+ * parameters keep working there.
+ */
+export const searchTickets = async (options: {
+  query: ClauseQuery;
+  q?: string;
+  provider?: ProviderKey;
+  page?: number;
+  pageSize?: number;
+}): Promise<TicketPage> => {
+  const [wire, projects] = await Promise.all([
+    api.post<TicketPageWire>("/tickets/search", {
+      query: options.query,
+      q: options.q?.trim() || undefined,
+      providerKind: options.provider ? PROVIDER_WIRE_KIND[options.provider] : undefined,
+      page: options.page ?? 1,
+      pageSize: options.pageSize ?? MAX_PAGE_SIZE,
+    }),
+    projectNameMap(),
+  ]);
+  return {
+    items: (wire.items ?? []).map((row) => toTicket(row, projects)),
+    total: wire.total ?? 0,
+    page: wire.page ?? 1,
+    pageSize: wire.pageSize ?? MAX_PAGE_SIZE,
+  };
+};
