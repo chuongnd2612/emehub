@@ -14,7 +14,7 @@
 // The active provider is a URL selection (`?source=`) — the URL is the source
 // of truth (CLAUDE.md). Query + field filters are transient screen state.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import {
@@ -33,6 +33,7 @@ import {
   Icon,
   LoadingState,
   TableFootnote,
+  TablePager,
   toast,
 } from "@/components/ui";
 import { ImportDialog, useImportRun } from "@/components/import";
@@ -40,6 +41,12 @@ import { ApiError } from "@/lib/api";
 import { useUi } from "@/store/ui";
 import { TicketsTable } from "./TicketsTable";
 import { TicketsToolbar } from "./TicketsToolbar";
+
+/**
+ * Rows per page. Matches the hub's own `GET /tickets` default (`page_size=25`),
+ * so the first request asks for exactly what the server would have given anyway.
+ */
+const PAGE_SIZE = 25;
 
 const isProvider = (value: string | null): value is ProviderKey =>
   value === "ado" || value === "jira" || value === "gh";
@@ -71,11 +78,38 @@ export default function TicketsScreen() {
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
+  /**
+   * Which page of the row load is shown.
+   *
+   * Transient screen state, deliberately **not** a URL param. `?source=` is in
+   * the URL because the active provider is a selection worth linking to and
+   * restoring; a scroll depth through a paged list is not, and every other
+   * intra-screen control here (the query, the field filters) is already local.
+   */
+  const [page, setPage] = useState(1);
+  /**
+   * A page change in flight, as distinct from `status === "loading"`.
+   *
+   * Turning a page must not swap the table for the full-screen loader: the rows
+   * and the pager would vanish and come back, which reads as a navigation rather
+   * than a page turn — and with the pager gone mid-flight there is nothing to
+   * click twice. So a page change keeps the current rows on screen and only
+   * disables the pager. A provider/filter/query change still shows the loader,
+   * because there the rows on screen are about to become the wrong rows.
+   */
+  const [turning, setTurning] = useState(false);
+  const shownPage = useRef(1);
 
   const modal = useUi((s) => s.modal);
   const setModal = useUi((s) => s.setModal);
 
-  const reload = useCallback(() => setReloadKey((n) => n + 1), []);
+  // An import can change the size of the set under us, so a reload starts over
+  // at page 1 rather than on a page that may no longer exist.
+  const reload = useCallback(() => {
+    setPage(1);
+    shownPage.current = 1;
+    setReloadKey((n) => n + 1);
+  }, []);
   const { importing, run } = useImportRun(reload);
 
   const fields = useMemo(
@@ -98,15 +132,19 @@ export default function TicketsScreen() {
     };
   }, [provider, reloadKey]);
 
-  // Rows: the same endpoint with the active filters and query.
+  // Rows: the same endpoint with the active filters, query and page.
   useEffect(() => {
     let live = true;
-    setStatus("loading");
-    void getTicketPage({ provider, filters, query })
-      .then((page) => {
+    const turned = shownPage.current !== page;
+    if (turned) setTurning(true);
+    else setStatus("loading");
+
+    void getTicketPage({ provider, filters, query, page, pageSize: PAGE_SIZE })
+      .then((loaded) => {
         if (!live) return;
-        setTickets(page.items);
-        setTotal(page.total);
+        setTickets(loaded.items);
+        setTotal(loaded.total);
+        shownPage.current = page;
         setStatus("ready");
       })
       .catch((err: unknown) => {
@@ -115,16 +153,38 @@ export default function TicketsScreen() {
           err instanceof ApiError ? err.message : "The hub did not respond.",
         );
         setStatus("error");
+      })
+      .finally(() => {
+        if (live) setTurning(false);
       });
     return () => {
       live = false;
     };
-  }, [provider, filters, query, reloadKey]);
+  }, [provider, filters, query, page, reloadKey]);
+
+  /**
+   * Reset to page 1 whenever what is being *asked for* changes.
+   *
+   * This has to happen in the same state update as the change itself, not in an
+   * effect afterwards. An effect would run alongside the row load, which still
+   * holds the old page in its closure — so narrowing a filter while on page 3
+   * fires a request for page 3 of a set that may now have one page, and only
+   * then a request for page 1. The doomed request was measured, not theorised:
+   * it showed up as `q=z&page=3` immediately before `q=z&page=1`.
+   *
+   * Resetting inside each mutator makes it one update, one effect run, one
+   * request.
+   */
+  const resetPage = useCallback(() => {
+    setPage(1);
+    shownPage.current = 1;
+  }, []);
 
   /** Switching source clears all field filters. */
   const changeProvider = useCallback(
     (next: ProviderKey) => {
       setFilters({});
+      resetPage();
       setParams(
         (prev) => {
           const p = new URLSearchParams(prev);
@@ -134,18 +194,31 @@ export default function TicketsScreen() {
         { replace: true },
       );
     },
-    [setParams],
+    [resetPage, setParams],
   );
 
   /** Picking the same value again clears the field. */
-  const pickFilter = useCallback((key: string, value: string) => {
-    setFilters((f) => ({ ...f, [key]: f[key] === value ? undefined : value }));
-  }, []);
+  const pickFilter = useCallback(
+    (key: string, value: string) => {
+      setFilters((f) => ({ ...f, [key]: f[key] === value ? undefined : value }));
+      resetPage();
+    },
+    [resetPage],
+  );
+
+  const changeQuery = useCallback(
+    (next: string) => {
+      setQuery(next);
+      resetPage();
+    },
+    [resetPage],
+  );
 
   const clear = useCallback(() => {
     setFilters({});
     setQuery("");
-  }, []);
+    resetPage();
+  }, [resetPage]);
 
   const openRow = useCallback(
     (ticket: Ticket) => {
@@ -173,7 +246,7 @@ export default function TicketsScreen() {
         provider={provider}
         onProviderChange={changeProvider}
         query={query}
-        onQueryChange={setQuery}
+        onQueryChange={changeQuery}
         schema={fields}
         filters={filters}
         onFilterPick={pickFilter}
@@ -214,11 +287,21 @@ export default function TicketsScreen() {
             onRowClick={openRow}
           />
 
+          <TablePager
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={total}
+            onPageChange={setPage}
+            busy={turning}
+            noun="work item"
+          />
+
+          {/* The old footnote ended with "narrow the filters to see the rest",
+              which was the only way through a set bigger than one page. The
+              pager above is that way, so the sentence goes. */}
           <TableFootnote icon="lock">
-            Read-only mirror. Edit work items in {providerName} — the next
-            import reflects the change.
-            {total > tickets.length &&
-              ` Showing ${tickets.length} of ${total}; narrow the filters to see the rest.`}
+            Read-only mirror. Edit work items in {providerName} — the next import
+            reflects the change.
           </TableFootnote>
         </>
       )}
