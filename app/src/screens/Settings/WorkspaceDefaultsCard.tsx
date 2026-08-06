@@ -2,12 +2,14 @@
 // description + chip group.
 //
 // State Management groups these as `defProvider` / `defAgent` / `defScope`.
-// The shared stores hold appearance only, so they live in screen state here
-// until an API (and a store slice) exists for workspace preferences.
-
-import { useState } from "react";
+//
+// The card is now CONTROLLED by the Settings screen's draft — it no longer holds
+// its own state, because these save in bulk from the save bar rather than on every
+// click. Where the values live and why they are per-browser is explained in
+// `store/preferences.ts`.
 
 import { GlassCard } from "@/components/ui";
+import type { Preferences } from "@/store/preferences";
 import { OptionChip } from "./SettingRow";
 
 interface DefaultRow {
@@ -39,12 +41,13 @@ const ROWS: DefaultRow[] = [
   },
 ];
 
-export function WorkspaceDefaultsCard() {
-  const [values, setValues] = useState<Record<DefaultRow["key"], string>>({
-    defProvider: "Azure DevOps",
-    defAgent: "Q-Agent",
-    defScope: "Per project",
-  });
+export function WorkspaceDefaultsCard({
+  draft,
+  onChange,
+}: {
+  draft: Preferences;
+  onChange: (patch: Partial<Preferences>) => void;
+}) {
 
   return (
     <GlassCard radius="panel" className="flex flex-col gap-4 p-[22px]">
@@ -73,10 +76,8 @@ export function WorkspaceDefaultsCard() {
               <OptionChip
                 key={option}
                 label={option}
-                active={values[row.key] === option}
-                onClick={() =>
-                  setValues((prev) => ({ ...prev, [row.key]: option }))
-                }
+                active={draft[row.key] === option}
+                onClick={() => onChange({ [row.key]: option })}
               />
             ))}
           </div>

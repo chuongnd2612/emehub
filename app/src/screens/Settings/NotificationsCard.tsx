@@ -1,12 +1,14 @@
 // Handoff § 10. Settings › Notifications — three toggle rows.
 //
 // State Management groups these as `notifImport` / `notifCred` / `notifRuns`;
-// the prototype's defaults are on / on / off. They live in screen state until
-// a workspace-preferences endpoint (and store slice) exists.
-
-import { useState } from "react";
+// the prototype's defaults are on / on / off.
+//
+// CONTROLLED by the Settings screen's draft — these commit from the save bar, not
+// on every flip. See `store/preferences.ts` for where they end up and why they are
+// per-browser for now.
 
 import { GlassCard } from "@/components/ui";
+import type { Preferences } from "@/store/preferences";
 import { ToggleRow } from "./SettingRow";
 
 interface NotificationRow {
@@ -35,12 +37,13 @@ const ROWS: NotificationRow[] = [
   },
 ];
 
-export function NotificationsCard() {
-  const [values, setValues] = useState<Record<NotificationRow["key"], boolean>>({
-    notifImport: true,
-    notifCred: true,
-    notifRuns: false,
-  });
+export function NotificationsCard({
+  draft,
+  onChange,
+}: {
+  draft: Preferences;
+  onChange: (patch: Partial<Preferences>) => void;
+}) {
 
   return (
     <GlassCard radius="panel" className="flex flex-col gap-[2px] p-[22px]">
@@ -58,10 +61,8 @@ export function NotificationsCard() {
           key={row.key}
           label={row.label}
           description={row.description}
-          checked={values[row.key]}
-          onChange={(checked) =>
-            setValues((prev) => ({ ...prev, [row.key]: checked }))
-          }
+          checked={draft[row.key]}
+          onChange={(checked) => onChange({ [row.key]: checked })}
           className="border-t border-bd3 py-[15px]"
         />
       ))}
