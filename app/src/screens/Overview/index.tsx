@@ -24,6 +24,14 @@ import {
 } from "@/data";
 
 import { ImportDialog, useImportRun } from "@/components/import";
+import {
+  ActivityRowsSkeleton,
+  GlassCard,
+  KpiTilesSkeleton,
+  PanelHeadingSkeleton,
+  ProductCardsSkeleton,
+  SummaryPanelSkeleton,
+} from "@/components/ui";
 import { useUi } from "@/store/ui";
 
 import { ActivityFeed } from "./ActivityFeed";
@@ -83,19 +91,48 @@ export default function OverviewScreen() {
         connectionCount={loaded ? integrations.length : null}
       />
 
-      <div className="grid grid-cols-2 gap-[14px]">
-        {products.map((p) => (
-          <ProductCard key={p.key} product={p} />
-        ))}
-      </div>
+      {/* Skeletons, not a spinner: every block below has a known geometry, so
+          the layout can land immediately and fill in. The page used to sit
+          blank behind bare panel headings while five requests resolved. */}
+      {loaded ? (
+        <div className="grid grid-cols-2 gap-[14px]">
+          {products.map((p) => (
+            <ProductCard key={p.key} product={p} />
+          ))}
+        </div>
+      ) : (
+        <ProductCardsSkeleton />
+      )}
 
-      <KpiTiles kpis={kpis} />
+      {loaded ? <KpiTiles kpis={kpis} /> : <KpiTilesSkeleton />}
 
       <div className="grid grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] gap-[14px]">
-        <ActivityFeed events={activity} />
+        {loaded ? (
+          <ActivityFeed events={activity} />
+        ) : (
+          <GlassCard radius="panel" className="flex flex-col p-5">
+            <PanelHeadingSkeleton />
+            <ActivityRowsSkeleton />
+          </GlassCard>
+        )}
         <div className="flex flex-col gap-[14px]">
-          <IntegrationStrip integrations={integrations} />
-          <TopProjects projects={projects} />
+          {loaded ? (
+            <>
+              <IntegrationStrip integrations={integrations} />
+              <TopProjects projects={projects} />
+            </>
+          ) : (
+            <>
+              <GlassCard radius="panel" className="flex flex-col gap-3.5 p-5">
+                <PanelHeadingSkeleton />
+                <SummaryPanelSkeleton rows={2} />
+              </GlassCard>
+              <GlassCard radius="panel" className="flex flex-col gap-3.5 p-5">
+                <PanelHeadingSkeleton />
+                <SummaryPanelSkeleton rows={3} />
+              </GlassCard>
+            </>
+          )}
         </div>
       </div>
 
