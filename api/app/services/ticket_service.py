@@ -494,18 +494,18 @@ def sync_tickets(
     *,
     connection_id: int | None = None,
     provider_kind: str | None = None,
-    mode: str = "sprint",
-    sprint: str | None = None,
-    sprint_path: str | None = None,
-    area_path: str | None = None,
-    states: list[str] | None = None,
-    work_item_types: list[str] | None = None,
     ticket_ids: list[str] | None = None,
     project: str | None = None,
     project_id: int | None = None,
     spec: ticket_query.TicketQuery | None = None,
 ) -> tuple[list[Ticket], ResolvedSource]:
     """Pull from the resolved :class:`TicketSource` and upsert every row.
+
+    Two ways to say what to pull, and no third: ``spec`` — a clause query, compiled
+    per provider — or ``ticket_ids``, an explicit selection of known work items.
+    Selecting by id is not filtering, which is why it survived the removal of the
+    legacy ``mode``/``sprint``/``states`` selection: the clause model has no id
+    field, and inventing one would mean a "query" that is really a list.
 
     Both the source and the rows are scoped to ``user``: a member syncs via, and
     into, their own data. Raises :class:`TicketSyncUnavailable` (no adapter
@@ -516,12 +516,6 @@ def sync_tickets(
     resolved = resolve_source(db, user, connection_id, provider_kind)
     try:
         fetched = resolved.source.fetch_tickets(
-            mode=mode,
-            sprint=sprint,
-            sprint_path=sprint_path,
-            area_path=area_path,
-            states=states,
-            work_item_types=work_item_types,
             ticket_ids=ticket_ids,
             # Comments are one extra provider request per ticket — an N+1 that
             # makes a bulk sync crawl. They are loaded on demand instead.

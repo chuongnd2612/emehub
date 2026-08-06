@@ -273,32 +273,25 @@ def test_a_spec_reaches_jira_as_the_compiled_jql():
     ]
 
 
-def test_a_spec_replaces_the_legacy_selection_rather_than_blending_with_it():
-    """Blending them would silently re-apply a condition the user had removed."""
+def test_named_keys_are_quoted_and_not_scoped_to_the_project():
+    """A caller naming AB-1 has already said which issue it means; ANDing a project
+    onto that could only turn a valid selection into an empty result."""
     sent, handler = _capture()
-    _jira(handler).fetch_tickets(
-        spec=q(clause("state", "is", "Done")),
-        mode="sprint",
-        sprint="Sprint 99",
-        work_item_types=["Bug"],
-    )
-    assert "Sprint 99" not in sent[0]
-    assert "issuetype" not in sent[0]
+    _jira(handler).fetch_tickets(ticket_ids=["SUR-1", "SUR-2"])
+    assert sent == ['key in ("SUR-1", "SUR-2") ORDER BY updated DESC']
 
 
-def test_the_legacy_path_is_untouched_when_no_spec_is_given():
+def test_a_query_wins_over_named_keys():
     sent, handler = _capture()
-    _jira(handler).fetch_tickets(mode="assigned", states=["Done"])
-    assert "assignee = currentUser()" in sent[0]
-    assert 'status IN ("Done")' in sent[0]
+    _jira(handler).fetch_tickets(spec=q(clause("state", "is", "Done")), ticket_ids=["SUR-1"])
+    assert "SUR-1" not in sent[0]
+    assert 'status = "Done"' in sent[0]
 
 
-def test_the_legacy_path_quotes_its_values_too():
-    """It is on its way out, but until it is gone it is still a query built from a
-    request body."""
+def test_with_neither_the_query_is_just_the_project():
     sent, handler = _capture()
-    _jira(handler).fetch_tickets(mode="all", states=['a" OR key = "X'])
-    assert 'status IN ("a\\" OR key = \\"X")' in sent[0]
+    _jira(handler).fetch_tickets()
+    assert sent == ['project = "SUR" ORDER BY updated DESC']
 
 
 def test_counting_uses_jiras_own_count_endpoint():

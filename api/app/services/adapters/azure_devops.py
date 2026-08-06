@@ -30,7 +30,9 @@ import httpx
 
 from app.logging import logger
 from app.services.adapters import register
+from app.services.ticket_query import TicketQuery
 from app.services.wiql import build_wiql
+from app.services.wiql import quote as wiql_quote
 from app.services.adapters.base import (
     NormalizedTicket,
     ProviderAdapter,
@@ -40,18 +42,6 @@ from app.services.adapters.base import (
 
 API_VERSION = "7.1"
 COMMENTS_API_VERSION = "7.1-preview.3"
-
-# QA-relevant work item types across the common process templates (Agile, Scrum,
-# Basic). A value that does not exist simply never matches inside a WIQL IN()
-# list — it is not a 400 — so listing a superset is safe.
-_WORK_ITEM_TYPES = (
-    "User Story",
-    "Product Backlog Item",
-    "Bug",
-    "Task",
-    "Feature",
-    "Issue",
-)
 
 #: Cap on a single fetch. A 2000-item project must not hang a sync.
 MAX_SYNC_ITEMS = 200
@@ -109,11 +99,6 @@ def _decode(segment: str) -> str:
         return unquote(segment).strip()
     except (TypeError, ValueError):  # pragma: no cover - unquote is total
         return segment.strip()
-
-
-def _wiql_literal(value: str) -> str:
-    """Escape a value for a single-quoted WIQL string literal."""
-    return value.replace("'", "''")
 
 
 def _xml_escape(value: str) -> str:
@@ -458,44 +443,19 @@ class AzureDevOpsAdapter(ProviderAdapter):
         """
         project = (project or "").strip() or self._require_project()
         with self._client() as client:
-            if spec is not None:
-                return len(self._run_compiled(client, project, spec))
-            return len(self._query_work_item_ids(client, project, mode="all", sprint=None,
-                                                 sprint_path=None, area_path=None, states=None,
-                                                 work_item_types=None, ticket_ids=None))
+            return len(self._work_item_ids(client, project, spec=spec, ticket_ids=None))
 
     def fetch_tickets(
         self,
         *,
-        mode: str = "sprint",
-        sprint: str | None = None,
-        sprint_path: str | None = None,
-        area_path: str | None = None,
-        states: list[str] | None = None,
-        work_item_types: list[str] | None = None,
+        spec: Any = None,
         ticket_ids: list[str] | None = None,
         include_comments: bool = False,
         project: str | None = None,
-        spec: Any = None,
     ) -> list[NormalizedTicket]:
         project = (project or "").strip() or self._require_project()
         with self._client() as client:
-            if spec is not None:
-                # The compiled query replaces the legacy selection outright. Mixing
-                # them would silently re-apply a condition the user had removed.
-                ids = self._run_compiled(client, project, spec)
-            else:
-                ids = self._query_work_item_ids(
-                    client,
-                    project,
-                    mode=mode,
-                    sprint=sprint,
-                    sprint_path=sprint_path,
-                    area_path=area_path,
-                    states=states,
-                    work_item_types=work_item_types,
-                    ticket_ids=ticket_ids,
-                )
+            ids = self._work_item_ids(client, project, spec=spec, ticket_ids=ticket_ids)
             if not ids:
                 return []
             if len(ids) > MAX_SYNC_ITEMS:
@@ -522,17 +482,30 @@ class AzureDevOpsAdapter(ProviderAdapter):
             return self._fetch_comments(client, int(ticket_external_id), swallow=False)
 
     # -- Query ------------------------------------------------------------
-    def _run_compiled(self, client: httpx.Client, project: str, spec: Any) -> list[int]:
-        r"""Run a compiled ``TicketQuery``.
+    def _work_item_ids(
+        self,
+        client: httpx.Client,
+        project: str,
+        *,
+        spec: Any = None,
+        ticket_ids: list[str] | None = None,
+    ) -> list[int]:
+        r"""The ids to read: from a compiled query, an explicit selection, or all.
 
-        No iteration-path retry here, unlike the legacy path. That recovery exists
-        because ``mode="sprint"`` *derives* an iteration path the caller never saw
-        (``f"{project}\{sprint}"``), so it can be wrong through no fault of
-        theirs. A clause query contains only paths the user picked from this
-        project's own metadata, so a 400 is a real answer and silently dropping the
+        **No iteration-path retry.** The legacy selection had one, because
+        ``mode="sprint"`` *derived* an iteration path the caller never saw
+        (``f"{project}\{sprint}"``) and could therefore be wrong through no fault of
+        theirs. A clause query only ever contains paths the user picked out of this
+        project's own metadata, so a 400 is a real answer — and silently dropping the
         condition would return more work items than were asked for.
         """
-        query = build_wiql(spec, project)
+        if spec is None and ticket_ids:
+            # Known ids, no query needed. Non-numeric ids are dropped rather than
+            # sent: `System.Id` is an integer field and ADO would 400 on the lot,
+            # losing the ids that were fine.
+            return [int(tid) for tid in ticket_ids if str(tid).isdigit()]
+
+        query = build_wiql(spec if spec is not None else TicketQuery(), project)
         try:
             return self._run_wiql_text(client, project, query)
         except _WiqlError as exc:
@@ -540,61 +513,13 @@ class AzureDevOpsAdapter(ProviderAdapter):
                 f"Azure DevOps rejected the query: {self._scrub(exc)}"
             ) from exc
 
-    def _query_work_item_ids(
-        self,
-        client: httpx.Client,
-        project: str,
-        *,
-        mode: str,
-        sprint: str | None,
-        sprint_path: str | None,
-        area_path: str | None,
-        states: list[str] | None,
-        work_item_types: list[str] | None,
-        ticket_ids: list[str] | None,
-    ) -> list[int]:
-        if mode == "selected" and ticket_ids:
-            return [int(tid) for tid in ticket_ids if str(tid).isdigit()]
-
-        type_list = work_item_types or list(_WORK_ITEM_TYPES)
-        types = ", ".join(f"'{_wiql_literal(t)}'" for t in type_list)
-        base_conditions = [
-            f"[System.TeamProject] = '{_wiql_literal(project)}'",
-            f"[System.WorkItemType] IN ({types})",
-        ]
-        if states:
-            state_list = ", ".join(f"'{_wiql_literal(s)}'" for s in states)
-            base_conditions.append(f"[System.State] IN ({state_list})")
-        else:
-            base_conditions.append("[System.State] <> 'Removed'")
-        if area_path:
-            base_conditions.append(f"[System.AreaPath] UNDER '{_wiql_literal(area_path)}'")
-
-        conditions = list(base_conditions)
-        iteration = sprint_path or (f"{project}\\{sprint}" if sprint else None)
-        if mode == "sprint" and iteration:
-            conditions.append(f"[System.IterationPath] UNDER '{_wiql_literal(iteration)}'")
-        elif mode == "assigned":
-            conditions.append("[System.AssignedTo] = @Me")
-
-        try:
-            return self._run_wiql(client, project, conditions)
-        except _WiqlError as exc:
-            # The commonest WIQL 400 is an iteration path that does not exist in
-            # this project. Retry once without the iteration filter so the sync
-            # still returns something; otherwise surface ADO's own message.
-            if mode == "sprint" and iteration:
-                logger.warning(
-                    "Azure DevOps rejected the iteration filter (%s); retrying unscoped",
-                    self._scrub(exc),
-                )
-                return self._run_wiql(client, project, base_conditions)
-            raise ProviderError(
-                f"Azure DevOps WIQL query failed: {self._scrub(exc)}"
-            ) from exc
-
     def _run_wiql(self, client: httpx.Client, project: str, conditions: list[str]) -> list[int]:
-        """The legacy AND-only path: build from `conditions`, then execute."""
+        """AND-join `conditions` into a WIQL statement and execute it.
+
+        Only :meth:`list_test_cases` uses this now — a fixed query with no caller
+        input in it. Everything a caller can influence goes through
+        :func:`services.wiql.build_wiql`, which is the module that owns the quoting.
+        """
         query = (
             "SELECT [System.Id] FROM WorkItems WHERE "
             + " AND ".join(conditions)
@@ -605,9 +530,8 @@ class AzureDevOpsAdapter(ProviderAdapter):
     def _run_wiql_text(self, client: httpx.Client, project: str, query: str) -> list[int]:
         """POST one WIQL statement and return the ordered ids.
 
-        The single execution site: both the legacy condition list and the compiled
-        clause query come through here, so there is one place that turns ADO's 400
-        into a `_WiqlError` carrying its own message.
+        The single execution site, so there is one place that turns ADO's 400 into a
+        `_WiqlError` carrying its own message.
         """
         resp = client.post(
             f"/{quote(project)}/_apis/wit/wiql?api-version={API_VERSION}",
@@ -874,7 +798,7 @@ class AzureDevOpsAdapter(ProviderAdapter):
                     client,
                     self.project,
                     [
-                        f"[System.TeamProject] = '{_wiql_literal(self.project)}'",
+                        f"[System.TeamProject] = {wiql_quote(self.project)}",
                         "[System.WorkItemType] = 'Test Case'",
                         "[System.State] <> 'Removed'",
                     ],

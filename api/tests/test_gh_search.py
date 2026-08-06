@@ -261,17 +261,30 @@ def test_a_spec_goes_through_the_search_api_not_the_issues_list():
     assert seen[0][1] == "repo:emesoft/hub is:issue state:open label:bug,ui"
 
 
-def test_the_legacy_path_still_uses_the_issues_list():
+def test_named_numbers_are_read_one_by_one():
+    """The search API cannot express "these exact issues" any better than reading
+    them, and reading them also works for an issue the search index has not caught
+    up with yet."""
     seen, handler = _capture()
-    _github(handler).fetch_tickets(mode="all")
+    _github(handler).fetch_tickets(ticket_ids=["1", "2"])
+    assert [path for path, _ in seen] == [
+        "/repos/emesoft/hub/issues/1",
+        "/repos/emesoft/hub/issues/2",
+    ]
+
+
+def test_with_neither_it_lists_the_open_issues():
+    """A repository's closed history is unbounded, and nobody asking for "the
+    issues" means five years of them."""
+    seen, handler = _capture()
+    _github(handler).fetch_tickets()
     assert seen[0][0] == "/repos/emesoft/hub/issues"
 
 
-def test_a_spec_replaces_the_legacy_selection_rather_than_blending_with_it():
+def test_a_query_wins_over_named_numbers():
     seen, handler = _capture()
-    _github(handler).fetch_tickets(spec=q(clause("state", "is", "open")), mode="assigned")
+    _github(handler).fetch_tickets(spec=q(clause("state", "is", "open")), ticket_ids=["1"])
     assert [path for path, _ in seen] == ["/search/issues"]
-    # `mode="assigned"` would have called /user to resolve the login. It did not.
 
 
 def test_pull_requests_are_dropped_even_if_the_search_returns_one():

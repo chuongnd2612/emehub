@@ -318,10 +318,10 @@ export const deleteTicket = (externalId: string): Promise<unknown> =>
 /**
  * Handoff § 5 → `POST /tickets/sync`.
  *
- * `mode` is the adapter's selection strategy: `sprint` (the named sprint),
- * `assigned` (the authenticated identity's items), or anything else, which
- * means "everything matching the filters". Advanced mode therefore sends `all`
- * plus the field filters.
+ * **A clause query is the only thing sent.** The route's legacy
+ * `mode`/`sprint`/`states`/`workItemTypes` fields are gone (#130); the Basic tab's
+ * three scopes are clause queries too, composed in `components/import/scopes.ts`.
+ * A request with no query is refused with a 422 rather than read as "everything".
  *
  * **This 404s when no work-item connection of that kind exists** — the correct
  * answer for a workspace that has not wired a provider yet, not a bug. The
@@ -330,34 +330,22 @@ export const deleteTicket = (externalId: string): Promise<unknown> =>
 export const runImport = async (
   request: ImportRequest,
 ): Promise<ImportResult> => {
-  const filters = request.filters ?? {};
-  const advanced = request.mode === "advanced";
-
   const result = await api.post<{ synced?: number }>("/tickets/sync", {
     providerKind: PROVIDER_WIRE_KIND[request.provider],
-    mode: advanced ? "all" : request.scope,
-    // A clause query wins server-side and the legacy fields below are ignored.
-    // They are still sent because this route is a contract agents call and the
-    // legacy path is the bridge — see SyncRequest.
-    query: request.query ?? undefined,
-    sprint: filters.sprint || undefined,
-    areaPath: filters.area || undefined,
-    states: filters.status ? [filters.status] : [],
-    workItemTypes: filters.type ? [filters.type] : [],
+    query: request.query,
   });
 
   return {
     count: result.synced ?? 0,
     provider: PROVIDER_DISPLAY[request.provider],
-    scopeLabel: request.query
-      ? "your query"
-      : advanced
-      ? "field filters applied"
-      : {
-          sprint: "active sprint",
-          assigned: "items assigned to you",
-          all: "all open items",
-        }[request.scope],
+    scopeLabel:
+      request.mode === "advanced"
+        ? "your query"
+        : {
+            sprint: "active sprint",
+            assigned: "items assigned to you",
+            all: "all open items",
+          }[request.scope],
   };
 };
 

@@ -269,31 +269,26 @@ class GitHubAdapter(ProviderAdapter):
     def fetch_tickets(
         self,
         *,
-        mode: str = "sprint",
-        sprint: str | None = None,
-        sprint_path: str | None = None,
-        area_path: str | None = None,
-        states: list[str] | None = None,
-        work_item_types: list[str] | None = None,
+        spec: Any = None,
         ticket_ids: list[str] | None = None,
         include_comments: bool = False,
         project: str | None = None,  # GitHub has no project concept; unused
-        spec: Any = None,
     ) -> list[NormalizedTicket]:
         org, repo = self._require_repo()
         with self._client() as client:
             if spec is not None:
-                # The compiled query replaces the legacy selection outright; mixing
-                # them would silently re-apply a condition the user had removed.
                 issues = self._search_issues(client, spec, org=org, repo=repo)
-            elif mode == "selected" and ticket_ids:
+            elif ticket_ids:
                 issues = [self._get_issue(client, num) for num in ticket_ids]
                 issues = [i for i in issues if i]
             else:
-                params: dict[str, Any] = {"state": "open", "per_page": _PER_PAGE}
-                if mode == "assigned":
-                    params["assignee"] = self._current_login(client)
-                resp = client.get(f"/repos/{org}/{repo}/issues", params=params)
+                # No query and no ids: every open issue. `state: open` rather than
+                # `all` because a repository's closed history is unbounded and
+                # nobody asking for "the issues" means five years of them.
+                resp = client.get(
+                    f"/repos/{org}/{repo}/issues",
+                    params={"state": "open", "per_page": _PER_PAGE},
+                )
                 resp.raise_for_status()
                 # The issues endpoint also returns pull requests.
                 issues = [i for i in resp.json() if "pull_request" not in i]
@@ -362,11 +357,6 @@ class GitHubAdapter(ProviderAdapter):
             }
             for c in payload
         ]
-
-    def _current_login(self, client: httpx.Client) -> str:
-        resp = client.get("/user")
-        resp.raise_for_status()
-        return resp.json().get("login", "")
 
     def _get_issue(self, client: httpx.Client, number: str) -> dict[str, Any] | None:
         resp = client.get(f"/repos/{self.org}/{self.repo}/issues/{number}")

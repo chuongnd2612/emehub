@@ -114,28 +114,38 @@ class SyncRequest(ApiModel):
 
     ``connectionId`` wins; ``providerKind`` is the fallback ("the first
     work-item connection of this kind that I can see").
+
+    ## Two ways to say what to pull, and no third
+
+    Either ``query`` — a clause query, compiled per provider — or ``ticketIds``, an
+    explicit selection of known work items. The legacy
+    ``mode``/``sprint``/``sprintPath``/``areaPath``/``states``/``workItemTypes``
+    fields are **gone** (#130): they were a filter language expressing a fraction of
+    what a clause query can, and every one of them is now a clause. See
+    ``docs/INTEGRATION.md`` §3 for the mapping.
+
+    ``ticketIds`` survives because selecting known items is **not** filtering: the
+    clause model has no id field, and giving it one would let a list pretend to be a
+    query.
+
+    One of the two is required. "Everything in the project" is expressible — a query
+    of ``state is not Removed``, which is what the Import dialog's *All open work
+    items* sends — but it has to be *asked for*, not arrived at by omitting
+    everything.
     """
+
+    model_config = ConfigDict(extra="forbid", **ApiModel.model_config)
 
     connection_id: int | None = None
     provider_kind: str | None = None
-    mode: str = "sprint"
-    sprint: str | None = None
-    sprint_path: str | None = None
-    area_path: str | None = None
-    states: list[str] = Field(default_factory=list)
-    work_item_types: list[str] = Field(default_factory=list)
+    #: External ids of known work items. Ignored when ``query`` is given.
     ticket_ids: list[str] = Field(default_factory=list)
     #: The provider-side project name, overriding the connection's default.
     project: str | None = None
     #: The hub project registry row to attribute the synced tickets to.
     project_id: int | None = None
-    #: A clause query (`services.ticket_query`). **When present it wins**, and the
-    #: legacy `mode`/`sprint`/`states`/… fields above are ignored entirely —
-    #: blending them would silently re-apply a condition the user had removed.
-    #:
-    #: Additive on purpose. `POST /tickets/sync` is a CONTRACT route that agents
-    #: call (INTEGRATION.md §3), so the legacy fields keep working untouched; they
-    #: are the bridge, and deleting them is a later, separate step.
+    #: A clause query (`services.ticket_query`), validated against the destination's
+    #: capability matrix before anything is compiled.
     query: dict | None = None
 
 
@@ -729,30 +739,35 @@ def sync_tickets(
     Upsert, not insert: re-syncing the same work item updates the existing row,
     keyed on ``(owner scope, provider_kind, external_id)``.
     """
+    if not body.query and not body.ticket_ids:
+        # Refused rather than read as "everything". A sync that pulls a whole
+        # project because a field was left out is expensive, surprising, and
+        # indistinguishable from a caller that meant to send a filter.
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Say what to import: a `query`, or `ticketIds` for known work items."
+            ),
+        )
+    spec = _compiled(
+        body.query,
+        _destination(
+            db,
+            principal,
+            connection_id=body.connection_id,
+            provider_kind=body.provider_kind,
+        ),
+    )
     try:
         synced, resolved = ticket_service.sync_tickets(
             db,
             principal,
             connection_id=body.connection_id,
             provider_kind=body.provider_kind,
-            mode=body.mode,
-            sprint=body.sprint,
-            sprint_path=body.sprint_path,
-            area_path=body.area_path,
-            states=body.states or None,
-            work_item_types=body.work_item_types or None,
             ticket_ids=body.ticket_ids or None,
             project=body.project,
             project_id=body.project_id,
-            spec=_compiled(
-                body.query,
-                _destination(
-                    db,
-                    principal,
-                    connection_id=body.connection_id,
-                    provider_kind=body.provider_kind,
-                ),
-            ),
+            spec=spec,
         )
     except ticket_service.TicketSyncUnavailable as exc:
         # Not wired to the provider adapters in this deployment. 503 and say so —
@@ -770,8 +785,15 @@ def sync_tickets(
         actor=principal.email,
         actor_id=principal.id,
         source=getattr(principal, "_aud", None),
-        target=body.sprint or resolved.label or resolved.provider_kind,
-        meta=f"{len(synced)} work items",
+        target=resolved.label or resolved.provider_kind,
+        # What was asked for, in words, rather than only how much came back. The
+        # audit row used to carry the sprint name; a query in prose is the same
+        # information for a selection that is no longer one field.
+        meta=(
+            f"{len(synced)} work items · {ticket_query.describe(spec)}"
+            if spec is not None
+            else f"{len(synced)} work items · {len(body.ticket_ids)} named"
+        ),
         owner_id=principal.id,
         db=db,
     )

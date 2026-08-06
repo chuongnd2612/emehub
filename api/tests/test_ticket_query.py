@@ -455,8 +455,26 @@ def test_preview_hands_the_compiled_spec_to_the_adapter(client, member):
     assert spec.clauses[0].values == ("Active", "New")
 
 
-def test_sync_with_a_query_imports_and_ignores_the_legacy_fields(client, member):
-    """Blending the two would silently re-apply a condition the user removed."""
+def test_sync_with_a_query_imports(client, member):
+    source = SpecSource()
+    with ticket_service.use_ticket_source_resolver(resolver_for(source)):
+        response = client.post(
+            "/tickets/sync",
+            json={"providerKind": "azure_devops", "query": VALID},
+            headers=member,
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["synced"] == 2
+    assert source.seen[0]["spec"] is not None
+
+
+def test_a_legacy_selection_field_is_refused_rather_than_ignored(client, member):
+    """`mode`/`sprint`/`states`/… are gone (#130), and `extra="forbid"` says so.
+
+    Refusing beats ignoring: a caller still sending ``mode="sprint"`` believes it is
+    filtering, and an ignored filter returns *more* work items than were asked for.
+    A 422 naming the field is how they find out.
+    """
     source = SpecSource()
     with ticket_service.use_ticket_source_resolver(resolver_for(source)):
         response = client.post(
@@ -469,22 +487,11 @@ def test_sync_with_a_query_imports_and_ignores_the_legacy_fields(client, member)
             },
             headers=member,
         )
-    assert response.status_code == 200, response.text
-    assert response.json()["synced"] == 2
-    assert source.seen[0]["spec"] is not None
-
-
-def test_sync_without_a_query_is_untouched(client, member):
-    """The legacy path is the bridge for agents already calling this route."""
-    source = SpecSource()
-    with ticket_service.use_ticket_source_resolver(resolver_for(source)):
-        client.post(
-            "/tickets/sync",
-            json={"providerKind": "azure_devops", "mode": "assigned"},
-            headers=member,
-        )
-    assert source.seen[0]["spec"] is None
-    assert source.seen[0]["mode"] == "assigned"
+    assert response.status_code == 422
+    refused = {tuple(problem["loc"]) for problem in response.json()["detail"]}
+    assert ("body", "mode") in refused
+    assert ("body", "sprint") in refused
+    assert source.seen == [], "the provider was called anyway"
 
 
 def test_an_invalid_query_is_refused_with_the_problems_positioned(client, member):

@@ -263,26 +263,40 @@ def test_a_spec_reaches_azure_devops_as_the_compiled_query():
     ]
 
 
-def test_a_spec_replaces_the_legacy_selection_rather_than_blending_with_it():
-    """Blending them would silently re-apply a condition the user had removed."""
+def test_named_ids_skip_the_query_entirely():
+    """Selecting known work items is not filtering: no WIQL is built, and no
+    round-trip is spent asking ADO which ids match a list of ids."""
     sent, handler = _capture()
-    _ado(handler).fetch_tickets(
-        spec=q(c("state", "is", "Active")),
-        mode="sprint",
-        sprint="Sprint 99",
-        work_item_types=["Bug"],
-        area_path="Surveyor\\Identity",
-    )
-    assert "IterationPath" not in sent[0]
-    assert "WorkItemType" not in sent[0]
-    assert "AreaPath" not in sent[0]
+    _ado(handler).fetch_tickets(ticket_ids=["7", "9"])
+    assert sent == []
 
 
-def test_the_legacy_path_is_untouched_when_no_spec_is_given():
+def test_a_non_numeric_id_is_dropped_rather_than_sent():
+    """`System.Id` is an integer field, so ADO would reject the whole batch — losing
+    the ids that were fine along with the one that was not."""
     sent, handler = _capture()
-    _ado(handler).fetch_tickets(mode="assigned")
-    assert "[System.AssignedTo] = @Me" in sent[0]
-    assert "[System.WorkItemType] IN" in sent[0]  # the legacy default type list
+    tickets = _ado(handler).fetch_tickets(ticket_ids=["7", "not-an-id"])
+    assert sent == []
+    assert len(tickets) == 1
+
+
+def test_a_query_wins_over_named_ids():
+    """Both can arrive; the query is the filter and the more specific instruction."""
+    sent, handler = _capture()
+    _ado(handler).fetch_tickets(spec=q(c("state", "is", "Active")), ticket_ids=["7"])
+    assert len(sent) == 1
+    assert "[System.State] = 'Active'" in sent[0]
+
+
+def test_with_neither_the_query_is_just_the_project():
+    """The router refuses this case (`SyncRequest` requires one of the two), but the
+    adapter still has to mean something rather than crash."""
+    sent, handler = _capture()
+    _ado(handler).fetch_tickets()
+    assert sent == [
+        "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'Surveyor' "
+        "ORDER BY [System.ChangedDate] DESC"
+    ]
 
 
 def test_a_rejected_clause_query_is_not_silently_retried_unscoped():
