@@ -505,6 +505,48 @@ textarea {
   }
 }
 
+/* Cursor-tracked metallic sheen on the EMESOFT brandmark.
+   Ported from Q-Agent's sidebar logo: a diagonal light band whose midpoint
+   follows the pointer (`--sheen-x`, set by useLogoTilt) and which fades in on
+   hover (`--sheen-on`).
+
+   The band is **masked to the logo's own alpha**, which is the whole trick: the
+   art is a cut-out PNG on transparency, so an unmasked gradient would wash a
+   bright diagonal across the empty background instead of glinting on the metal.
+   `mix-blend-mode: screen` then brightens rather than paints over it.
+
+   Note this is not the handoff's `metalFlash`, which looped on its own and read
+   as a glitch — it was removed for that reason. This one only moves when the
+   pointer does. */
+.logo-sheen {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: var(--sheen-on, 0);
+  background: linear-gradient(
+    100deg,
+    transparent calc(var(--sheen-x, 50%) - 18%),
+    rgba(255, 255, 255, 0.55) var(--sheen-x, 50%),
+    transparent calc(var(--sheen-x, 50%) + 18%)
+  );
+  -webkit-mask-image: url("/assets/eme-3d-logo-cut.png");
+  mask-image: url("/assets/eme-3d-logo-cut.png");
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  mix-blend-mode: screen;
+  transition: opacity 0.28s ease;
+}
+
+/* Reduced motion: the band would still jump with the cursor, so hide it. The
+   global reduced-motion block below only neutralises animations/transitions. */
+@media (prefers-reduced-motion: reduce) {
+  .logo-sheen {
+    display: none;
+  }
+}
+
 /* Browser autofill: keep the field on our tokens.
 
    Chrome/Safari paint an opaque pale block on an autofilled input through a UA

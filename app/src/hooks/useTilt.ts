@@ -26,6 +26,16 @@ export interface TiltHandlers<T extends HTMLElement = HTMLDivElement> {
  * Logo tilt — `perspective(820px) rotateX((0.5-py)*16deg)
  * rotateY((px-0.5)*24deg) scale(1.06)`, reset to a flat scale(1) on leave.
  * The wrapper the handlers sit on should carry `perspective: 820px`.
+ *
+ * Also drives a **cursor-tracked metallic sheen**, matching Q-Agent's brandmark
+ * (`q-agent/app/src/components/shell/GlobalSidebar.tsx`): `--sheen-x` is the
+ * band's midpoint as a percentage, mapped 12%→88% so the highlight runs off the
+ * edges rather than stopping short, and `--sheen-on` fades it in on hover. The
+ * gradient and the alpha mask that confines it to the metal live in
+ * `.logo-sheen` (styles/theme.css) — only the two numbers are dynamic.
+ *
+ * The sheen tracks the pointer **even with Depth-on-hover off**, following the
+ * precedent in `useCardTilt`: the setting gates 3D rotation, not lighting.
  */
 export function useLogoTilt<
   T extends HTMLElement = HTMLDivElement,
@@ -36,10 +46,14 @@ export function useLogoTilt<
   const onMouseMove = useCallback(
     (e: ReactMouseEvent<HTMLElement>) => {
       const el = ref.current;
-      if (!enabled || !el) return;
+      if (!el) return;
       const r = e.currentTarget.getBoundingClientRect();
       const px = (e.clientX - r.left) / r.width;
       const py = (e.clientY - r.top) / r.height;
+      // Lighting first, so it still follows when depth is switched off.
+      el.style.setProperty("--sheen-x", `${12 + px * 76}%`);
+      el.style.setProperty("--sheen-on", "1");
+      if (!enabled) return;
       el.style.transition = TILT_TRANSITION;
       el.style.transform = `perspective(820px) rotateX(${(0.5 - py) * 16}deg) rotateY(${
         (px - 0.5) * 24
@@ -53,6 +67,9 @@ export function useLogoTilt<
     if (!el) return;
     el.style.transition = TILT_TRANSITION;
     el.style.transform = "perspective(820px) rotateX(0deg) rotateY(0deg) scale(1)";
+    // Fade the band out rather than snapping it back to centre — `--sheen-x`
+    // stays put so it dims where it was.
+    el.style.setProperty("--sheen-on", "0");
   }, []);
 
   return { ref, onMouseMove, onMouseLeave, enabled };
