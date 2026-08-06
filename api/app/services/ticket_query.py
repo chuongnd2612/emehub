@@ -37,7 +37,9 @@ something unrecognised.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field as dc_field
+from datetime import date, timedelta
 from typing import Any, Literal
 
 # ─────────────────────────────────────────────────────────────── the vocabulary
@@ -381,6 +383,51 @@ def validate(query: TicketQuery, destination: str) -> list[QueryProblem]:
         )
 
     return problems
+
+
+# ───────────────────────────────────────────────────────── macro resolution
+
+#: ``@Today - N``. The offset is digits, parsed out and never echoed.
+_TODAY_OFFSET = re.compile(r"^@today\s*-\s*(\d{1,4})$", re.IGNORECASE)
+
+
+def resolve_date_macro(value: str, *, today: date | None = None) -> str | None:
+    """``@Today`` / ``@Today - N`` as an ISO date, or ``None`` if not a date macro.
+
+    Azure DevOps and Jira expand these themselves, so their compilers pass them
+    through untouched. **The mirror cannot.** Comparing a `synced_at` column
+    against the literal string ``"@Today - 7"`` matches nothing — and the value
+    hint on the browse screen actively invites that input, so it would silently
+    return an empty table rather than the last week's work.
+    """
+    trimmed = value.strip()
+    if trimmed.lower() == "@today":
+        return (today or date.today()).isoformat()
+    offset = _TODAY_OFFSET.match(trimmed)
+    if offset is None:
+        return None
+    return ((today or date.today()) - timedelta(days=int(offset.group(1)))).isoformat()
+
+
+def resolve_for_mirror(value: str, *, viewer: str = "") -> str:
+    """A clause value as the mirror's SQL should see it.
+
+    Two macros need expanding here because our own columns hold plain data rather
+    than a provider's query language:
+
+    * the date macros, above;
+    * ``@Me``, which becomes the viewer's display name — the mirror stores
+      ``Ticket.assignee`` as the provider's *display* name (Azure DevOps sends
+      ``System.AssignedTo.displayName``), not an account. So this matches only when
+      the provider spells the person the same way the hub does, which is why the
+      import path keeps using the real ``@Me`` macro and lets ADO resolve it.
+    """
+    as_date = resolve_date_macro(value)
+    if as_date is not None:
+        return as_date
+    if value.strip().lower() == "@me":
+        return viewer
+    return value
 
 
 def describe(query: TicketQuery) -> str:

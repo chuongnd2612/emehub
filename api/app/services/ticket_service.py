@@ -217,10 +217,20 @@ _QUERY_COLUMNS: dict[str, Any] = {
 }
 
 
-def _clause_condition(clause: ticket_query.QueryClause) -> Any | None:
-    """One clause as a SQLAlchemy expression, or ``None`` when it says nothing."""
+def _clause_condition(
+    clause: ticket_query.QueryClause, viewer: str = ""
+) -> Any | None:
+    """One clause as a SQLAlchemy expression, or ``None`` when it says nothing.
+
+    Macros are resolved here rather than passed through: ADO and Jira expand
+    ``@Today - 7`` themselves, but a comparison against our own column has to be a
+    real date or it matches nothing — and the value hint invites exactly that
+    input.
+    """
     column = _QUERY_COLUMNS.get(clause.field)
-    values = clause.filled
+    values = tuple(
+        ticket_query.resolve_for_mirror(v, viewer=viewer) for v in clause.filled
+    )
     if column is None or not values:
         return None
     first = values[0]
@@ -252,7 +262,11 @@ def _clause_condition(clause: ticket_query.QueryClause) -> Any | None:
     return None
 
 
-def apply_query(query: Query[Ticket], spec: ticket_query.TicketQuery) -> Query[Ticket]:
+def apply_query(
+    query: Query[Ticket],
+    spec: ticket_query.TicketQuery,
+    viewer: str = "",
+) -> Query[Ticket]:
     """Narrow ``query`` by ``spec``. Callers validate first; this only compiles.
 
     ``match: "any"`` ORs the clauses, but as a **single** filter on top of whatever
@@ -261,7 +275,9 @@ def apply_query(query: Query[Ticket], spec: ticket_query.TicketQuery) -> Query[T
     """
     conditions = [
         condition
-        for condition in (_clause_condition(clause) for clause in spec.effective_clauses)
+        for condition in (
+            _clause_condition(clause, viewer) for clause in spec.effective_clauses
+        )
         if condition is not None
     ]
     if not conditions:
@@ -298,7 +314,10 @@ def list_tickets(
     """
     query = _visible(db, user)
     if spec is not None:
-        query = apply_query(query, spec)
+        # `@Me` resolves against the viewer's own display name — see
+        # `ticket_query.resolve_for_mirror` for why that is a best-effort match.
+        viewer = user.full_name if user else ""
+        query = apply_query(query, spec, viewer)
     if project_id is not None:
         query = query.filter(Ticket.project_id == project_id)
     if provider_kind:

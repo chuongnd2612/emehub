@@ -28,10 +28,12 @@ import {
   PROVIDERS,
   getConnectionsWithCapability,
   getWorkItemMetadata,
+  listSavedQueries,
   previewTicketQuery,
   type ImportRequest,
   type ImportScope,
   type ProviderKey,
+  type SavedQuery,
   type TicketFilterField,
   type TicketFilters,
   type WorkItemMetadata,
@@ -188,6 +190,8 @@ export function ImportDialog({
   const [previewing, setPreviewing] = useState(false);
   const [metadata, setMetadata] = useState<WorkItemMetadata>(EMPTY_META);
   const [metaError, setMetaError] = useState("");
+  const [saved, setSaved] = useState<SavedQuery[]>([]);
+  const [savedKey, setSavedKey] = useState(0);
 
   // The pickers are only as good as the provider metadata behind them, so it is
   // read once per open — cached hub-side, so a reopen is usually free.
@@ -219,6 +223,23 @@ export function ImportDialog({
       live = false;
     };
   }, [open, mode, provider, meta.name]);
+
+  // Saved queries for this provider's own destination — a query built for ADO
+  // cannot run on Jira, so the list is never mixed.
+  useEffect(() => {
+    if (!open || mode !== "advanced") return;
+    let live = true;
+    void listSavedQueries(destination)
+      .then((rows) => {
+        if (live) setSaved(rows);
+      })
+      .catch(() => {
+        if (live) setSaved([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [open, mode, destination, savedKey]);
 
   const preview = useCallback(() => {
     setPreviewing(true);
@@ -344,6 +365,8 @@ export function ImportDialog({
               destination={destination}
               metadata={metadata}
               busy={previewing}
+              saved={saved}
+              onSavedChanged={() => setSavedKey((n) => n + 1)}
               onApply={preview}
               onReset={() => setDraft(emptyQuery(destination))}
               trailing={

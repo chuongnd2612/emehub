@@ -9,6 +9,7 @@ from app.models.claude_credentials import ClaudeCredentials  # noqa: F401
 from app.models.claude_usage import ClaudeUsage  # noqa: F401
 from app.models.knowledge import ProjectKnowledge  # noqa: F401
 from app.models.metadata_cache import ProviderMetadataCache  # noqa: F401
+from app.models.ticket_query_saved import SavedTicketQuery  # noqa: F401
 from app.models.project import Project  # noqa: F401
 from app.models.project_config import ProjectConfig  # noqa: F401
 from app.models.provider_connection import ProviderConnection  # noqa: F401
