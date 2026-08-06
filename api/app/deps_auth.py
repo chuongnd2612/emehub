@@ -228,6 +228,31 @@ def cookie_domain_for(request: Request | None) -> str | None:
     return None
 
 
+def _purge_other_scope(response: Response, domain: str | None) -> None:
+    """Delete the same-named cookies at the *other* scope before setting ours.
+
+    This is not tidiness, it is a real failure mode, reproduced against the
+    deployment. RFC 6265 permits two cookies with the same name differing only by
+    ``Domain``, a browser sends **both** in one ``Cookie`` header, and Starlette's
+    ``request.cookies`` is a dict — so one silently shadows the other, and which
+    one wins is not ours to choose.
+
+    Changing ``EMEHUB_COOKIE_DOMAIN`` on a running deployment is enough to create
+    the pair: every browser that signed in beforehand keeps a host-only
+    ``emehub_refresh`` next to the new domain-wide one. If the stale one wins,
+    ``/auth/refresh`` 401s on **every** load — logging in appears to work and the
+    next reload is anonymous, forever, until the cookie is cleared by hand.
+
+    Deleting the opposite scope on the way in makes that self-heal: one sign-in
+    after this ships and the duplicate is gone.
+    """
+    other = None if domain else settings.cookie_domain or None
+    if domain is None and other is None:
+        return  # No domain is configured at all; there is no second scope.
+    for name in (REFRESH_COOKIE, CSRF_COOKIE):
+        response.delete_cookie(name, path=settings.cookie_path, domain=other)
+
+
 def set_auth_cookies(
     response: Response,
     *,
@@ -238,6 +263,7 @@ def set_auth_cookies(
 ) -> None:
     max_age = int(auth_service.refresh_ttl(remember).total_seconds())
     domain = cookie_domain_for(request)
+    _purge_other_scope(response, domain)
     response.set_cookie(
         REFRESH_COOKIE,
         refresh_token,

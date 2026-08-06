@@ -80,6 +80,19 @@ def test_a_missing_request_is_host_only(configured):
 
 
 # ------------------------------------------------------------------ end to end
+def setter_for(response, name: str) -> str:
+    """The Set-Cookie header that actually SETS ``name``.
+
+    A response also carries deletions for the other scope (see
+    ``_purge_other_scope``), and those are Set-Cookie headers for the same name
+    with an empty value — so matching on the name alone picks up the wrong one.
+    """
+    headers = [c for c in response.headers.get_list("set-cookie") if c.startswith(f"{name}=")]
+    setters = [c for c in headers if not c.startswith(f"{name}=;") and 'Max-Age=0' not in c]
+    assert len(setters) == 1, f"expected exactly one setter for {name}, got {headers}"
+    return setters[0]
+
+
 def test_login_on_a_foreign_host_sets_a_host_only_cookie(client, make_user, configured):
     """The regression this fixes: the cookie has to be storable by the browser
     that asked for it, or logging in never sticks."""
@@ -90,10 +103,8 @@ def test_login_on_a_foreign_host_sets_a_host_only_cookie(client, make_user, conf
         headers={"Host": "localhost"},
     )
     assert response.status_code == 200, response.text
-    cookies = response.headers.get_list("set-cookie")
-    assert cookies, "no cookies were set at all"
-    assert any(REFRESH_COOKIE in c for c in cookies)
-    assert not any("domain=" in c.lower() for c in cookies), cookies
+    cookie = setter_for(response, REFRESH_COOKIE)
+    assert "domain=" not in cookie.lower(), cookie
 
 
 def test_login_on_the_configured_domain_still_shares_the_cookie(
@@ -106,10 +117,9 @@ def test_login_on_the_configured_domain_still_shares_the_cookie(
         headers={"Host": "hub.chuongnd.click"},
     )
     assert response.status_code == 200, response.text
-    cookies = response.headers.get_list("set-cookie")
     for name in (REFRESH_COOKIE, CSRF_COOKIE):
-        cookie = next(c for c in cookies if name in c)
-        assert "chuongnd.click" in cookie.lower(), cookie
+        cookie = setter_for(response, name)
+        assert "domain=.chuongnd.click" in cookie.lower(), cookie
 
 
 def test_the_session_survives_a_refresh_on_a_foreign_host(client, make_user, configured):
@@ -133,3 +143,31 @@ def test_the_session_survives_a_refresh_on_a_foreign_host(client, make_user, con
     )
     assert refreshed.status_code == 200, refreshed.text
     assert refreshed.json()["accessToken"]
+
+
+def test_setting_one_scope_deletes_the_other(client, make_user, configured):
+    """The duplicate-cookie failure, reproduced against the deployment: a stale
+    host-only cookie sits beside the domain-wide one, the browser sends both, and
+    the server's cookie dict keeps only one. If the stale one wins,
+    ``/auth/refresh`` 401s on every load and the session is unrecoverable by hand.
+
+    So setting one scope must delete the other, making it self-heal on the next
+    sign-in.
+    """
+    make_user("cookie-purge@emesoft.net", PASSWORD)
+    response = client.post(
+        "/auth/login",
+        json={"email": "cookie-purge@emesoft.net", "password": PASSWORD},
+        headers={"Host": "hub.chuongnd.click"},
+    )
+    assert response.status_code == 200
+
+    headers = [
+        c for c in response.headers.get_list("set-cookie") if c.startswith(f"{REFRESH_COOKIE}=")
+    ]
+    # One setter carrying the shared domain...
+    assert any("domain=.chuongnd.click" in c.lower() and "max-age=0" not in c.lower() for c in headers), headers
+    # ...and one expiry for the host-only variant, which carries no Domain.
+    expiries = [c for c in headers if "max-age=0" in c.lower()]
+    assert expiries, f"nothing purges the other scope: {headers}"
+    assert all("domain=" not in c.lower() for c in expiries), expiries
