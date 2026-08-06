@@ -505,6 +505,50 @@ textarea {
   }
 }
 
+/* Skeleton shimmer.
+   A highlight sweeping left→right across a placeholder block.
+
+   Its own keyframe rather than reusing `sheen`: that one moves
+   `background-position` by a fixed ±380px, so a 320px-wide tile and an
+   80px-wide chip would sweep at visibly different speeds and the group would
+   look ragged. This animates a percentage instead, and `.skeleton` sizes the
+   gradient to 220% of the block, so every block sweeps in lockstep.
+
+   The blocks read as one surface being revealed rather than a dozen things
+   flashing independently — which is the difference between "loading" and
+   "broken". */
+@keyframes skeletonSweep {
+  from {
+    background-position: 180% 0;
+  }
+  to {
+    background-position: -80% 0;
+  }
+}
+
+.skeleton {
+  border-radius: 8px;
+  background-color: var(--card3);
+  background-image: linear-gradient(
+    100deg,
+    transparent 20%,
+    color-mix(in srgb, var(--txt) 7%, transparent) 50%,
+    transparent 80%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: skeletonSweep 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Reduced motion: keep the layout, drop the travelling highlight. The blocks
+   still communicate "content is coming"; the sweep is the decoration. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+    background-image: none;
+  }
+}
+
 /* Cursor-tracked metallic sheen on the EMESOFT brandmark.
    Ported from Q-Agent's sidebar logo: a diagonal light band whose midpoint
    follows the pointer (`--sheen-x`, set by useLogoTilt) and which fades in on

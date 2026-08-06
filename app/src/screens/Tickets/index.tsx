@@ -31,9 +31,9 @@ import {
   ErrorState,
   GlassCard,
   Icon,
-  LoadingState,
   TableFootnote,
   TablePager,
+  TableRowsSkeleton,
   toast,
 } from "@/components/ui";
 import { ImportDialog, useImportRun } from "@/components/import";
@@ -256,7 +256,14 @@ export default function TicketsScreen() {
         onImport={() => setModal("import")}
       />
 
-      {status === "loading" && <LoadingState label="Loading work items…" />}
+      {/* Skeleton rows rather than a centred spinner: the table's geometry is
+          known, so the toolbar stays put and the rows fill in instead of the
+          layout jumping when they land. */}
+      {status === "loading" && (
+        <GlassCard className="rounded-[20px] p-0">
+          <TableRowsSkeleton rows={8} columns={6} />
+        </GlassCard>
+      )}
 
       {status === "error" && (
         <GlassCard className="rounded-[20px]">

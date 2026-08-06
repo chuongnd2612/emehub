@@ -50,6 +50,18 @@ export { STATUS_TONE, StatusPill, statusTone } from "./StatusPill";
 export type { StatusName, StatusPillProps } from "./StatusPill";
 
 export {
+  ActivityRowsSkeleton,
+  KpiTilesSkeleton,
+  PanelHeadingSkeleton,
+  ProductCardsSkeleton,
+  Skeleton,
+  SkeletonRegion,
+  SummaryPanelSkeleton,
+  TableRowsSkeleton,
+} from "./Skeleton";
+export type { SkeletonProps } from "./Skeleton";
+
+export {
   Table,
   TableCell,
   TableEmpty,
