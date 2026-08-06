@@ -354,9 +354,13 @@ def validate(query: TicketQuery, destination: str) -> list[QueryProblem]:
             )
             continue
 
-        if not clause.values:
+        blanks = [v for v in clause.values if v.strip() == ""]
+        if not clause.values or len(blanks) == len(clause.values):
+            # No values, or every one of them blank: the control is simply
+            # untouched, so ask for a value rather than reporting an "empty value"
+            # — which reads as a mistake the user made rather than one to make.
             problems.append(QueryProblem(f"Give {label} a value.", index))
-        elif any(v.strip() == "" for v in clause.values):
+        elif blanks:
             problems.append(QueryProblem(f"One of the {label} values is empty.", index))
 
         if clause.operator not in LIST_OPERATORS and len(clause.values) > 1:

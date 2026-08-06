@@ -32,6 +32,7 @@
 // or `label` parameter, and a pill that changes nothing is a lying control.
 
 import { api } from "@/lib/api";
+import type { TicketQuery as ClauseQuery } from "./ticketQuery";
 import { relativeTime } from "./humanize";
 import {
   PROVIDER_DISPLAY,
@@ -335,6 +336,10 @@ export const runImport = async (
   const result = await api.post<{ synced?: number }>("/tickets/sync", {
     providerKind: PROVIDER_WIRE_KIND[request.provider],
     mode: advanced ? "all" : request.scope,
+    // A clause query wins server-side and the legacy fields below are ignored.
+    // They are still sent because this route is a contract agents call and the
+    // legacy path is the bridge — see SyncRequest.
+    query: request.query ?? undefined,
     sprint: filters.sprint || undefined,
     areaPath: filters.area || undefined,
     states: filters.status ? [filters.status] : [],
@@ -344,12 +349,60 @@ export const runImport = async (
   return {
     count: result.synced ?? 0,
     provider: PROVIDER_DISPLAY[request.provider],
-    scopeLabel: advanced
+    scopeLabel: request.query
+      ? "your query"
+      : advanced
       ? "field filters applied"
       : {
           sprint: "active sprint",
           assigned: "items assigned to you",
           all: "all open items",
         }[request.scope],
+  };
+};
+
+
+/* ── The query builder's preview ─────────────────────────────────────────── */
+
+export interface QueryPreview {
+  /** How many work items the provider matched. */
+  total: number;
+  /** A short sample — enough to confirm the shape, not to read the result. */
+  sample: Ticket[];
+  /** The query in words. */
+  description: string;
+}
+
+/**
+ * `POST /tickets/query/preview` — what a query *would* import, without importing.
+ *
+ * The hub makes the provider call with its own stored PAT, exactly as the sync
+ * does. Nothing is written, so this is safe to run on every Apply — and it is what
+ * finally makes an honest item count possible before a pull.
+ *
+ * A 422 carries `{problems: [{message, clauseIndex}]}` from the same validator the
+ * client greys out Apply with, so reaching it usually means the two have drifted.
+ */
+export const previewTicketQuery = async (options: {
+  provider: ProviderKey;
+  query: ClauseQuery;
+  connectionId?: number;
+  project?: string;
+}): Promise<QueryPreview> => {
+  const wire = await api.post<{
+    total?: number;
+    sample?: TicketWire[];
+    description?: string;
+  }>("/tickets/query/preview", {
+    providerKind: PROVIDER_WIRE_KIND[options.provider],
+    connectionId: options.connectionId,
+    project: options.project,
+    query: options.query,
+  });
+  const projects = await projectNameMap();
+  return {
+    total: wire.total ?? 0,
+    sample: (wire.sample ?? []).map((row) => toTicket(row, projects)),
+    description: wire.description ?? "",
   };
 };

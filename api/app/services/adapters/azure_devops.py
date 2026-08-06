@@ -448,6 +448,22 @@ class AzureDevOpsAdapter(ProviderAdapter):
             "epics": [],
         }
 
+    def count_tickets(self, *, spec: Any = None, project: str | None = None) -> int:
+        """The real total, from the WIQL id list alone.
+
+        WIQL returns every matching id in one request, and the 200-item cap belongs
+        to the *batch field read* that follows it — so counting is both accurate
+        and cheaper than fetching. Reporting the capped number instead would tell
+        someone with 900 bugs that they have 200.
+        """
+        project = (project or "").strip() or self._require_project()
+        with self._client() as client:
+            if spec is not None:
+                return len(self._run_compiled(client, project, spec))
+            return len(self._query_work_item_ids(client, project, mode="all", sprint=None,
+                                                 sprint_path=None, area_path=None, states=None,
+                                                 work_item_types=None, ticket_ids=None))
+
     def fetch_tickets(
         self,
         *,

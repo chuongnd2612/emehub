@@ -203,6 +203,17 @@ class ProviderAdapter(ABC):
                 Providers with no project concept ignore it.
         """
 
+    def count_tickets(self, *, spec: Any = None, project: str | None = None) -> int:
+        """How many work items a query matches, without reading their fields.
+
+        Separate from :meth:`fetch_tickets` because that one is **capped**
+        (``MAX_SYNC_ITEMS``) so a bulk sync cannot hang, and a capped number is the
+        wrong answer to "how many are there" — it silently reads as the truth. A
+        provider that can count cheaply overrides this; the default falls back to
+        counting what a fetch returns, and so inherits that cap.
+        """
+        return len(self.fetch_tickets(spec=spec, project=project, include_comments=False) or [])
+
     def fetch_comments(self, ticket_external_id: str) -> list[dict[str, Any]]:
         """One ticket's comments, on demand, as ``[{who, when, text}]``.
 

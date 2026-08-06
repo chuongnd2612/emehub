@@ -119,10 +119,19 @@ def test_a_single_value_operator_refuses_several_values():
 
 @pytest.mark.parametrize(
     ("values", "fragment"),
-    [((), "Give state a value."), (("",), "One of the state values is empty.")],
+    [
+        # An untouched control — no values, or every one of them blank — asks for
+        # a value. Reporting an "empty value" there reads as a mistake the user
+        # made rather than one they have yet to make.
+        ((), "Give state a value."),
+        (("",), "Give state a value."),
+        (("   ",), "Give state a value."),
+        # A blank *among* real ones is a different thing, and says so.
+        (("Active", ""), "One of the state values is empty."),
+    ],
 )
 def test_missing_and_blank_values_are_both_caught(values, fragment):
-    spec = query(tq.QueryClause(field="state", operator="is", values=values))
+    spec = query(tq.QueryClause(field="state", operator="in", values=values))
     assert any(fragment in p.message for p in tq.validate(spec, "azure_devops"))
 
 
@@ -359,3 +368,185 @@ def test_the_typescript_matrix_matches_this_one():
         for destination, fields in tq.CAPABILITIES.items()
     }
     assert parsed == expected
+
+
+# ────────────────────────────────────── the query over HTTP: preview and sync
+class SpecSource:
+    """A TicketSource that records the spec it was handed."""
+
+    def __init__(self, items=None, total=None):
+        self.items = items or [
+            {"external_id": "SUR-1", "title": "One", "status": "Active"},
+            {"external_id": "SUR-2", "title": "Two", "status": "New"},
+        ]
+        #: What the provider says the real total is, independently of how many
+        #: rows a (capped) fetch returns.
+        self.total = total
+        self.seen: list = []
+        self.counted: list = []
+
+    def fetch_tickets(self, **selection):
+        self.seen.append(selection)
+        return self.items
+
+    def count_tickets(self, **selection):
+        """Uncapped, as a real provider's count is — see `total` below."""
+        self.counted.append(selection)
+        return self.total if self.total is not None else len(self.items)
+
+
+def resolver_for(source):
+    def _resolve(db, user, connection_id, provider_kind):
+        return ticket_service.ResolvedSource(
+            source=source,
+            provider_kind=provider_kind or "azure_devops",
+            connection_id=connection_id or 7,
+            label="ADO",
+        )
+
+    return _resolve
+
+
+VALID = {
+    "clauses": [{"field": "state", "operator": "in", "values": ["Active", "New"]}],
+    "match": "all",
+    "sort": {"field": "changedDate", "direction": "desc"},
+}
+
+
+@pytest.fixture
+def member(client, make_user, auth_headers):
+    make_user("qb-http@emesoft.net", "password12345")
+    return auth_headers("qb-http@emesoft.net", "password12345")
+
+
+def test_preview_reports_the_total_without_importing(client, member, db_session):
+    """The honest item count: the handoff's "~24 items" hints were deleted because
+    nothing could count a provider-side scope without performing it."""
+    from app.models.ticket import Ticket
+
+    source = SpecSource()
+    with ticket_service.use_ticket_source_resolver(resolver_for(source)):
+        response = client.post(
+            "/tickets/query/preview",
+            json={"providerKind": "azure_devops", "query": VALID},
+            headers=member,
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 2
+    assert [row["externalId"] for row in body["sample"]] == ["SUR-1", "SUR-2"]
+    assert body["description"] == "state is any of Active or New"
+    # Nothing was written.
+    assert db_session.query(Ticket).count() == 0
+
+
+def test_preview_hands_the_compiled_spec_to_the_adapter(client, member):
+    source = SpecSource()
+    with ticket_service.use_ticket_source_resolver(resolver_for(source)):
+        client.post(
+            "/tickets/query/preview",
+            json={"providerKind": "azure_devops", "query": VALID},
+            headers=member,
+        )
+    spec = source.seen[0]["spec"]
+    assert spec.clauses[0].field == "state"
+    assert spec.clauses[0].values == ("Active", "New")
+
+
+def test_sync_with_a_query_imports_and_ignores_the_legacy_fields(client, member):
+    """Blending the two would silently re-apply a condition the user removed."""
+    source = SpecSource()
+    with ticket_service.use_ticket_source_resolver(resolver_for(source)):
+        response = client.post(
+            "/tickets/sync",
+            json={
+                "providerKind": "azure_devops",
+                "query": VALID,
+                "mode": "sprint",
+                "sprint": "Sprint 99",
+            },
+            headers=member,
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["synced"] == 2
+    assert source.seen[0]["spec"] is not None
+
+
+def test_sync_without_a_query_is_untouched(client, member):
+    """The legacy path is the bridge for agents already calling this route."""
+    source = SpecSource()
+    with ticket_service.use_ticket_source_resolver(resolver_for(source)):
+        client.post(
+            "/tickets/sync",
+            json={"providerKind": "azure_devops", "mode": "assigned"},
+            headers=member,
+        )
+    assert source.seen[0]["spec"] is None
+    assert source.seen[0]["mode"] == "assigned"
+
+
+def test_an_invalid_query_is_refused_with_the_problems_positioned(client, member):
+    """The same validator the client greys out Apply with, so the two agree."""
+    source = SpecSource()
+    with ticket_service.use_ticket_source_resolver(resolver_for(source)):
+        response = client.post(
+            "/tickets/query/preview",
+            json={
+                "providerKind": "azure_devops",
+                "query": {"clauses": [{"field": "state", "operator": "under", "values": ["x"]}]},
+            },
+            headers=member,
+        )
+    assert response.status_code == 422
+    problems = response.json()["detail"]["problems"]
+    assert problems[0]["clauseIndex"] == 0
+    assert "cannot be filtered with" in problems[0]["message"]
+    assert source.seen == [], "an invalid query must not reach the provider"
+
+
+def test_a_query_for_a_field_the_provider_lacks_is_refused(client, member):
+    source = SpecSource()
+    with ticket_service.use_ticket_source_resolver(resolver_for(source)):
+        response = client.post(
+            "/tickets/query/preview",
+            json={
+                "providerKind": "github",
+                "query": {"clauses": [{"field": "areaPath", "operator": "under", "values": ["x"]}]},
+            },
+            headers=member,
+        )
+    assert response.status_code == 422
+    assert "cannot be filtered on this provider" in response.json()["detail"]["problems"][0]["message"]
+
+
+def test_a_smuggled_wiql_key_is_refused(client, member):
+    """extra="forbid" is what stops a raw query string riding in on the body."""
+    response = client.post(
+        "/tickets/query/preview",
+        json={"providerKind": "azure_devops", "query": VALID, "wiql": "SELECT 1"},
+        headers=member,
+    )
+    assert response.status_code == 422
+
+
+def test_preview_requires_authentication(client):
+    assert client.post("/tickets/query/preview", json={"query": VALID}).status_code == 401
+
+
+def test_the_preview_total_is_the_real_count_not_the_capped_fetch(client, member):
+    """`fetch_tickets` is capped at 200 so a bulk sync cannot hang. Reporting that
+    number as the total would tell someone with 900 bugs they have 200 — silent
+    truncation reading as the truth. The count comes from the uncapped id list."""
+    source = SpecSource(total=873)
+    with ticket_service.use_ticket_source_resolver(resolver_for(source)):
+        response = client.post(
+            "/tickets/query/preview",
+            json={"providerKind": "azure_devops", "query": VALID},
+            headers=member,
+        )
+    body = response.json()
+    assert body["total"] == 873
+    assert len(body["sample"]) == 2, "the sample stays short; only the total is real"
+    assert source.counted, "the count must not be derived from the fetch"

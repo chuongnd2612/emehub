@@ -51,14 +51,14 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import Field
+from pydantic import ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.deps_auth import require_principal
 from app.models.user import User
 from app.schemas import ApiModel
-from app.services import audit_service, ticket_provider, ticket_service
+from app.services import audit_service, ticket_provider, ticket_query, ticket_service
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
@@ -123,6 +123,34 @@ class SyncRequest(ApiModel):
     project: str | None = None
     #: The hub project registry row to attribute the synced tickets to.
     project_id: int | None = None
+    #: A clause query (`services.ticket_query`). **When present it wins**, and the
+    #: legacy `mode`/`sprint`/`states`/… fields above are ignored entirely —
+    #: blending them would silently re-apply a condition the user had removed.
+    #:
+    #: Additive on purpose. `POST /tickets/sync` is a CONTRACT route that agents
+    #: call (INTEGRATION.md §3), so the legacy fields keep working untouched; they
+    #: are the bridge, and deleting them is a later, separate step.
+    query: dict | None = None
+
+
+class QueryPreviewRequest(ApiModel):
+    """Ask the provider what a query would return, without importing it."""
+
+    model_config = ConfigDict(extra="forbid", **ApiModel.model_config)
+
+    connection_id: int | None = None
+    provider_kind: str | None = None
+    project: str | None = None
+    query: dict = Field(default_factory=dict)
+
+
+class QueryPreviewResult(ApiModel):
+    #: How many work items the provider matched.
+    total: int = 0
+    #: A short sample — enough to confirm the shape, not to read the result.
+    sample: list[TicketOut] = Field(default_factory=list)
+    #: The query in words, for the confirmation line.
+    description: str = ""
 
 
 class SyncResult(ApiModel):
@@ -520,6 +548,83 @@ def create_ticket_test_cases(
     )
 
 
+def _compiled(raw: dict | None, provider_kind: str | None) -> ticket_query.TicketQuery | None:
+    """Parse and validate a wire query, or 422 with what is wrong.
+
+    The same `validate` the client runs to grey out Apply — so a request the client
+    would not have sent is refused here rather than compiled into something the
+    provider misreads.
+    """
+    if not raw:
+        return None
+    spec = ticket_query.query_from_wire(raw)
+    destination = (provider_kind or "").strip() or "azure_devops"
+    problems = ticket_query.validate(spec, destination)
+    if problems:
+        raise HTTPException(
+            status_code=422,
+            detail={"problems": [p.as_dict() for p in problems]},
+        )
+    return spec
+
+
+@router.post("/query/preview", response_model=QueryPreviewResult)
+def preview_query(
+    body: QueryPreviewRequest,
+    principal: User = Depends(require_principal),
+    db: Session = Depends(get_db),
+) -> QueryPreviewResult:
+    """What this query would import, without importing it.
+
+    The hub runs the provider call with its own stored PAT, exactly as
+    `POST /tickets/sync` does — the caller never holds a credential. Nothing is
+    written, so this is safe to run on every Apply.
+    """
+    spec = _compiled(body.query, body.provider_kind)
+    try:
+        total, sample, _resolved = ticket_service.preview_tickets(
+            db,
+            principal,
+            connection_id=body.connection_id,
+            provider_kind=body.provider_kind,
+            spec=spec,
+            project=body.project,
+        )
+    except ticket_service.TicketSyncUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ticket_service.TicketSourceError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return QueryPreviewResult(
+        total=total,
+        sample=[TicketOut.model_validate(_preview_row(item)) for item in sample],
+        description=ticket_query.describe(spec) if spec else "everything in the project",
+    )
+
+
+def _preview_row(item: dict) -> dict:
+    """A fetched, unsaved work item in the shape `TicketOut` renders.
+
+    Preview rows have no database identity — they have not been imported — so `id`
+    is 0 and nothing downstream should treat one as a stored ticket.
+    """
+    return {
+        "id": 0,
+        "external_id": str(item.get("external_id", "")),
+        "title": item.get("title", ""),
+        "work_item_type": item.get("work_item_type", ""),
+        "status": item.get("status", ""),
+        "priority": item.get("priority", ""),
+        "assignee": item.get("assignee", ""),
+        "sprint": item.get("sprint", ""),
+        "area_path": item.get("area_path", ""),
+        "epic": item.get("epic", ""),
+        "labels": item.get("labels", []),
+    }
+
+
 @router.post("/sync", response_model=SyncResult)
 def sync_tickets(
     body: SyncRequest,
@@ -546,6 +651,7 @@ def sync_tickets(
             ticket_ids=body.ticket_ids or None,
             project=body.project,
             project_id=body.project_id,
+            spec=_compiled(body.query, body.provider_kind),
         )
     except ticket_service.TicketSyncUnavailable as exc:
         # Not wired to the provider adapters in this deployment. 503 and say so —
