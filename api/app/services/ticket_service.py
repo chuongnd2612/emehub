@@ -35,11 +35,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from sqlalchemy import String, and_, cast, or_
 from sqlalchemy.orm import Query, Session
 
 from app.db import utcnow
 from app.models.ticket import Ticket
 from app.models.user import User
+from app.services import ticket_query
 from app.services.ownership import owned, stamp_owner
 
 # --------------------------------------------------------------------- seam
@@ -190,6 +192,83 @@ def _visible(db: Session, user: User | None) -> Query[Ticket]:
     return owned(db.query(Ticket), Ticket, user)
 
 
+# ───────────────────────────────────────────── the mirror query compiler
+#
+# The ``mirror`` destination of :mod:`app.services.ticket_query`: a TicketQuery
+# compiled onto our own columns. Parameterised SQLAlchemy throughout, so unlike the
+# WIQL and JQL compilers this one has no string-escaping surface at all — which is
+# why it is the destination the query builder is built against first.
+
+#: Which column each clause field reads. A field absent here must also be absent
+#: from the mirror's entry in ``ticket_query.CAPABILITIES``; a test pins that, or
+#: the matrix would offer a field this compiler silently ignores.
+_QUERY_COLUMNS: dict[str, Any] = {
+    "workItemType": Ticket.work_item_type,
+    "state": Ticket.status,
+    "assignee": Ticket.assignee,
+    "areaPath": Ticket.area_path,
+    "iterationPath": Ticket.sprint,
+    "tags": Ticket.labels,
+    "title": Ticket.title,
+    "changedSince": Ticket.synced_at,
+    "createdSince": Ticket.synced_at,
+    "priority": Ticket.priority,
+    "epic": Ticket.epic,
+}
+
+
+def _clause_condition(clause: ticket_query.QueryClause) -> Any | None:
+    """One clause as a SQLAlchemy expression, or ``None`` when it says nothing."""
+    column = _QUERY_COLUMNS.get(clause.field)
+    values = clause.filled
+    if column is None or not values:
+        return None
+    first = values[0]
+    # `tags` is a JSON list here rather than ADO's semicolon-joined string, so a
+    # substring match has to run against its text form.
+    text = cast(column, String) if clause.field == "tags" else column
+
+    if clause.operator == "is":
+        return column == first
+    if clause.operator == "isNot":
+        return column != first
+    if clause.operator == "in":
+        return column.in_(values)
+    if clause.operator == "notIn":
+        return column.notin_(values)
+    if clause.operator == "contains":
+        return text.ilike(f"%{first}%")
+    if clause.operator == "notContains":
+        return ~text.ilike(f"%{first}%")
+    if clause.operator == "under":
+        # UNDER semantics, with the same guard as the `area_path` kwarg below:
+        # startswith with autoescape, never a raw LIKE, because ADO paths contain
+        # backslashes and Postgres reads a backslash as LIKE's escape character.
+        return column.startswith(first, autoescape=True)
+    if clause.operator == "onOrAfter":
+        return column >= first
+    if clause.operator == "onOrBefore":
+        return column <= first
+    return None
+
+
+def apply_query(query: Query[Ticket], spec: ticket_query.TicketQuery) -> Query[Ticket]:
+    """Narrow ``query`` by ``spec``. Callers validate first; this only compiles.
+
+    ``match: "any"`` ORs the clauses, but as a **single** filter on top of whatever
+    scoping the caller already applied — so an OR can widen the result within what
+    the user may see and never past it.
+    """
+    conditions = [
+        condition
+        for condition in (_clause_condition(clause) for clause in spec.effective_clauses)
+        if condition is not None
+    ]
+    if not conditions:
+        return query
+    return query.filter(or_(*conditions) if spec.match == "any" else and_(*conditions))
+
+
 def list_tickets(
     db: Session,
     user: User | None,
@@ -206,11 +285,20 @@ def list_tickets(
     priority: str | None = None,
     epic: str | None = None,
     q: str | None = None,
+    spec: ticket_query.TicketQuery | None = None,
     page: int = 1,
     page_size: int = 25,
 ) -> tuple[list[Ticket], int]:
-    """One page of tickets visible to ``user``, plus the unpaged total."""
+    """One page of tickets visible to ``user``, plus the unpaged total.
+
+    ``spec`` is the clause-based query (the ``mirror`` destination). It composes
+    with the individual kwargs rather than replacing them: the kwargs are the
+    existing pill filters and the `GET /tickets` contract that agents already call,
+    and both narrow the same visible set. Callers validate ``spec`` first.
+    """
     query = _visible(db, user)
+    if spec is not None:
+        query = apply_query(query, spec)
     if project_id is not None:
         query = query.filter(Ticket.project_id == project_id)
     if provider_kind:
