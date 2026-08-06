@@ -172,8 +172,18 @@ class ProviderAdapter(ABC):
         ticket_ids: list[str] | None = None,
         include_comments: bool = False,
         project: str | None = None,
+        spec: Any = None,
     ) -> list[NormalizedTicket]:
         """Fetch and normalise tickets for the given selection.
+
+        ``spec`` is a ``services.ticket_query.TicketQuery``. When given it
+        **replaces** the ``mode``/``sprint``/``states``/… selection entirely — an
+        adapter must not blend the two, or a clause the user removed would still
+        be applied from a legacy argument. Typed ``Any`` so the adapter layer keeps
+        no import-time dependency on the query module.
+
+        An adapter whose provider cannot express clauses ignores ``spec``; the
+        capability matrix is what stops the UI offering one in the first place.
 
         Args:
             mode: ``sprint`` (the sprint named below), ``assigned`` (the
