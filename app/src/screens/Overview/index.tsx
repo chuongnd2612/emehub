@@ -45,6 +45,12 @@ export default function OverviewScreen() {
   const modal = useUi((s) => s.modal);
   const setModal = useUi((s) => s.setModal);
   const { importing, run } = useImportRun();
+  /**
+   * The first load has finished. The greeting's status line needs this: counts
+   * of 0 are indistinguishable from "still loading", and "0 projects" rendered
+   * for a moment is a false statement rather than a placeholder.
+   */
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -61,6 +67,7 @@ export default function OverviewScreen() {
       setActivity(ac);
       setIntegrations(ig);
       setProjects(pj);
+      setLoaded(true);
     });
     return () => {
       live = false;
@@ -69,7 +76,12 @@ export default function OverviewScreen() {
 
   return (
     <div className="flex animate-fade-in-up flex-col gap-[14px]">
-      <GreetingRow importing={importing} onImport={() => setModal("import")} />
+      <GreetingRow
+        importing={importing}
+        onImport={() => setModal("import")}
+        projectCount={loaded ? projects.length : null}
+        connectionCount={loaded ? integrations.length : null}
+      />
 
       <div className="grid grid-cols-2 gap-[14px]">
         {products.map((p) => (

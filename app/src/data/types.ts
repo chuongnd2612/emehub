@@ -59,10 +59,15 @@ export interface Product {
   role: string;
   description: string;
   tags: string[];
-  /** The big number on the product card. */
-  metric: string;
-  metricLabel: string;
-  stats: { k: string; v: string }[];
+  /**
+   * No `metric` / `metricLabel` / `stats`.
+   *
+   * The card used to carry "1,204 RUNS THIS MONTH", "38 SUITES", "96% PASS
+   * RATE". Those are QAgent's run history: the hub owns identity, configuration
+   * and knowledge metadata (ADR 0001), stores no run history, and has no
+   * endpoint that could ever fill them. They were invented, so they are gone
+   * rather than zeroed.
+   */
   /** Merged from `GET /agents`. Null when the agent has no URL configured. */
   launchUrl?: string | null;
   /** Merged from `GET /agents`. False means a launch would fail after the click. */
@@ -585,6 +590,14 @@ export interface ApiKey {
 export type ActivityKind = "q" | "d" | "sync" | "kb" | "warn" | "key";
 
 export interface ActivityEvent {
+  /**
+   * Stable identity — the audit row's own id.
+   *
+   * The feed used to key on `ref`-`when`, which is unique across a handful of
+   * invented events and emphatically not across real ones: two "Signed in"
+   * rows against the same actor minutes apart collide, and React drops one.
+   */
+  id: string;
   text: string;
   /** Mono accent reference, e.g. `SUR-1428`. */
   ref: string;
@@ -595,12 +608,16 @@ export interface ActivityEvent {
   icon: string;
 }
 
+/**
+ * One Overview tile.
+ *
+ * No `delta`, `direction` or `bars`. The handoff's tile carries a delta chip and
+ * an 8-bar sparkline, and each of those needs history the hub does not keep — so
+ * they could only ever have been invented, and were. They belong back the moment
+ * the hub records a time series, and not before.
+ */
 export interface Kpi {
   label: string;
   value: string;
   unit: string;
-  delta: string;
-  direction: "up" | "down";
-  /** Sparkline bar heights, 0–100. */
-  bars: number[];
 }
