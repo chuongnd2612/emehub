@@ -452,13 +452,21 @@ def test_jira_normalizes_a_recorded_issue():
 
 
 def test_jira_builds_jql_from_the_selection():
+    """Every value quoted, including the issue keys and the sprint name.
+
+    They used to go in bare, which was an injection waiting for a caller: this legacy
+    path builds JQL from a request body exactly as the clause path does. Jira accepts
+    a quoted key, so the quoting costs nothing. ``test_jql.py`` covers why the quote
+    is a double one and why the backslash is escaped first.
+    """
     adapter = jira_adapter(transport({}))
     assert adapter._build_jql(mode="selected", sprint=None, ticket_ids=["SUR-1", "SUR-2"]) == (
-        "key in (SUR-1,SUR-2)"
+        'key in ("SUR-1", "SUR-2")'
     )
-    # The numeric sprint id is preferred — two boards can share a sprint name.
+    # The numeric sprint id is preferred — two boards can share a sprint name — and
+    # digits are the one operand that can safely go in bare.
     assert "sprint = 41" in adapter._build_jql(mode="sprint", sprint="Sprint 3", sprint_path="41")
-    assert "sprint = 'Sprint 3'" in adapter._build_jql(mode="sprint", sprint="Sprint 3")
+    assert 'sprint = "Sprint 3"' in adapter._build_jql(mode="sprint", sprint="Sprint 3")
     assert "assignee = currentUser()" in adapter._build_jql(mode="assigned", sprint=None)
 
 

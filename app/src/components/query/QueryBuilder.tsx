@@ -33,6 +33,7 @@ import {
   describeQuery,
   effectiveClauses,
   generalProblems,
+  MATCH_ANY_DESTINATIONS,
   newClause,
   problemsForClause,
   validateQuery,
@@ -100,6 +101,7 @@ export function QueryBuilder({
   );
   const general = generalProblems(problems);
   const valid = problems.length === 0;
+  const canOr = MATCH_ANY_DESTINATIONS.has(destination);
   const changes = countChanges(draft, applied);
   const canApply = valid && !busy && (applied === null || changes > 0);
 
@@ -149,14 +151,23 @@ export function QueryBuilder({
         <span className="text-[10.5px] font-bold tracking-[.11em] text-label">
           MATCH
         </span>
-        <Segmented
-          value={draft.match}
-          onChange={(match) => onDraftChange({ ...draft, match })}
-          options={[
-            { value: "all" as const, label: "All conditions" },
-            { value: "any" as const, label: "Any condition" },
-          ]}
-        />
+        {canOr ? (
+          <Segmented
+            value={draft.match}
+            onChange={(match) => onDraftChange({ ...draft, match })}
+            options={[
+              { value: "all" as const, label: "All conditions" },
+              { value: "any" as const, label: "Any condition" },
+            ]}
+          />
+        ) : (
+          // GitHub search ANDs every qualifier and has no OR. Offering the toggle
+          // and then refusing Apply would be a control that cannot work; saying so
+          // once is the honest version.
+          <span className="text-[11.5px] text-faint">
+            All conditions — GitHub search cannot match “any”.
+          </span>
+        )}
         {metadata.fetchedAt && (
           <span className="ml-auto text-[11.5px] text-faint">
             {metadata.stale

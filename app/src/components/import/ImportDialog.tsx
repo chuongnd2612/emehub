@@ -261,10 +261,16 @@ export function ImportDialog({
       .finally(() => setPreviewing(false));
   }, [draft, provider]);
 
-  // A provider switch changes the whole filter set, so nothing carries over.
+  // A provider switch changes the whole filter set, so nothing carries over. The
+  // clause draft is reset with it: the fields a destination offers come from the
+  // capability matrix, so a clause built for ADO can be one Jira has no column for
+  // — carrying it over would show a row that only fails on Apply.
   useEffect(() => {
     setFilters({});
-  }, [provider]);
+    setDraft(emptyQuery(destination));
+    setPreviewed(null);
+    setCount(null);
+  }, [provider, destination]);
 
   // Every visit starts from the caller's defaults.
   useEffect(() => {
