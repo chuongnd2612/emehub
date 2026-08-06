@@ -39,11 +39,7 @@ export function AddKnowledgeModal({ open, onClose }: AddKnowledgeModalProps) {
   const add = () => {
     const label = title.trim() || "New source";
     onClose();
-    toast(
-      "Queued for indexing",
-      `${label} will be available to both agents shortly`,
-      "ok",
-    );
+    toast(`${label} queued for indexing`);
   };
 
   return (

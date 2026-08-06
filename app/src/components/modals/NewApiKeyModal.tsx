@@ -23,7 +23,7 @@ export function NewApiKeyModal({ open, onClose }: NewApiKeyModalProps) {
 
   const create = () => {
     onClose();
-    toast("API key created", "Copy it now — it will not be shown again", "ok");
+    toast("API key created");
   };
 
   return (

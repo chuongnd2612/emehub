@@ -31,11 +31,7 @@ export function ProductCard({ product }: { product: Product }) {
     if (product.live) {
       navigate("/app");
     } else {
-      toast(
-        "D-Agent is not live yet",
-        "The developer agent ships in Q4 2026 — placeholder only",
-        "warn",
-      );
+      toast("D-Agent is not live yet", "warn");
     }
   };
 

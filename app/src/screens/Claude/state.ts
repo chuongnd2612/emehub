@@ -251,11 +251,7 @@ export function useClaudeSettings(): ClaudeSettings {
         // Nothing is stored under this user, so there is no preference to
         // persist — the hub 400s a mode change with no own credential on file.
         if (next === "personal") {
-          toast(
-            "Attach your Claude account",
-            "Drop your .credentials.json below to run on your own plan",
-            "info",
-          );
+          toast("Attach your Claude account", "info");
         }
         return;
       }
@@ -268,9 +264,6 @@ export function useClaudeSettings(): ClaudeSettings {
             next === "shared"
               ? "Using the shared account"
               : "Using your personal account",
-            next === "shared"
-              ? "Admin-maintained token applied to your agent runs"
-              : "Your own Claude plan will be spent",
             "ok",
           );
         })
@@ -278,8 +271,8 @@ export function useClaudeSettings(): ClaudeSettings {
           setSourceOverride(null);
           toast(
             "Could not switch account",
-            errorMessage(err, "The hub rejected the change"),
             "warn",
+            errorMessage(err, "The hub rejected the change"),
           );
         })
         .finally(() => setSwitching(false));
@@ -294,25 +287,23 @@ export function useClaudeSettings(): ClaudeSettings {
       uploadOwnCredential(file)
         .then((updated) => {
           apply(updated);
-          toast(
-            "Personal token attached",
-            "Your agents now run on your own Claude plan",
-            "ok",
-          );
+          toast("Personal token attached");
         })
         .catch((err: unknown) => {
           if (err instanceof InvalidCredentialFileError) {
+            // The body explains WHY the file was rejected, which the user needs
+            // in order to export the right one.
             toast(
               INVALID_CREDENTIAL_TOAST.title,
-              INVALID_CREDENTIAL_TOAST.body,
               "warn",
+              INVALID_CREDENTIAL_TOAST.body,
             );
             return;
           }
           toast(
             "Upload failed",
-            errorMessage(err, "The hub rejected the credential"),
             "warn",
+            errorMessage(err, "The hub rejected the credential"),
           );
         })
         .finally(() => setUploadingPersonal(false));
@@ -325,17 +316,18 @@ export function useClaudeSettings(): ClaudeSettings {
       .then(getCredentialState)
       .then((updated) => {
         apply(updated);
+        // Kept: which account runs now is a consequence, not a restatement.
         toast(
           "Personal token removed",
-          "Falling back to the shared workspace account",
           "warn",
+          "Falling back to the shared account",
         );
       })
       .catch((err: unknown) => {
         toast(
           "Could not remove the token",
-          errorMessage(err, "The hub rejected the change"),
           "warn",
+          errorMessage(err, "The hub rejected the change"),
         );
       });
   }, [apply]);
@@ -346,25 +338,23 @@ export function useClaudeSettings(): ClaudeSettings {
       uploadSharedCredential(file)
         .then((updated) => {
           apply(updated);
-          toast(
-            "Shared credential added",
-            "Written to .claude/.credentials.json for assigned members",
-            "ok",
-          );
+          toast("Shared credential added");
         })
         .catch((err: unknown) => {
           if (err instanceof InvalidCredentialFileError) {
+            // The body explains WHY the file was rejected, which the user needs
+            // in order to export the right one.
             toast(
               INVALID_CREDENTIAL_TOAST.title,
-              INVALID_CREDENTIAL_TOAST.body,
               "warn",
+              INVALID_CREDENTIAL_TOAST.body,
             );
             return;
           }
           toast(
             "Upload failed",
-            errorMessage(err, "The hub rejected the credential"),
             "warn",
+            errorMessage(err, "The hub rejected the credential"),
           );
         })
         .finally(() => setUploadingShared(false));
@@ -379,15 +369,15 @@ export function useClaudeSettings(): ClaudeSettings {
         apply(updated);
         toast(
           "Shared credential removed",
-          "Assigned members fall back to the default account",
           "warn",
+          "Assigned members fall back to the default account",
         );
       })
       .catch((err: unknown) => {
         toast(
           "Could not remove the credential",
-          errorMessage(err, "The hub rejected the change"),
           "warn",
+          errorMessage(err, "The hub rejected the change"),
         );
       });
   }, [apply]);
@@ -402,16 +392,18 @@ export function useClaudeSettings(): ClaudeSettings {
     testCredential()
       .then((result) => {
         setTestResult(result);
+        // The hub's verdict is reported verbatim on failure; a success needs
+        // no elaboration.
         toast(
           result.ok ? "Credential verified" : "Credential check failed",
-          result.message,
           result.ok ? "ok" : "warn",
+          result.ok ? undefined : result.message,
         );
       })
       .catch((err: unknown) => {
         const message = errorMessage(err, "The hub did not answer");
         setTestResult({ ok: false, result: "error", message });
-        toast("Credential check failed", message, "warn");
+        toast("Credential check failed", "warn", message);
       })
       .finally(() => setTesting(false));
   }, []);

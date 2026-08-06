@@ -60,53 +60,34 @@ export function AppearanceCard() {
   const pickMode = (next: Mode) => {
     if (next === mode) return;
     setMode(next);
-    toast(
-      next === "light" ? "Light mode on" : "Dark mode on",
-      next === "light"
-        ? "Panels, type and the constellation switched to the paper palette"
-        : "Back to the default operating surface",
-    );
+    toast(next === "light" ? "Light mode on" : "Dark mode on");
   };
 
   const pickAccent = (next: Accent) => {
     setAccent(next);
     const label = ACCENTS.find((a) => a.key === next)?.label ?? "";
-    toast("Brand color updated", `${label} is now the primary accent`);
+    toast(`Accent set to ${label}`);
   };
 
   const changeAmbient = (value: number) => {
     setAmbient(value);
     clearTimeout(ambientToastTimer.current);
     ambientToastTimer.current = setTimeout(
-      () => toast("Ambient bloom updated", `Bloom intensity set to ${value}%`),
+      () => toast(`Ambient bloom ${value}%`),
       450,
     );
   };
 
   const flipFx3d = (on: boolean) => {
     setFx3d(on);
-    if (on) toast("Constellation on", "The ambient WebGL field is running again");
-    else
-      toast(
-        "Constellation off",
-        "Ambient WebGL field disabled for this session",
-        "warn",
-      );
+    if (on) toast("Constellation on");
+    else toast("Constellation off", "warn");
   };
 
   const flipTilt = (on: boolean) => {
     setTilt(on);
-    if (on)
-      toast(
-        "Depth on hover on",
-        "The logo, product cards and tiles tilt as the pointer moves across them",
-      );
-    else
-      toast(
-        "Depth on hover off",
-        "Pointer tilt disabled across the interface",
-        "warn",
-      );
+    if (on) toast("Depth on hover on");
+    else toast("Depth on hover off", "warn");
   };
 
   return (

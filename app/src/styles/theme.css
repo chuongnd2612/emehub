@@ -391,6 +391,20 @@
     transform: scaleX(0);
   }
 }
+/* Success-toast check, ported from Q-Agent's `lib/toast.tsx`: the ring strokes
+   itself on, then the tick draws start-to-end behind it. Both are dash-offset
+   sweeps, so the glyph is genuinely drawn rather than faded in — the tick's
+   delay is what makes it read as "circle, then check" instead of both at once. */
+@keyframes toastCircleDraw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes toastCheckDraw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
 @keyframes barGrow {
   from {
     transform: scaleY(0.04);
@@ -648,6 +662,8 @@ textarea {
   --animate-spin-run: spin 0.8s linear infinite;
   --animate-spin-index: spin 0.9s linear infinite;
   --animate-toast-in: toastIn 0.34s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  --animate-toast-circle: toastCircleDraw 0.55s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+  --animate-toast-check: toastCheckDraw 0.3s cubic-bezier(0.65, 0, 0.35, 1) 0.5s forwards;
   --animate-bar-grow: barGrow 0.5s ease both;
   --animate-ring: ring 1.6s ease-out infinite;
   --animate-sheen: sheen 1.4s linear infinite;

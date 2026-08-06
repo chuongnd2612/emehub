@@ -63,12 +63,14 @@ export function SessionsPanel() {
     try {
       await revokeSession(session.id);
       setSessions((prev) => prev?.filter((s) => s.id !== session.id) ?? null);
-      toast("Session revoked", "That device has been signed out of EmeHub", "ok");
+      toast("Session revoked");
     } catch (err) {
+      // The reason survives: "could not revoke" alone tells the user nothing
+      // about whether to retry.
       toast(
         "Could not revoke that session",
-        reason(err, "The hub did not respond."),
         "warn",
+        reason(err, "The hub did not respond."),
       );
     } finally {
       setBusyId(null);
@@ -80,16 +82,12 @@ export function SessionsPanel() {
     try {
       await revokeOtherSessions();
       setSessions((prev) => prev?.filter((s) => s.current) ?? null);
-      toast(
-        "Other sessions revoked",
-        "Every device except this one has been signed out",
-        "ok",
-      );
+      toast("Other sessions revoked");
     } catch (err) {
       toast(
         "Could not revoke those sessions",
-        reason(err, "The hub did not respond."),
         "warn",
+        reason(err, "The hub did not respond."),
       );
     } finally {
       setRevokingOthers(false);

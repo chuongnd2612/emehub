@@ -126,15 +126,11 @@ function useBuildLifecycle(project: Project, onReload: () => void) {
     if (status === "error") {
       toast(
         "The build failed",
-        knowledge?.lastError || "The hub did not say why.",
         "warn",
+        knowledge?.lastError || "The hub did not say why.",
       );
     } else {
-      toast(
-        "Project knowledge built",
-        `${project.repo || project.id} is indexed at ${knowledge?.version ?? "v1"}.`,
-        "ok",
-      );
+      toast("Project knowledge built");
     }
     onReload();
   }, [knowledge, onReload, project.id, project.repo]);
@@ -147,11 +143,7 @@ function useBuildLifecycle(project: Project, onReload: () => void) {
     setStarting(true);
     void buildKnowledge(project.id, project.repo)
       .then((next) => {
-        toast(
-          "Build started",
-          `EmeHub is indexing ${project.repo || project.id}. This takes a few minutes.`,
-          "info",
-        );
+        toast("Build started", "info");
         // The enqueue response IS the row, at `indexing`/`queued` — adopting it
         // starts the stepper without claiming anything was built.
         setKnowledge(next);
@@ -159,8 +151,10 @@ function useBuildLifecycle(project: Project, onReload: () => void) {
       .catch((error: unknown) => {
         toast(
           "Could not start the build",
-          error instanceof ApiError ? error.message : "The hub did not respond.",
           "warn",
+          error instanceof ApiError
+            ? error.message
+            : "The hub did not respond.",
         );
       })
       .finally(() => setStarting(false));
@@ -452,7 +446,7 @@ export function KnowledgeTab({
                   key={k.id}
                   columns={COLUMNS}
                   interactive
-                  onClick={() => toast(k.title, `${k.type} · ${k.scope}`, "info")}
+                  onClick={() => toast(k.title, "info")}
                 >
                   <span
                     className={`flex size-8 shrink-0 items-center justify-center rounded-[10px] border border-current/20 ${chip.className}`}

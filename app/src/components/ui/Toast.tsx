@@ -17,6 +17,51 @@ const KIND_ICON: Record<ToastKind, IconName> = {
   info: "bolt",
 };
 
+/**
+ * Success mark, drawn rather than faded in — ported from Q-Agent's
+ * `lib/toast.tsx`. The ring strokes itself on over .55s, then the tick sweeps
+ * start-to-end over .3s after a .5s delay, so it reads as "circle, then check"
+ * instead of both arriving at once. Both are `stroke-dashoffset` sweeps; the
+ * keyframes live in `styles/theme.css`.
+ *
+ * `currentColor` throughout, so the parent's `text-ok` token supplies the
+ * stroke — Q-Agent hardcodes `#34d399`, which would be a bug here.
+ */
+function DrawnCheck() {
+  return (
+    <svg
+      width={20}
+      height={20}
+      viewBox="0 0 52 52"
+      fill="none"
+      aria-hidden
+      className="shrink-0"
+    >
+      <circle
+        cx={26}
+        cy={26}
+        r={23}
+        stroke="currentColor"
+        strokeWidth={3}
+        strokeLinecap="round"
+        strokeDasharray={145}
+        strokeDashoffset={145}
+        className="animate-toast-circle"
+      />
+      <path
+        d="M15.5 27l6.8 6.8L37 19"
+        stroke="currentColor"
+        strokeWidth={3.6}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeDasharray={40}
+        strokeDashoffset={40}
+        className="animate-toast-check"
+      />
+    </svg>
+  );
+}
+
 const KIND_RING: Record<ToastKind, string> = {
   ok: "bg-ok-tint text-ok",
   warn: "bg-warn-tint text-warn",
@@ -43,8 +88,11 @@ export function ToastHost() {
       onClick={dismiss}
       className={cn(
         "fixed bottom-7 left-1/2 z-[1200] flex w-[min(420px,calc(100vw-32px))] cursor-pointer",
-        "animate-toast-in items-start gap-3 overflow-hidden rounded-card border border-bd2",
+        "animate-toast-in gap-3 overflow-hidden rounded-card border border-bd2",
         "bg-pop px-4 py-3.5 shadow-pop",
+        // Most toasts are now a single line, and `items-start` would hang the
+        // ring off the top of it. Only centre when there is one line to centre.
+        toast.body ? "items-start" : "items-center",
       )}
     >
       <span
@@ -53,20 +101,31 @@ export function ToastHost() {
           KIND_RING[toast.kind],
         )}
       >
-        <span
-          className={cn(
-            "absolute inset-0 animate-ring rounded-full",
-            KIND_RING[toast.kind],
-          )}
-        />
-        <Icon name={KIND_ICON[toast.kind]} size={15} strokeWidth={2.4} />
+        {/* The pulse rings out behind a success mark that is still drawing, so
+            it is kept for warn/info only — two competing animations on the same
+            30px circle read as a glitch rather than as emphasis. */}
+        {toast.kind !== "ok" && (
+          <span
+            className={cn(
+              "absolute inset-0 animate-ring rounded-full",
+              KIND_RING[toast.kind],
+            )}
+          />
+        )}
+        {toast.kind === "ok" ? (
+          <DrawnCheck />
+        ) : (
+          <Icon name={KIND_ICON[toast.kind]} size={15} strokeWidth={2.4} />
+        )}
       </span>
 
       <div className="min-w-0 flex-1">
         <div className="text-[13px] font-extrabold text-txt">{toast.title}</div>
-        <div className="mt-[3px] text-[12px] leading-[1.5] text-muted">
-          {toast.body}
-        </div>
+        {toast.body && (
+          <div className="mt-[3px] text-[12px] leading-[1.5] text-muted">
+            {toast.body}
+          </div>
+        )}
       </div>
 
       {/* Countdown bar — `toastBar` scaleX(1) -> scaleX(0) over the lifetime. */}

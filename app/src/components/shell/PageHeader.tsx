@@ -109,11 +109,7 @@ export function PageHeader() {
         data-surface
         aria-label="Notifications"
         onClick={() =>
-          toast(
-            "3 notifications",
-            "GitHub needs re-auth · 2 syncs finished",
-            "info",
-          )
+          toast("3 notifications", "info")
         }
         className={cn(SQUARE, "text-txt3")}
       >
