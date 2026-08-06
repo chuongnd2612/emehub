@@ -28,6 +28,27 @@ export interface ConnectionRowProps {
   onTest: () => void;
   onSave: () => void;
   onRemove: () => void;
+  /**
+   * The outcome of the last test **in this session**, or null if it has not been
+   * tested here yet.
+   *
+   * Persisted on the row rather than only toasted: a toast is gone in 3.2s, and
+   * the useful half of a failure is the provider's own reason. `lastTested`
+   * alone tells you *when* it was tried, never *what it said*.
+   */
+  result: ConnectionTestOutcome | null;
+}
+
+/** Kept alongside the row so a failure's reason stays on screen. */
+export interface ConnectionTestOutcome {
+  ok: boolean;
+  message: string;
+  /**
+   * The hub could not be reached at all, as opposed to the provider rejecting
+   * us. Different problems with different fixes, so they must not read the same
+   * (INTEGRATION.md §5 draws the same line for the hub as a whole).
+   */
+  unreachable: boolean;
 }
 
 export function ConnectionRow({
@@ -41,7 +62,11 @@ export function ConnectionRow({
   onTest,
   onSave,
   onRemove,
+  result,
 }: ConnectionRowProps) {
+  // A connection with no stored credential cannot be tested — the request is
+  // guaranteed to fail, so say why instead of firing it.
+  const untestable = !connection.hasPat;
   return (
     <div className="glass overflow-hidden rounded-card">
       <div
@@ -149,11 +174,17 @@ export function ConnectionRow({
             <button
               type="button"
               onClick={onTest}
-              disabled={testing}
+              disabled={testing || untestable}
+              title={
+                untestable
+                  ? "Add an access token first — there is no stored credential to test"
+                  : undefined
+              }
               className={cn(
                 "inline-flex cursor-pointer items-center gap-2 rounded-control-lg px-4 py-[10px]",
                 "border border-pb bg-pt text-[12.5px] font-bold text-ps-text",
                 "transition-colors duration-200 hover:bg-pb/40 disabled:cursor-not-allowed",
+                "disabled:opacity-50",
               )}
             >
               {testing ? (
@@ -182,6 +213,51 @@ export function ConnectionRow({
               Credentials encrypted at rest
             </span>
           </div>
+
+          {/* Why there is no stored credential to test, stated rather than left
+              to a disabled button with no explanation. */}
+          {untestable && (
+            <p className="m-0 text-[12px] leading-[1.5] text-faint">
+              No access token is stored for this connection yet. Add one above and
+              save, then test it.
+            </p>
+          )}
+
+          {/* The last outcome, kept on screen. A toast is gone in 3.2s and the
+              provider's reason is the part worth reading. */}
+          {result && (
+            <div
+              role="status"
+              className={cn(
+                "flex items-start gap-2.5 rounded-card border px-3.5 py-3 text-[12px] leading-[1.5]",
+                result.ok
+                  ? "border-ok/30 bg-ok-tint text-ok"
+                  : "border-warn/30 bg-warn-tint text-warn",
+              )}
+            >
+              <Icon
+                name={result.ok ? "check" : "alert"}
+                size={14}
+                strokeWidth={2.3}
+                className="mt-[1px] shrink-0"
+              />
+              <span className="min-w-0">
+                <strong className="font-bold">
+                  {result.ok
+                    ? "Connection verified"
+                    : result.unreachable
+                      ? "EmeHub is unreachable"
+                      : `${connection.label} rejected the credentials`}
+                </strong>
+                {result.message && (
+                  <>
+                    {" — "}
+                    {result.message}
+                  </>
+                )}
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>

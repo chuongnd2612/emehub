@@ -11,6 +11,7 @@ import { Glyph, Icon, Spinner } from "@/components/ui";
 import type { Connection, ConnectionGroup, Provider } from "@/data";
 import { cn } from "@/lib/cn";
 import { ConnectionRow } from "./ConnectionRow";
+import type { ConnectionTestOutcome } from "./ConnectionRow";
 
 export interface ProviderGroupProps {
   group: ConnectionGroup;
@@ -20,6 +21,8 @@ export interface ProviderGroupProps {
   expandedId: string | null;
   testingId: number | null;
   savingId: number | null;
+  /** Last test outcome per connection id — see ConnectionRow's `result`. */
+  results: Record<number, ConnectionTestOutcome>;
   adding: boolean;
   onToggle: (connectionId: number) => void;
   onFieldChange: (connectionId: number, fieldKey: string, value: string) => void;
@@ -37,6 +40,7 @@ export function ProviderGroup({
   expandedId,
   testingId,
   savingId,
+  results,
   adding,
   onToggle,
   onFieldChange,
@@ -91,6 +95,7 @@ export function ProviderGroup({
           expanded={expandedId === String(c.id)}
           testing={testingId === c.id}
           saving={savingId === c.id}
+          result={results[c.id] ?? null}
           onToggle={() => onToggle(c.id)}
           onFieldChange={(fieldKey, value) => onFieldChange(c.id, fieldKey, value)}
           onLabelChange={(value) => onLabelChange(c.id, value)}
