@@ -44,6 +44,7 @@ export * from "./credentials";
 export * from "./connections";
 export * from "./projects";
 export * from "./knowledge";
+export * from "./savedQueries";
 export * from "./tickets";
 export * from "./people";
 export * from "./overview";

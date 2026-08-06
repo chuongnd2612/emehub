@@ -22,11 +22,13 @@ import {
   getConnectionsWithCapability,
   getTicketPage,
   getWorkItemMetadata,
+  listSavedQueries,
   searchTickets,
   PROVIDERS,
   type ProviderKey,
   type Ticket,
   type TicketFilters,
+  type SavedQuery,
   type WorkItemMetadata,
 } from "@/data";
 import { emptyQuery, type TicketQuery as ClauseQuery } from "@/data/ticketQuery";
@@ -135,6 +137,8 @@ export default function TicketsScreen() {
   const [draftQuery, setDraftQuery] = useState<ClauseQuery>(() => emptyQuery("mirror"));
   const [appliedQuery, setAppliedQuery] = useState<ClauseQuery | null>(null);
   const [metadata, setMetadata] = useState<WorkItemMetadata>(EMPTY_META);
+  const [saved, setSaved] = useState<SavedQuery[]>([]);
+  const [savedKey, setSavedKey] = useState(0);
 
   const modal = useUi((s) => s.modal);
   const setModal = useUi((s) => s.setModal);
@@ -176,6 +180,23 @@ export default function TicketsScreen() {
       live = false;
     };
   }, [builderOpen, provider]);
+
+  // Saved queries for the mirror. Re-read on `savedKey` so adding, copying or
+  // removing one refreshes the strip without reloading the screen.
+  useEffect(() => {
+    if (!builderOpen) return;
+    let live = true;
+    void listSavedQueries("mirror")
+      .then((rows) => {
+        if (live) setSaved(rows);
+      })
+      .catch(() => {
+        if (live) setSaved([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [builderOpen, savedKey]);
 
   // Facets: one unfiltered page per provider.
   useEffect(() => {
@@ -346,6 +367,8 @@ export default function TicketsScreen() {
             destination="mirror"
             metadata={metadata}
             busy={status === "loading" || turning}
+            saved={saved}
+            onSavedChanged={() => setSavedKey((n) => n + 1)}
             onApply={applyQuery}
             onReset={() => {
               setDraftQuery(emptyQuery("mirror"));

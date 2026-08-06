@@ -52,6 +52,7 @@ from app.routers import (
     health,
     me,
     projects,
+    saved_queries,
     tickets,
 )
 from app.security import auth_guard
@@ -93,6 +94,9 @@ ROUTERS = (
     # Agents read the ticket store with the token they hold (aud: qagent/dagent),
     # so it cannot be hub-audience-only — INTEGRATION.md §3.
     (tickets, CONTRACT),
+    # CONTRACT for the same reason: an agent that builds and runs queries has the
+    # same reason to read a saved one. Scoped own + shared like everything else.
+    (saved_queries, CONTRACT),
 )
 
 _POSTURE_DEPENDENCY = {

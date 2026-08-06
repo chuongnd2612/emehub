@@ -42,6 +42,7 @@ import {
 } from "@/data/ticketQuery";
 import { cn } from "@/lib/cn";
 import { ClauseRow } from "./ClauseRow";
+import { SavedQueries } from "./SavedQueries";
 
 /** How many clauses differ between the draft and what was last applied. */
 export function countChanges(draft: TicketQuery, applied: TicketQuery | null): number {
@@ -74,6 +75,10 @@ export interface QueryBuilderProps {
   busy?: boolean;
   /** Rendered beside Apply, e.g. a preview count. */
   trailing?: React.ReactNode;
+  /** Saved queries for this destination. Omit to hide the strip entirely. */
+  saved?: import("@/data").SavedQuery[];
+  /** Re-read the saved list after one is added, copied or removed. */
+  onSavedChanged?: () => void;
 }
 
 export function QueryBuilder({
@@ -86,6 +91,8 @@ export function QueryBuilder({
   onReset,
   busy = false,
   trailing,
+  saved,
+  onSavedChanged,
 }: QueryBuilderProps) {
   const problems = useMemo(
     () => validateQuery(draft, destination),
@@ -125,6 +132,19 @@ export function QueryBuilder({
         }
       }}
     >
+      {saved !== undefined && onSavedChanged !== undefined && (
+        <SavedQueries
+          queries={saved}
+          destination={destination}
+          draft={draft}
+          // Loading fills the DRAFT only. Nothing runs until Apply — the same
+          // rule as every other control here.
+          onLoad={onDraftChange}
+          onChanged={onSavedChanged}
+          canSave={valid}
+        />
+      )}
+
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-[10.5px] font-bold tracking-[.11em] text-label">
           MATCH
