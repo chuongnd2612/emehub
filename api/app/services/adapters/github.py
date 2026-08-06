@@ -32,6 +32,7 @@ from app.services.adapters.base import (
     ProviderError,
     scrub,
 )
+from app.services.gh_search import build_search, sort_params
 
 PUBLIC_API_BASE = "https://api.github.com"
 API_VERSION = "2022-11-28"
@@ -247,6 +248,24 @@ class GitHubAdapter(ProviderAdapter):
         resp.raise_for_status()
         return []
 
+    def count_tickets(self, *, spec: Any = None, project: str | None = None) -> int:
+        """The real total, from the search API's own ``total_count``.
+
+        Separate from :meth:`fetch_tickets` because that one takes a page, and a page
+        size is the wrong answer to "how many are there". With no query to compile
+        there is nothing cheaper than the base class's fetch-and-count.
+        """
+        if spec is None:
+            return super().count_tickets(spec=spec, project=project)
+        org, repo = self._require_repo()
+        with self._client() as client:
+            resp = client.get(
+                "/search/issues",
+                params={"q": build_search(spec, org=org, repo=repo), "per_page": 1},
+            )
+            resp.raise_for_status()
+            return int(resp.json().get("total_count", 0))
+
     def fetch_tickets(
         self,
         *,
@@ -259,10 +278,15 @@ class GitHubAdapter(ProviderAdapter):
         ticket_ids: list[str] | None = None,
         include_comments: bool = False,
         project: str | None = None,  # GitHub has no project concept; unused
+        spec: Any = None,
     ) -> list[NormalizedTicket]:
         org, repo = self._require_repo()
         with self._client() as client:
-            if mode == "selected" and ticket_ids:
+            if spec is not None:
+                # The compiled query replaces the legacy selection outright; mixing
+                # them would silently re-apply a condition the user had removed.
+                issues = self._search_issues(client, spec, org=org, repo=repo)
+            elif mode == "selected" and ticket_ids:
                 issues = [self._get_issue(client, num) for num in ticket_ids]
                 issues = [i for i in issues if i]
             else:
@@ -277,6 +301,37 @@ class GitHubAdapter(ProviderAdapter):
                 self._normalize(client, issue, include_comments=include_comments)
                 for issue in issues
             ]
+
+    def _search_issues(
+        self, client: httpx.Client, spec: Any, *, org: str, repo: str
+    ) -> list[dict[str, Any]]:
+        """Run a compiled query through ``GET /search/issues``.
+
+        A different endpoint from the legacy path on purpose: ``/repos/…/issues`` has
+        no query language at all, which is why the old adapter silently ignored
+        ``states``/``types``/``area``. The search API is the only one that can honour
+        a clause.
+
+        Two of its limits are real and worth knowing rather than hiding: it returns
+        at most 1000 results however you page, and its objects are issue payloads
+        that carry everything :meth:`_normalize` reads. ``is:issue`` in the compiled
+        ``q`` is what keeps pull requests out.
+        """
+        params = {
+            "q": build_search(spec, org=org, repo=repo),
+            "per_page": _PER_PAGE,
+            **sort_params(spec),
+        }
+        resp = client.get("/search/issues", params=params)
+        if resp.status_code == 422:
+            # The search API's way of saying the query was malformed. Surfacing its
+            # own message beats "no results", which is what a caller would otherwise
+            # read this as.
+            raise ProviderError(
+                f"GitHub rejected the search: {self._scrub(resp.text[:300])}"
+            )
+        resp.raise_for_status()
+        return [i for i in resp.json().get("items", []) if "pull_request" not in i]
 
     def fetch_comments(self, ticket_external_id: str) -> list[dict[str, Any]]:
         """This issue's comments. Raises rather than hiding a provider failure.

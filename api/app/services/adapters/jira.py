@@ -30,6 +30,7 @@ from app.services.adapters.base import (
     ProviderError,
     scrub,
 )
+from app.services.jql import build_jql, issue_keys_jql, quote
 
 API_PREFIX = "/rest/api/3"
 AGILE_PREFIX = "/rest/agile/1.0"
@@ -232,6 +233,26 @@ class JiraAdapter(ProviderAdapter):
             pass
         return {"area_paths": [], "work_item_types": types, "states": states, "epics": epics}
 
+    def count_tickets(self, *, spec: Any = None, project: str | None = None) -> int:
+        """The real total, from Jira's own count endpoint.
+
+        Separate from :meth:`fetch_tickets` because that one is capped at
+        ``_MAX_RESULTS`` so a bulk sync cannot hang, and a capped number is the wrong
+        answer to "how many are there" — it reads as the truth. Jira's newer
+        ``/search/jql`` deliberately returns no total (it pages by token), so the
+        count comes from ``approximate-count``, which exists for exactly this. An
+        instance too old to have it falls back to the base class, cap and all.
+        """
+        jql = self._compile(spec=spec, project=project)
+        try:
+            with self._client() as client:
+                resp = client.post(f"{API_PREFIX}/search/approximate-count", json={"jql": jql})
+                if resp.status_code < 400:
+                    return int(resp.json().get("count", 0))
+        except (httpx.HTTPError, ValueError, TypeError):
+            pass
+        return super().count_tickets(spec=spec, project=project)
+
     def fetch_tickets(
         self,
         *,
@@ -244,8 +265,10 @@ class JiraAdapter(ProviderAdapter):
         ticket_ids: list[str] | None = None,
         include_comments: bool = False,  # Jira returns comments inline
         project: str | None = None,
+        spec: Any = None,
     ) -> list[NormalizedTicket]:
-        jql = self._build_jql(
+        jql = self._compile(
+            spec=spec,
             mode=mode,
             sprint=sprint,
             sprint_path=sprint_path,
@@ -281,6 +304,36 @@ class JiraAdapter(ProviderAdapter):
             data = resp.json()
         return [self._normalize(issue) for issue in data.get("issues", [])]
 
+    def _compile(
+        self,
+        *,
+        spec: Any = None,
+        mode: str = "all",
+        sprint: str | None = None,
+        sprint_path: str | None = None,
+        states: list[str] | None = None,
+        work_item_types: list[str] | None = None,
+        ticket_ids: list[str] | None = None,
+        project: str | None = None,
+    ) -> str:
+        """The JQL to run: the compiled clause query when there is one.
+
+        A compiled query **replaces** the legacy selection outright rather than
+        blending with it. Mixing the two would silently re-apply a condition the
+        user had removed, which is the same rule the Azure DevOps adapter follows.
+        """
+        if spec is not None:
+            return build_jql(spec, (project or "").strip() or self.project)
+        return self._build_jql(
+            mode=mode,
+            sprint=sprint,
+            sprint_path=sprint_path,
+            states=states,
+            work_item_types=work_item_types,
+            ticket_ids=ticket_ids,
+            project=project,
+        )
+
     def _build_jql(
         self,
         *,
@@ -293,23 +346,24 @@ class JiraAdapter(ProviderAdapter):
         project: str | None = None,
     ) -> str:
         if mode == "selected" and ticket_ids:
-            return "key in (" + ",".join(ticket_ids) + ")"
+            return issue_keys_jql(ticket_ids)
 
         conditions: list[str] = []
         proj = (project or "").strip() or self.project
         if proj:
-            conditions.append(f"project = {proj}")
+            conditions.append(f"project = {quote(proj)}")
         if mode == "sprint" and (sprint_path or sprint):
             if sprint_path and str(sprint_path).isdigit():
+                # A sprint id is an integer field; digits cannot carry an injection.
                 conditions.append(f"sprint = {sprint_path}")
             else:
-                conditions.append(f"sprint = '{sprint or sprint_path}'")
+                conditions.append(f"sprint = {quote(str(sprint or sprint_path))}")
         elif mode == "assigned":
             conditions.append("assignee = currentUser()")
         if states:
-            conditions.append("status IN (" + ", ".join(f'"{s}"' for s in states) + ")")
+            conditions.append("status IN (" + ", ".join(quote(s) for s in states) + ")")
         if work_item_types:
-            conditions.append("issuetype IN (" + ", ".join(f'"{t}"' for t in work_item_types) + ")")
+            conditions.append("issuetype IN (" + ", ".join(quote(t) for t in work_item_types) + ")")
         return " AND ".join(conditions) if conditions else "order by created DESC"
 
     # -- Normalisation ----------------------------------------------------

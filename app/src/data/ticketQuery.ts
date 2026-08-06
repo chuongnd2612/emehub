@@ -175,6 +175,20 @@ export const CAPABILITIES: Record<
   },
 };
 
+/**
+ * Destinations whose dialect can express OR at all.
+ *
+ * Everything except GitHub, whose search string has no OR operator and no
+ * grouping. A capability like any other in the matrix above — it just happens to
+ * be about the join rather than about a field. Mirrors
+ * `ticket_query.MATCH_ANY_DESTINATIONS`.
+ */
+export const MATCH_ANY_DESTINATIONS: ReadonlySet<Destination> = new Set([
+  "azure_devops",
+  "jira",
+  "mirror",
+]);
+
 /** The fields `destination` can filter on, in the order to offer them. */
 export const fieldsFor = (destination: Destination): ClauseField[] =>
   Object.keys(CAPABILITIES[destination]) as ClauseField[];
@@ -228,6 +242,14 @@ export function validateQuery(
   if (query.clauses.length === 0) add("Add at least one condition.");
   if (query.match !== "all" && query.match !== "any") {
     add(`“${String(query.match)}” is not a way to combine conditions.`);
+  } else if (query.match === "any" && !MATCH_ANY_DESTINATIONS.has(destination)) {
+    // GitHub's search ANDs every qualifier and offers no OR and no grouping.
+    // Compiling `any` as AND would return *fewer* tickets than were asked for,
+    // silently. The hub refuses it for the same reason, with the same words.
+    add(
+      "GitHub search cannot combine conditions with “any”. " +
+        "Every condition has to match.",
+    );
   }
 
   query.clauses.forEach((clause, index) => {

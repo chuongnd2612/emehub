@@ -196,6 +196,15 @@ CAPABILITIES: dict[str, dict[str, tuple[str, ...]]] = {
 }
 
 
+#: Destinations whose dialect can express OR at all.
+#:
+#: Everything except GitHub, whose search string has no OR operator and no
+#: grouping — see :mod:`app.services.gh_search`. This is a capability like any
+#: other in the matrix above; it just happens to be about the join rather than
+#: about a field.
+MATCH_ANY_DESTINATIONS: frozenset[str] = frozenset({"azure_devops", "jira", "mirror"})
+
+
 def fields_for(destination: str) -> tuple[str, ...]:
     """The fields ``destination`` can filter on, in the matrix's own order."""
     return tuple(CAPABILITIES.get(destination, {}))
@@ -327,6 +336,17 @@ def validate(query: TicketQuery, destination: str) -> list[QueryProblem]:
     if query.match not in ("all", "any"):
         problems.append(
             QueryProblem(f"“{query.match}” is not a way to combine conditions.")
+        )
+    elif query.match == "any" and destination not in MATCH_ANY_DESTINATIONS:
+        # GitHub's search ANDs every qualifier and offers no OR and no grouping.
+        # Compiling `any` as AND would return *fewer* tickets than were asked for,
+        # silently — the one failure this whole matrix exists to prevent. So it is
+        # refused, with the reason, rather than approximated.
+        problems.append(
+            QueryProblem(
+                "GitHub search cannot combine conditions with “any”. "
+                "Every condition has to match."
+            )
         )
 
     for index, clause in enumerate(query.clauses):

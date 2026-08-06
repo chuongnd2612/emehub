@@ -58,7 +58,13 @@ from app.db import get_db
 from app.deps_auth import require_principal
 from app.models.user import User
 from app.schemas import ApiModel
-from app.services import audit_service, ticket_provider, ticket_query, ticket_service
+from app.services import (
+    audit_service,
+    connection_service,
+    ticket_provider,
+    ticket_query,
+    ticket_service,
+)
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
@@ -548,6 +554,32 @@ def create_ticket_test_cases(
     )
 
 
+def _destination(
+    db: Session,
+    principal: User,
+    *,
+    connection_id: int | None,
+    provider_kind: str | None,
+) -> str:
+    """Which capability matrix this request is to be judged against.
+
+    ``provider_kind`` is already a destination name (``azure_devops`` | ``jira`` |
+    ``github``), so it is used as given. When only a ``connectionId`` was sent the
+    kind has to come **from the connection**: defaulting to Azure DevOps would judge
+    a Jira query against WIQL's matrix, accept an ``areaPath`` clause Jira cannot
+    express, and only fail later at the compiler — the exact silent-mismatch this
+    matrix exists to make impossible.
+    """
+    kind = (provider_kind or "").strip()
+    if kind:
+        return kind
+    if connection_id is not None:
+        connection = connection_service.get_connection(db, connection_id, principal.id)
+        if connection is not None:
+            return connection.kind
+    return "azure_devops"
+
+
 def _compiled(raw: dict | None, destination: str | None) -> ticket_query.TicketQuery | None:
     """Parse and validate a wire query, or 422 with what is wrong.
 
@@ -633,7 +665,15 @@ def preview_query(
     `POST /tickets/sync` does — the caller never holds a credential. Nothing is
     written, so this is safe to run on every Apply.
     """
-    spec = _compiled(body.query, body.provider_kind)
+    spec = _compiled(
+        body.query,
+        _destination(
+            db,
+            principal,
+            connection_id=body.connection_id,
+            provider_kind=body.provider_kind,
+        ),
+    )
     try:
         total, sample, _resolved = ticket_service.preview_tickets(
             db,
@@ -704,7 +744,15 @@ def sync_tickets(
             ticket_ids=body.ticket_ids or None,
             project=body.project,
             project_id=body.project_id,
-            spec=_compiled(body.query, body.provider_kind),
+            spec=_compiled(
+                body.query,
+                _destination(
+                    db,
+                    principal,
+                    connection_id=body.connection_id,
+                    provider_kind=body.provider_kind,
+                ),
+            ),
         )
     except ticket_service.TicketSyncUnavailable as exc:
         # Not wired to the provider adapters in this deployment. 503 and say so —
