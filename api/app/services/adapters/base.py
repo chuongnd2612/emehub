@@ -224,8 +224,22 @@ class ProviderAdapter(ABC):
         return []
 
     def list_work_item_metadata(self) -> dict[str, Any]:
-        """Filter options: ``{area_paths, work_item_types, states, epics}``."""
-        return {"area_paths": [], "work_item_types": [], "states": [], "epics": []}
+        """Everything a filter picker needs about the connected project.
+
+        ``work_item_types`` carries each type's **own** states, because a Bug and a
+        User Story do not share a state set. ``area_paths`` / ``iteration_paths``
+        are flattened pre-order with a ``depth``, so a picker can indent them
+        without walking a tree.
+        """
+        return {
+            "area_paths": [],
+            "iteration_paths": [],
+            "work_item_types": [],
+            "states": [],
+            "members": [],
+            "tags": [],
+            "epics": [],
+        }
 
     def list_repos(self) -> list[dict[str, Any]]:
         """Git repositories as ``[{name, clone_url, web_url, default_branch}]``."""

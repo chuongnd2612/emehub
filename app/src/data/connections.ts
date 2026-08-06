@@ -442,3 +442,106 @@ export const testConnection = (
 export const removeConnection = async (connectionId: number): Promise<void> => {
   await api.delete(`/connections/${connectionId}`);
 };
+
+/* ── Provider metadata: the query builder's pickers ──────────────────────── */
+
+/** One node of the area or iteration tree, flattened pre-order with its depth. */
+export interface ClassificationNode {
+  id: string;
+  name: string;
+  /** The full path a clause uses, e.g. `Surency\Data`. */
+  path: string;
+  /** 0 for the project root — what a picker indents by. */
+  depth: number;
+}
+
+/**
+ * A work item type with **its own** states.
+ *
+ * Grouped per type because a Bug and a User Story do not share a state set:
+ * offering `Committed` on a Bug builds a query matching nothing, which reads as
+ * "there is no work" rather than as the mistake it is.
+ */
+export interface WorkItemType {
+  name: string;
+  states: string[];
+}
+
+export interface ProviderMember {
+  displayName: string;
+  /** The account a query matches on, e.g. `duna@emesoft.net`. */
+  uniqueName: string;
+}
+
+export interface WorkItemMetadata {
+  areaPaths: ClassificationNode[];
+  iterationPaths: ClassificationNode[];
+  workItemTypes: WorkItemType[];
+  /** Every state across every type, for a picker not narrowed by type. */
+  states: string[];
+  members: ProviderMember[];
+  tags: string[];
+  epics: { key: string; name: string }[];
+  /** When the provider was really read; null when it never has been. */
+  fetchedAt: string | null;
+  /**
+   * The cache TTL passed and the refresh failed. The payload is the last good
+   * one, **not** an empty shell — so the panel stays usable and prints the cause.
+   */
+  stale: boolean;
+  message: string;
+}
+
+const EMPTY_METADATA: WorkItemMetadata = {
+  areaPaths: [],
+  iterationPaths: [],
+  workItemTypes: [],
+  states: [],
+  members: [],
+  tags: [],
+  epics: [],
+  fetchedAt: null,
+  stale: false,
+  message: "",
+};
+
+/**
+ * `GET /connections/{id}/work-item-metadata` — everything the pickers offer.
+ *
+ * Cached hub-side per connection, because each read spends the PAT against the
+ * provider. `refresh` forces a fresh read; a refresh that fails still returns the
+ * last good payload with `stale: true`.
+ *
+ * Hub-audience only: it spends the PAT, so an agent token cannot reach it
+ * (INTEGRATION.md §4).
+ */
+export const getWorkItemMetadata = async (
+  connectionId: number,
+  options: { refresh?: boolean } = {},
+): Promise<WorkItemMetadata> => {
+  const wire = await api.get<Partial<WorkItemMetadata>>(
+    `/connections/${connectionId}/work-item-metadata`,
+    { query: options.refresh ? { refresh: true } : {} },
+  );
+  return { ...EMPTY_METADATA, ...wire };
+};
+
+/** `DELETE /connections/{id}/metadata/cache` — for a payload that is wrong
+ * rather than merely old, after the project was reconfigured provider-side. */
+export const clearMetadataCache = async (connectionId: number): Promise<void> => {
+  await api.delete(`/connections/${connectionId}/metadata/cache`);
+};
+
+/** `GET /connections/{id}/sprints` — iterations, newest first as the provider lists them. */
+export interface ProviderSprint {
+  id: string;
+  name: string;
+  /** Pass back as `sprint_path` when syncing. */
+  path: string;
+  startDate: string | null;
+  finishDate: string | null;
+  state: string | null;
+}
+
+export const getSprints = (connectionId: number): Promise<ProviderSprint[]> =>
+  api.get<ProviderSprint[]>(`/connections/${connectionId}/sprints`);

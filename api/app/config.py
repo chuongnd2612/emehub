@@ -85,6 +85,12 @@ class Settings(BaseSettings):
     #: who does not want grants has agents that never ask for one.
     agent_grant_ttl_minutes: int = 240
 
+    #: How long cached provider metadata (the query builder's pickers) is served
+    #: before a read is attempted again. A refresh can always be forced with
+    #: ``?refresh=true``; a refresh that FAILS keeps serving the cached payload and
+    #: says so, rather than emptying the pickers.
+    metadata_ttl_minutes: int = 60
+
     # ── Registered agents ──────────────────────────────────────────────────
     agent_qagent_url: str = "http://localhost:5174"
     agent_dagent_url: str = "http://localhost:3000"
