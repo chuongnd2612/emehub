@@ -95,14 +95,14 @@ export function MembersTable() {
               : m,
           ) ?? null,
       );
-      toast("Role updated", `${member.email} is now a ${role}`, "ok");
+      toast("Role updated");
       // Demoting yourself changes what you may do next — resync the principal.
       if (me && me.id === member.id) void refreshUser();
     } catch (err) {
       toast(
         "Could not change that role",
-        err instanceof ApiError ? err.message : "The hub did not respond.",
         "warn",
+        err instanceof ApiError ? err.message : "The hub did not respond.",
       );
     } finally {
       setBusyId(null);

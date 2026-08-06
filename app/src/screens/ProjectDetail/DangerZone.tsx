@@ -45,11 +45,7 @@ export function DangerZone({ project }: { project: Project }) {
     setError("");
     try {
       await deleteProject(project.id);
-      toast(
-        "Project deleted",
-        `${project.name} and its configuration are gone`,
-        "warn",
-      );
+      toast("Project deleted", "warn");
       navigate("/app/projects");
     } catch (err) {
       // The hub's own sentence, whatever it is — the 409 explains the fix.

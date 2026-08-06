@@ -50,7 +50,7 @@ export function ApiKeysPanel() {
 
   const copy = (key: ApiKey) => {
     void navigator.clipboard?.writeText(full(key.prefix));
-    toast("Key copied", `${key.name} copied to clipboard`, "ok");
+    toast("Key copied");
   };
 
   return (

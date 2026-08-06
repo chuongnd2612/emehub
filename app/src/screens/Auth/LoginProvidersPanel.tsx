@@ -62,11 +62,7 @@ export function LoginProvidersPanel() {
     );
     const provider = providers.find((p) => p.id === id);
     if (provider) {
-      toast(
-        provider.name,
-        `${enabled ? "Enabled" : "Disabled"} as a login provider`,
-        "ok",
-      );
+      toast(`${provider.name} ${enabled ? "enabled" : "disabled"}`);
     }
   };
 

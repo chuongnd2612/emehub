@@ -149,11 +149,7 @@ export default function TicketsScreen() {
 
   const openRow = useCallback(
     (ticket: Ticket) => {
-      toast(
-        ticket.id,
-        `Read-only mirror · open in ${PROVIDERS[provider].name} to edit`,
-        "info",
-      );
+      toast(ticket.id, "info");
     },
     [provider],
   );

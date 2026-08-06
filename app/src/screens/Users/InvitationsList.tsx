@@ -31,15 +31,11 @@ export function InvitationsList({
   onInvite,
 }: InvitationsListProps) {
   const resend = (inv: Invitation) =>
-    toast("Invitation resent", `${inv.email} will receive a fresh link`, "ok");
+    toast("Invitation resent");
 
   const revoke = (inv: Invitation) => {
     onRevoke(inv);
-    toast(
-      "Invitation revoked",
-      `${inv.email} can no longer join this workspace`,
-      "warn",
-    );
+    toast("Invitation revoked", "warn");
   };
 
   return (

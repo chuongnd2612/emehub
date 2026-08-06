@@ -65,11 +65,7 @@ export default function ResetPasswordScreen() {
     setError(null);
     try {
       await api.post("/auth/reset", { token, password });
-      toast(
-        "Password updated",
-        "Every other session was signed out — sign in with the new password",
-        "ok",
-      );
+      toast("Password updated");
       navigate("/login", { replace: true });
     } catch (err) {
       setError(

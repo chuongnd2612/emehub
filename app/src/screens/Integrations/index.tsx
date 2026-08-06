@@ -131,18 +131,16 @@ export default function IntegrationsScreen() {
         lastTested: "active now",
       }));
       if (result.ok) {
-        toast(
-          "Connection verified",
-          `${connection.label} responded in ${result.latencyMs} ms`,
-        );
+        toast("Connection verified");
       } else {
-        toast("Connection failed", result.message, "warn");
+        // The provider's own reason is the actionable half — keep it.
+        toast("Connection failed", "warn", result.message);
       }
     } catch (err) {
       toast(
         "Connection failed",
-        errorMessage(err, `${connection.label} did not respond`),
         "warn",
+        errorMessage(err, `${connection.label} did not respond`),
       );
     } finally {
       setTestingId(null);
@@ -154,15 +152,12 @@ export default function IntegrationsScreen() {
     try {
       const saved = await saveConnection(connection);
       patchConnection(connection.id, () => saved);
-      toast(
-        "Connection saved",
-        `${saved.label} credentials encrypted and stored`,
-      );
+      toast("Connection saved");
     } catch (err) {
       toast(
         "Could not save the connection",
-        errorMessage(err, "The hub rejected the change"),
         "warn",
+        errorMessage(err, "The hub rejected the change"),
       );
     } finally {
       setSavingId(null);
@@ -175,8 +170,8 @@ export default function IntegrationsScreen() {
     } catch (err) {
       toast(
         "Could not remove the connection",
-        errorMessage(err, "The hub rejected the change"),
         "warn",
+        errorMessage(err, "The hub rejected the change"),
       );
       return;
     }
@@ -191,11 +186,7 @@ export default function IntegrationsScreen() {
       next.delete("conn");
       setParams(next, { replace: true });
     }
-    toast(
-      "Connection removed",
-      `${connection.label} is no longer synced`,
-      "warn",
-    );
+    toast(`${connection.label} removed`, "warn");
   };
 
   /**
@@ -219,16 +210,12 @@ export default function IntegrationsScreen() {
       const next = new URLSearchParams(params);
       next.set("conn", String(created.id));
       setParams(next, { replace: true });
-      toast(
-        `Add ${name} connection`,
-        "Paste an organisation URL and access token to begin",
-        "info",
-      );
+      toast(`Add ${name} connection`, "info");
     } catch (err) {
       toast(
         `Could not add a ${name} connection`,
-        errorMessage(err, "The hub rejected the request"),
         "warn",
+        errorMessage(err, "The hub rejected the request"),
       );
     } finally {
       setAddingProvider(null);

@@ -133,7 +133,7 @@ export function RepositoryEditor({
       await saveProjectConfig(project.id, {
         repos: repos.filter((r) => r.name.trim() || r.repoUrl.trim()),
       });
-      toast("Repositories saved", "Every agent clones from this list", "ok");
+      toast("Repositories saved");
       onReload();
     } catch (err) {
       setError(

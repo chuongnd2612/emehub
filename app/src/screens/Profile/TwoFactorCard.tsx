@@ -45,7 +45,7 @@ function CopyRow({ label, value }: { label: string; value: string }) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1400);
     } catch {
-      toast("Could not copy", "Select the value and copy it by hand", "warn");
+      toast("Could not copy", "warn");
     }
   };
   return (
@@ -116,11 +116,7 @@ export function TwoFactorCard() {
       await enableTotp(code);
       reset();
       await refreshUser();
-      toast(
-        "Two-factor enabled",
-        "You will be asked for a code the next time you sign in",
-        "ok",
-      );
+      toast("Two-factor enabled");
     } catch (err) {
       setError(reason(err, "That code was not accepted. Try the next one."));
     } finally {
@@ -136,11 +132,7 @@ export function TwoFactorCard() {
       await disableTotp({ code });
       reset();
       await refreshUser();
-      toast(
-        "Two-factor disabled",
-        "Sign-in now needs your password only",
-        "warn",
-      );
+      toast("Two-factor disabled", "warn");
     } catch (err) {
       setError(reason(err, "That code was not accepted. Try the next one."));
     } finally {

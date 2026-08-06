@@ -61,7 +61,7 @@ export function InviteMemberModal({
     try {
       const result = await invite(address, role, displayName(me) || "an admin");
       onInvited?.(result.invitation);
-      toast("Invitation sent", `${result.invitation.email} · ${role}`, "ok");
+      toast(`Invitation sent to ${result.invitation.email}`);
       if (result.resetPath) {
         // Email delivery is a stub on this environment, so keep the modal open
         // — the link has to be handed over by hand.

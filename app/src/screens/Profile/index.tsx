@@ -118,7 +118,7 @@ function PersonalInfoCard({
     setError(null);
     try {
       onSaved(await updateMe({ firstName, lastName }));
-      toast("Profile saved", "Your name is updated across the hub", "ok");
+      toast("Profile saved");
     } catch (err) {
       setError(reason(err, "The hub did not respond."));
     } finally {
@@ -196,10 +196,12 @@ function PasswordCard() {
       setCurrent("");
       setNext("");
       setConfirm("");
+      // Kept: signing every other device out is a consequence the user has to
+      // know about, not a restatement of "changed".
       toast(
         "Password changed",
-        "Your other devices were signed out — this one stays in",
         "ok",
+        "Your other devices were signed out",
       );
     } catch (err) {
       setError(reason(err, "The hub did not respond."));

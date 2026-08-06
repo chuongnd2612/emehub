@@ -56,11 +56,7 @@ export function NewProjectModal({ open, onClose }: NewProjectModalProps) {
     try {
       const project = await createProject({ key: resolvedKey, name: name.trim() });
       onClose();
-      toast(
-        "Project created",
-        `${project.name} is ready — connect a repository next`,
-        "ok",
-      );
+      toast(`${project.name} created`);
     } catch (err) {
       setError(
         err instanceof ApiError

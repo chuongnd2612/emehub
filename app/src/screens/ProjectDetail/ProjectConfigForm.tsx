@@ -172,7 +172,7 @@ export function ProjectConfigForm({
     };
     try {
       await saveProjectConfig(project.id, patch);
-      toast("Configuration saved", "Every agent reads this on its next run", "ok");
+      toast("Configuration saved");
       onSaved();
     } catch (err) {
       setError(

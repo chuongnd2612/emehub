@@ -60,10 +60,10 @@ export function useImportRun(onImported?: () => void): ImportRun {
     try {
       const result = await runImport(request);
       // Copy is final — Handoff § 5. Import dialog › Footer.
+      // The count is the whole point of the message, so it goes in the one line
+      // rather than into a body that would only restate "complete".
       toast(
-        "Import complete",
-        `${result.count} work item${result.count === 1 ? "" : "s"} pulled from ${result.provider} · ${result.scopeLabel}`,
-        "ok",
+        `Imported ${result.count} work item${result.count === 1 ? "" : "s"}`,
       );
       imported.current?.();
     } catch (error) {
@@ -72,7 +72,8 @@ export function useImportRun(onImported?: () => void): ImportRun {
         error instanceof ApiError
           ? error.message
           : "The hub did not respond. Try again in a moment.";
-      toast(failureTitle(status), detail, "warn");
+      // `detail` is the server's own reason — the actionable half, so it stays.
+      toast(failureTitle(status), "warn", detail);
     } finally {
       if (alive.current) setImporting(false);
     }
