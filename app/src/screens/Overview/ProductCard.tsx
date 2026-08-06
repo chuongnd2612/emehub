@@ -93,21 +93,11 @@ export function ProductCard({ product }: { product: Product }) {
           </button>
         </div>
 
-        <div className="relative grid grid-cols-3 gap-2">
-          {product.stats.map((s) => (
-            <div
-              key={s.k}
-              className="rounded-[13px] border border-bd3 bg-inset px-3 py-[11px]"
-            >
-              <div className="font-mono text-[17px] font-semibold tracking-[-.02em] text-txt">
-                {s.v}
-              </div>
-              <div className="mt-[3px] text-[9.5px] font-bold tracking-[.09em] text-label">
-                {s.k}
-              </div>
-            </div>
-          ))}
-        </div>
+        {/* The prototype's three stat boxes are gone: "38 SUITES", "96% PASS
+            RATE", "17 DRY RUNS" are an agent's run history. The hub owns
+            identity, configuration and knowledge metadata (ADR 0001) — it stores
+            no run history and has no endpoint that could fill them, so they were
+            invented. The card reads better without three fabricated figures. */}
       </div>
     </div>
   );

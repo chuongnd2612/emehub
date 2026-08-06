@@ -1,12 +1,27 @@
 // Handoff § 2. Overview — greeting row.
 //
-// "Good morning, Emre" 28px/900 + a one-line status; right-aligned quick
-// actions as ghost chips with icons. Copy is verbatim from the prototype.
+// "Good morning, <name>" 28px/900 + a one-line status; right-aligned quick
+// actions as ghost chips with icons.
+//
+// The prototype's copy was "Good morning, Emre" and "Two agents online, 6
+// projects connected" — a name that is not the signed-in user's and a count that
+// was not counted. The name now comes from `/auth/me` through the auth store and
+// the numbers from the same real counts the tiles use, so the line either says
+// something true or says nothing.
 
 import type { ReactNode } from "react";
 
 import { Icon, Spinner, type IconName } from "@/components/ui";
+import { useAuth } from "@/store/auth";
 import { useUi } from "@/store/ui";
+
+/** Greeting by local time — the prototype only ever said "morning". */
+const greeting = (): string => {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+};
 
 interface QuickAction {
   label: string;
@@ -21,10 +36,20 @@ export interface GreetingRowProps {
   importing: boolean;
   /** Opens the Import dialog. */
   onImport: () => void;
+  /** Real counts for the status line. `null` while they are still loading. */
+  projectCount: number | null;
+  connectionCount: number | null;
 }
 
-export function GreetingRow({ importing, onImport }: GreetingRowProps) {
+export function GreetingRow({
+  importing,
+  onImport,
+  projectCount,
+  connectionCount,
+}: GreetingRowProps) {
   const setModal = useUi((s) => s.setModal);
+  const user = useAuth((s) => s.user);
+  const name = user?.firstName?.trim();
 
   const actions: QuickAction[] = [
     {
@@ -44,12 +69,18 @@ export function GreetingRow({ importing, onImport }: GreetingRowProps) {
     <div className="flex flex-wrap items-end gap-4 px-[2px] pt-[2px]">
       <div>
         <h1 className="m-0 text-[28px] leading-none font-black tracking-[-.035em] text-txt">
-          Good morning, Emre
+          {greeting()}
+          {name ? `, ${name}` : ""}
         </h1>
-        <p className="mt-[5px] mb-0 text-[13.5px] text-muted">
-          Two agents online, 6 projects connected. Nothing needs your attention
-          right now.
-        </p>
+        {/* Rendered only once the counts are in: a status line that reads
+            "0 projects" while loading is a false statement, not a placeholder. */}
+        {projectCount !== null && connectionCount !== null && (
+          <p className="mt-[5px] mb-0 text-[13.5px] text-muted">
+            {projectCount} {projectCount === 1 ? "project" : "projects"} and{" "}
+            {connectionCount}{" "}
+            {connectionCount === 1 ? "connection" : "connections"} configured.
+          </p>
+        )}
       </div>
 
       <div className="ml-auto flex flex-wrap gap-2">

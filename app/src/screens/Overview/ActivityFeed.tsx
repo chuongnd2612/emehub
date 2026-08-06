@@ -34,7 +34,7 @@ export function ActivityFeed({ events }: { events: ActivityEvent[] }) {
         const kind = KIND[a.kind];
         return (
           <div
-            key={`${a.ref}-${a.when}`}
+            key={a.id}
             className="flex items-start gap-3 border-b border-bd3 py-[13px] last:border-b-0"
           >
             <span

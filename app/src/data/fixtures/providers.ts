@@ -20,13 +20,6 @@ export const PRODUCTS: Product[] = [
     description:
       "Turns tickets into reviewed test cases, runs Playwright suites end to end, and publishes evidence straight back to your provider.",
     tags: ["Test generation", "Playwright", "Evidence publishing"],
-    metric: "1,204",
-    metricLabel: "RUNS THIS MONTH",
-    stats: [
-      { k: "SUITES", v: "38" },
-      { k: "PASS RATE", v: "96%" },
-      { k: "OPEN RUNS", v: "3" },
-    ],
   },
   {
     key: "d",
@@ -37,13 +30,6 @@ export const PRODUCTS: Product[] = [
     description:
       "Picks up a ticket, plans the change, writes the code and opens the pull request — inheriting the same knowledge base Q-Agent indexes.",
     tags: ["Codegen", "PR review", "Repo context"],
-    metric: "Q4 2026",
-    metricLabel: "TARGET RELEASE",
-    stats: [
-      { k: "REPOS WIRED", v: "2" },
-      { k: "DRY RUNS", v: "17" },
-      { k: "STATUS", v: "Beta" },
-    ],
   },
 ];
 

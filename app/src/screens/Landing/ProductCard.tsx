@@ -104,21 +104,9 @@ export function ProductCard({ product }: { product: Product }) {
           ))}
         </div>
 
-        <div className="relative grid grid-cols-3 gap-2">
-          {product.stats.map((stat) => (
-            <div
-              key={stat.k}
-              className="rounded-[13px] border border-bd3 bg-inset px-3 py-[11px]"
-            >
-              <div className="font-mono text-[17px] font-semibold tracking-[-.02em] text-txt">
-                {stat.v}
-              </div>
-              <div className="mt-[3px] text-[9.5px] font-bold tracking-[.09em] text-label">
-                {stat.k}
-              </div>
-            </div>
-          ))}
-        </div>
+        {/* The three stat boxes and the trailing metric are gone — see the
+            `Product` type: they were an agent's run history, which the hub does
+            not store and cannot fetch, so they could only be invented. */}
 
         <div className="relative mt-auto flex items-center justify-between gap-3 pt-1.5">
           <span
@@ -131,14 +119,6 @@ export function ProductCard({ product }: { product: Product }) {
             {product.live ? "Launch Q-Agent" : "In development"}
             <Icon name="arrowRight" size={15} strokeWidth={2.4} />
           </span>
-          <div className="flex flex-col items-end gap-0.5">
-            <span className="font-mono text-[16px] font-semibold text-txt2">
-              {product.metric}
-            </span>
-            <span className="text-[9.5px] font-bold tracking-[.1em] text-label">
-              {product.metricLabel}
-            </span>
-          </div>
         </div>
       </div>
     </div>
