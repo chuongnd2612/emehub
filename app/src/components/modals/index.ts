@@ -10,8 +10,6 @@ export type { InviteMemberModalProps } from "./InviteMemberModal";
 
 export { ModalHost } from "./ModalHost";
 
-export { NewApiKeyModal } from "./NewApiKeyModal";
-export type { NewApiKeyModalProps } from "./NewApiKeyModal";
 
 export { NewProjectModal } from "./NewProjectModal";
 export type { NewProjectModalProps } from "./NewProjectModal";

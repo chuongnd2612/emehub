@@ -1,5 +1,5 @@
 // Auth — the signed-in principal, their password, their 2FA enrolment and
-// their sessions. Everything here except `getApiKeys` is a real call.
+// their sessions. Every call here is real.
 //
 // The hub is the only place a token is minted or renewed (INTEGRATION.md §2),
 // so this module never touches tokens directly: `lib/api.ts` owns the bearer
@@ -18,10 +18,9 @@
 //   POST   /auth/sessions/revoke-others revokeOtherSessions
 
 import { api } from "@/lib/api";
-import { API_KEYS } from "./fixtures/auth";
 import { describeUserAgent, relativeFuture, relativeTime } from "./humanize";
 import { after, READ_DELAY_MS } from "./timing";
-import type { ApiKey, AuthUser, Session, TotpSetup } from "./types";
+import type { AuthUser, Session, TotpSetup } from "./types";
 
 /* ── The principal ───────────────────────────────────────────────────────── */
 
@@ -110,13 +109,3 @@ export const revokeSession = async (id: string): Promise<void> => {
 export const revokeOtherSessions = async (): Promise<void> => {
   await api.post("/auth/sessions/revoke-others");
 };
-
-/* ── API keys ────────────────────────────────────────────────────────────── */
-
-/**
- * STUB (no endpoint yet): the hub has no API-key resource at all — no list,
- * no create, no revoke (verified against `/api/openapi.json`). Kept on
- * fixtures so Authentication › API keys still renders, and the panel labels
- * itself as preview data so nobody mistakes these rows for live keys.
- */
-export const getApiKeys = (): Promise<ApiKey[]> => after(API_KEYS, READ_DELAY_MS);
