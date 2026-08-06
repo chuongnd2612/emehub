@@ -43,10 +43,14 @@ import { TicketsTable } from "./TicketsTable";
 import { TicketsToolbar } from "./TicketsToolbar";
 
 /**
- * Rows per page. Matches the hub's own `GET /tickets` default (`page_size=25`),
- * so the first request asks for exactly what the server would have given anyway.
+ * Rows per page.
+ *
+ * 10 rather than the hub's own `GET /tickets` default of 25: a page that fits on
+ * screen without scrolling is easier to scan, and the pager is what reaches the
+ * rest. The server takes `pageSize` per request, so asking for something other
+ * than its default costs nothing.
  */
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 10;
 
 const isProvider = (value: string | null): value is ProviderKey =>
   value === "ado" || value === "jira" || value === "gh";
