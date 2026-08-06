@@ -251,8 +251,13 @@ export function validateQuery(
       return;
     }
 
-    if (clause.values.length === 0) add(`Give ${label} a value.`, index);
-    else if (clause.values.some((value) => value.trim() === "")) {
+    const blanks = clause.values.filter((value) => value.trim() === "");
+    if (clause.values.length === 0 || blanks.length === clause.values.length) {
+      // No values, or every one blank: the control is untouched, so ask for a
+      // value rather than reporting an "empty value" — which reads as a mistake
+      // the user made rather than one still to make.
+      add(`Give ${label} a value.`, index);
+    } else if (blanks.length > 0) {
       add(`One of the ${label} values is empty.`, index);
     }
 

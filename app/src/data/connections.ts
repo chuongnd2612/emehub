@@ -292,7 +292,7 @@ export const getConnections = async (): Promise<ConnectionGroup[]> => {
  */
 export const getConnectionsWithCapability = async (
   capability: "work_item" | "repository",
-): Promise<{ id: number; label: string }[]> => {
+): Promise<{ id: number; label: string; provider: ProviderKey }[]> => {
   const groups = await getConnections();
   return groups.flatMap((g) =>
     g.connections
@@ -300,6 +300,9 @@ export const getConnectionsWithCapability = async (
       .map((c) => ({
         id: c.id,
         label: `${PROVIDERS[g.provider].name} · ${c.label}`,
+        // Carried so a caller can pick the connection for a given provider —
+        // the label reads well but is not something to match on.
+        provider: g.provider,
       })),
   );
 };

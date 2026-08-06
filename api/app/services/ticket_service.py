@@ -428,6 +428,47 @@ def upsert_ticket(
     return ticket
 
 
+def preview_tickets(
+    db: Session,
+    user: User | None,
+    *,
+    connection_id: int | None = None,
+    provider_kind: str | None = None,
+    spec: ticket_query.TicketQuery | None = None,
+    project: str | None = None,
+    limit: int = 10,
+) -> tuple[int, list[Any], ResolvedSource]:
+    """Run a query against the provider and return what it *would* import.
+
+    Nothing is written. This is what makes an honest count possible before a pull:
+    the handoff's "~24 items" hints were deleted precisely because nothing could
+    count a provider-side scope without performing it (`components/import/
+    scopes.ts`). Now something can.
+
+    Returns the total the provider matched, a short sample, and the resolved
+    source. The sample is capped because a preview is for confirming the shape of
+    the result, not for reading it.
+    """
+    resolved = resolve_source(db, user, connection_id, provider_kind)
+    try:
+        # Counted separately from the sample: `fetch_tickets` is capped so a bulk
+        # sync cannot hang, and a capped number is the wrong answer to "how many
+        # are there" — it reads as the truth. `count_tickets` is uncapped where the
+        # provider can do it cheaply.
+        total = resolved.source.count_tickets(spec=spec, project=project)
+        fetched = resolved.source.fetch_tickets(
+            include_comments=False,
+            project=project,
+            spec=spec,
+        )
+    except (TicketSourceError, TicketSyncUnavailable):
+        raise
+    except Exception as exc:
+        raise TicketSourceError(str(exc)) from exc
+
+    return total, list(fetched or [])[:limit], resolved
+
+
 def sync_tickets(
     db: Session,
     user: User | None,
@@ -443,6 +484,7 @@ def sync_tickets(
     ticket_ids: list[str] | None = None,
     project: str | None = None,
     project_id: int | None = None,
+    spec: ticket_query.TicketQuery | None = None,
 ) -> tuple[list[Ticket], ResolvedSource]:
     """Pull from the resolved :class:`TicketSource` and upsert every row.
 
@@ -466,6 +508,7 @@ def sync_tickets(
             # makes a bulk sync crawl. They are loaded on demand instead.
             include_comments=False,
             project=project,
+            spec=spec,
         )
     except (TicketSourceError, TicketSyncUnavailable):
         raise

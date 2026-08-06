@@ -373,6 +373,12 @@ export interface ImportRequest {
   jql?: string;
   /** GitHub only. */
   searchQuery?: string;
+  /**
+   * A clause query (`data/ticketQuery`). When present the hub uses it and ignores
+   * `mode`/`scope`/`filters` entirely — blending them would silently re-apply a
+   * condition the user had removed.
+   */
+  query?: import("./ticketQuery").TicketQuery;
 }
 
 export interface ImportResult {

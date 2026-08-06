@@ -26,24 +26,56 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   PROVIDERS,
+  getConnectionsWithCapability,
+  getWorkItemMetadata,
+  previewTicketQuery,
   type ImportRequest,
   type ImportScope,
   type ProviderKey,
   type TicketFilterField,
   type TicketFilters,
+  type WorkItemMetadata,
 } from "@/data";
+import {
+  emptyQuery,
+  type Destination,
+  type TicketQuery as ClauseQuery,
+} from "@/data/ticketQuery";
 import {
   Button,
   Glyph,
   Icon,
   Modal,
   Notice,
+  Pill,
   RadioGroup,
   Segmented,
   Dropdown,
+  toast,
 } from "@/components/ui";
+import { QueryBuilder } from "@/components/query";
 import { cn } from "@/lib/cn";
 import { IMPORT_SCOPE_OPTIONS } from "./scopes";
+
+/** Which compiler a provider's query is destined for. */
+const DESTINATION: Record<ProviderKey, Destination> = {
+  ado: "azure_devops",
+  jira: "jira",
+  gh: "github",
+};
+
+const EMPTY_META: WorkItemMetadata = {
+  areaPaths: [],
+  iterationPaths: [],
+  workItemTypes: [],
+  states: [],
+  members: [],
+  tags: [],
+  epics: [],
+  fetchedAt: null,
+  stale: false,
+  message: "",
+};
 
 export type ImportMode = "basic" | "advanced";
 
@@ -146,6 +178,67 @@ export function ImportDialog({
   const [filters, setFilters] = useState<TicketFilters>({});
 
   const meta = PROVIDERS[provider];
+  const destination = DESTINATION[provider];
+
+  // The query builder's own state. `previewed` is the query the count belongs to,
+  // which is what makes "3 changes not applied" meaningful — see QueryBuilder.
+  const [draft, setDraft] = useState<ClauseQuery>(() => emptyQuery(destination));
+  const [previewed, setPreviewed] = useState<ClauseQuery | null>(null);
+  const [count, setCount] = useState<number | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [metadata, setMetadata] = useState<WorkItemMetadata>(EMPTY_META);
+  const [metaError, setMetaError] = useState("");
+
+  // The pickers are only as good as the provider metadata behind them, so it is
+  // read once per open — cached hub-side, so a reopen is usually free.
+  useEffect(() => {
+    if (!open || mode !== "advanced") return;
+    let live = true;
+    setMetaError("");
+    void getConnectionsWithCapability("work_item")
+      .then(async (connections) => {
+        const match = connections.find((c) => c.provider === provider);
+        if (!match) {
+          throw new Error(
+            `No ${meta.name} connection is configured, so there are no fields to build a query from.`,
+          );
+        }
+        return { id: match.id, metadata: await getWorkItemMetadata(match.id) };
+      })
+      .then(({ metadata: loaded }) => {
+        if (live) setMetadata(loaded);
+      })
+      .catch((err: unknown) => {
+        if (live) {
+          setMetaError(
+            err instanceof Error ? err.message : "Could not read the provider's fields.",
+          );
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [open, mode, provider, meta.name]);
+
+  const preview = useCallback(() => {
+    setPreviewing(true);
+    void previewTicketQuery({ provider, query: draft })
+      .then((result) => {
+        setCount(result.total);
+        setPreviewed(draft);
+      })
+      .catch((err: unknown) => {
+        setCount(null);
+        // A failed preview must not read as "no work items" — that is the
+        // difference between a count of 0 and not knowing.
+        toast(
+          "Could not preview the query",
+          "warn",
+          err instanceof Error ? err.message : "The provider did not answer.",
+        );
+      })
+      .finally(() => setPreviewing(false));
+  }, [draft, provider]);
 
   // A provider switch changes the whole filter set, so nothing carries over.
   useEffect(() => {
@@ -185,7 +278,10 @@ export function ImportDialog({
       provider,
       mode,
       scope,
-      filters: mode === "advanced" ? filters : {},
+      filters: {},
+      // Only a query that has been APPLIED is imported. Importing the draft would
+      // pull something the user never saw a count for.
+      query: mode === "advanced" && previewed ? previewed : undefined,
     };
     onClose();
     onImport(request);
@@ -237,24 +333,27 @@ export function ImportDialog({
         </div>
       ) : (
         <div className="flex flex-col gap-3">
-          <SectionLabel>FILTER BY FIELD</SectionLabel>
-          {schema.length === 0 ? (
-            <Notice tone="info">
-              Field filters are built from the work items EmeHub has already
-              mirrored, and there are none for {meta.name} yet. Run a basic
-              import first and the fields will fill in.
-            </Notice>
+          <SectionLabel>BUILD A QUERY</SectionLabel>
+          {metaError ? (
+            <Notice tone="warn">{metaError}</Notice>
           ) : (
-            <div className="grid grid-cols-2 gap-3">
-              {schema.map((field) => (
-                <FieldSelect
-                  key={field.key}
-                  field={field}
-                  value={filters[field.key]}
-                  onPick={(value) => pick(field.key, value)}
-                />
-              ))}
-            </div>
+            <QueryBuilder
+              draft={draft}
+              onDraftChange={setDraft}
+              applied={previewed}
+              destination={destination}
+              metadata={metadata}
+              busy={previewing}
+              onApply={preview}
+              onReset={() => setDraft(emptyQuery(destination))}
+              trailing={
+                previewed && count !== null ? (
+                  <Pill tone={count > 0 ? "ok" : "neutral"} size="sm">
+                    {count} {count === 1 ? "work item" : "work items"}
+                  </Pill>
+                ) : null
+              }
+            />
           )}
         </div>
       )}
