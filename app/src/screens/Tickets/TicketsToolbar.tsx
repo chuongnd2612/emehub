@@ -46,6 +46,11 @@ export interface TicketsToolbarProps {
    */
   lastImport: string | null;
   onImport: () => void;
+  /** True while the clause builder panel is open. */
+  builderOpen: boolean;
+  onToggleBuilder: () => void;
+  /** A clause query is in force, so the pills are not what is filtering. */
+  queryActive: boolean;
 }
 
 /** One provider-variant filter pill: 36px, radius 11, 12.5px/600 + chevron. */
@@ -100,6 +105,9 @@ export function TicketsToolbar({
   importing,
   lastImport,
   onImport,
+  builderOpen,
+  onToggleBuilder,
+  queryActive,
 }: TicketsToolbarProps) {
   const meta = PROVIDERS[provider];
   const dirty =
@@ -157,15 +165,44 @@ export function TicketsToolbar({
         className="max-w-[250px] min-w-[170px] flex-1"
       />
 
-      {/* 3. One pill per provider-variant schema field. */}
-      {schema.map((field) => (
-        <FilterPill
-          key={String(field.key)}
-          field={field}
-          value={filters[String(field.key)]}
-          onPick={(value) => onFilterPick(String(field.key), value)}
+      {/* 3. One pill per provider-variant schema field.
+              Hidden while a clause query is in force: the two answer the same
+              question, and showing pills that are not what is filtering is how a
+              control starts lying. */}
+      {!queryActive &&
+        schema.map((field) => (
+          <FilterPill
+            key={String(field.key)}
+            field={field}
+            value={filters[String(field.key)]}
+            onPick={(value) => onFilterPick(String(field.key), value)}
+          />
+        ))}
+
+      {/* 3b. The clause builder. Its options come from the provider's own
+              metadata, so it can filter on a value that has never been imported —
+              which the pills, built from mirrored rows, cannot. */}
+      <button
+        type="button"
+        data-surface
+        onClick={onToggleBuilder}
+        aria-expanded={builderOpen}
+        className={cn(
+          "flex h-9 shrink-0 cursor-pointer items-center gap-[6px] rounded-control-lg border px-[11px]",
+          "text-[12px] font-semibold transition-colors duration-200",
+          builderOpen || queryActive
+            ? "border-pb bg-pt text-p-on"
+            : "border-bd2 bg-card2 text-txt4 hover:bg-card3",
+        )}
+      >
+        <Icon name="filter" size={13} strokeWidth={2.3} />
+        {queryActive ? "Query" : "Build a query"}
+        <Icon
+          name={builderOpen ? "chevronUp" : "chevronDown"}
+          size={13}
+          strokeWidth={2.3}
         />
-      ))}
+      </button>
 
       {/* 4. × Clear — only once a filter or the query is set. */}
       {dirty && (

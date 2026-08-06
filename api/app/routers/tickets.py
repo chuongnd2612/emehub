@@ -548,7 +548,7 @@ def create_ticket_test_cases(
     )
 
 
-def _compiled(raw: dict | None, provider_kind: str | None) -> ticket_query.TicketQuery | None:
+def _compiled(raw: dict | None, destination: str | None) -> ticket_query.TicketQuery | None:
     """Parse and validate a wire query, or 422 with what is wrong.
 
     The same `validate` the client runs to grey out Apply — so a request the client
@@ -558,14 +558,67 @@ def _compiled(raw: dict | None, provider_kind: str | None) -> ticket_query.Ticke
     if not raw:
         return None
     spec = ticket_query.query_from_wire(raw)
-    destination = (provider_kind or "").strip() or "azure_devops"
-    problems = ticket_query.validate(spec, destination)
+    where = (destination or "").strip() or "azure_devops"
+    problems = ticket_query.validate(spec, where)
     if problems:
         raise HTTPException(
             status_code=422,
             detail={"problems": [p.as_dict() for p in problems]},
         )
     return spec
+
+
+class TicketSearchRequest(ApiModel):
+    """A clause query over the hub's own mirror, paged.
+
+    A POST rather than more parameters on ``GET /tickets``: a clause list does not
+    fit a query string honestly — JSON in a parameter is length-limited and awful
+    to read in a log — and `GET /tickets` is a CONTRACT route agents already call,
+    which stays exactly as it is.
+    """
+
+    model_config = ConfigDict(extra="forbid", **ApiModel.model_config)
+
+    query: dict = Field(default_factory=dict)
+    #: Free text over id / title / project. A different thing from a `title
+    #: contains` clause, and kept separate because that is how the toolbar reads.
+    q: str | None = None
+    provider_kind: str | None = None
+    project_id: int | None = None
+    page: int = 1
+    page_size: int = 25
+
+
+@router.post("/search", response_model=TicketPageOut)
+def search_tickets(
+    body: TicketSearchRequest,
+    principal: User = Depends(require_principal),
+    db: Session = Depends(get_db),
+) -> TicketPageOut:
+    """One page of the mirror, narrowed by a clause query.
+
+    The ``mirror`` destination: parameterised SQL over our own columns, so nothing
+    here builds a query string. Scoping is unchanged — a member sees their own rows
+    plus the shared namespace, and an ``any`` query widens within that and never
+    past it.
+    """
+    spec = _compiled(body.query, "mirror") if body.query else None
+    items, total = ticket_service.list_tickets(
+        db,
+        principal,
+        provider_kind=body.provider_kind,
+        project_id=body.project_id,
+        q=body.q,
+        spec=spec,
+        page=body.page,
+        page_size=body.page_size,
+    )
+    return TicketPageOut(
+        items=[TicketOut.model_validate(t) for t in items],
+        total=total,
+        page=max(body.page, 1),
+        page_size=body.page_size,
+    )
 
 
 @router.post("/query/preview", response_model=QueryPreviewResult)
