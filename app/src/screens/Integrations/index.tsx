@@ -35,6 +35,7 @@ import {
 } from "@/data";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import type { ConnectionTestOutcome } from "./ConnectionRow";
 import { ProviderGroup } from "./ProviderGroup";
 
 /** The hub's message when it has one, the exception's otherwise. */
@@ -50,6 +51,16 @@ export default function IntegrationsScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [testingId, setTestingId] = useState<number | null>(null);
+  /**
+   * Last test outcome per connection id, for this session.
+   *
+   * Kept here rather than on the wire row: `GET /connections` reports `status`
+   * and `lastTested`, never the reason a test failed — and the reason is the
+   * actionable half. A toast alone loses it after 3.2s.
+   */
+  const [results, setResults] = useState<Record<number, ConnectionTestOutcome>>(
+    {},
+  );
   const [savingId, setSavingId] = useState<number | null>(null);
   const [addingProvider, setAddingProvider] = useState<ProviderKey | null>(null);
   const [params, setParams] = useSearchParams();
@@ -130,6 +141,14 @@ export default function IntegrationsScreen() {
         status: result.ok ? "Connected" : "Attention",
         lastTested: "active now",
       }));
+      setResults((r) => ({
+        ...r,
+        [connection.id]: {
+          ok: result.ok,
+          message: result.message,
+          unreachable: false,
+        },
+      }));
       if (result.ok) {
         toast("Connection verified");
       } else {
@@ -137,10 +156,26 @@ export default function IntegrationsScreen() {
         toast("Connection failed", "warn", result.message);
       }
     } catch (err) {
+      // The hub answering with an error is NOT the same as never answering: one
+      // means the provider rejected us, the other means we cannot tell. An
+      // ApiError is a reply, so anything else is a transport failure.
+      const unreachable = !(err instanceof ApiError);
+      const message = errorMessage(
+        err,
+        unreachable
+          ? "The hub did not respond, so the connection is untested"
+          : `${connection.label} did not respond`,
+      );
+      setResults((r) => ({
+        ...r,
+        [connection.id]: { ok: false, message, unreachable },
+      }));
+      // The status is deliberately NOT patched to "Attention" here: we did not
+      // learn anything about the connection, only about the hub.
       toast(
-        "Connection failed",
+        unreachable ? "EmeHub is unreachable" : "Connection failed",
         "warn",
-        errorMessage(err, `${connection.label} did not respond`),
+        message,
       );
     } finally {
       setTestingId(null);
@@ -281,6 +316,7 @@ export default function IntegrationsScreen() {
             name={PROVIDERS[g.provider].name}
             expandedId={expandedId}
             testingId={testingId}
+            results={results}
             savingId={savingId}
             adding={addingProvider === g.provider}
             onToggle={setExpanded}
