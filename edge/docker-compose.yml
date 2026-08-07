@@ -1,0 +1,44 @@
+# The suite's front door — one origin for hub + agents.
+#
+# Its own compose project, not a service inside the hub's, because it fronts
+# stacks that deploy independently: folding it into `emehub` would mean a hub
+# rebuild could take q-agent's routing down with it, and `docker compose down`
+# in either repo would remove the other's entry point.
+#
+# Bring up with:
+#     docker network create emesoft          # once
+#     docker compose -f edge/docker-compose.yml up -d
+#
+# Then point a tunnel hostname at 127.0.0.1:5190. The existing per-app hostnames
+# keep working and must stay: paired Local Agents have qagent.chuongnd.click
+# baked into their installed config and cannot be told otherwise.
+
+services:
+  edge:
+    image: nginx:1.27-alpine
+    container_name: emesoft-edge
+    restart: unless-stopped
+    ports:
+      - "${EMESOFT_EDGE_PORT:-5190}:5190"
+    volumes:
+      # Read-only: the routing table is part of the repo, not something to be
+      # edited in a running container and lost on the next recreate.
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - emesoft
+    healthcheck:
+      # `nginx -t` rather than a request: the upstreams are other stacks, and a
+      # proxy should not report itself unhealthy because something behind it is
+      # still starting.
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+networks:
+  emesoft:
+    # Created by hand, and shared with the emehub and q-agent stacks. External
+    # so that no single project owns it — whichever stack restarts last must not
+    # be able to delete the network the others are attached to.
+    external: true
