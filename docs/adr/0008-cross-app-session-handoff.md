@@ -1,7 +1,13 @@
 # ADR 0008 — Cross-app session hand-off via a shared cookie and a non-rotating mint
 
-- **Status:** Accepted
+- **Status:** Accepted; its *deployment premise* is superseded by [ADR 0010](0010-one-origin-for-the-suite.md)
 - **Date:** 2026-08-05
+
+> **Note.** The mechanism below — a non-rotating audience-token mint, redeemed from the
+> browser — is unchanged and still correct. What ADR 0010 changes is the assumption in
+> *Context* that the applications sit on sibling subdomains: they are moving to one origin,
+> where the mint is same-origin and needs neither a cookie `Domain` nor a CORS entry. Read
+> the "subdomain trust becomes load-bearing" consequence with ADR 0010's revision of it.
 
 ## Context
 
