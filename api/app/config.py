@@ -92,6 +92,17 @@ class Settings(BaseSettings):
     metadata_ttl_minutes: int = 60
 
     # ── Registered agents ──────────────────────────────────────────────────
+    #: Where each agent lives, and — because setting one is what registers its
+    #: audience — the allowlist of who the hub will mint a token for.
+    #:
+    #: Two forms are accepted:
+    #:
+    #: * an **origin**, ``https://qagent.chuongnd.click``, for an agent on its own
+    #:   host. The sign-in hand-off then needs ``EMEHUB_COOKIE_DOMAIN`` to cover
+    #:   that host (ADR 0008);
+    #: * a **same-origin path**, ``/qagent``, for an agent mounted behind the
+    #:   hub's own reverse proxy. Nothing else is needed: the cookie is already
+    #:   on the origin. See :meth:`is_same_origin_path`.
     agent_qagent_url: str = "http://localhost:5174"
     agent_dagent_url: str = "http://localhost:3000"
 
@@ -229,14 +240,38 @@ class Settings(BaseSettings):
         }
         return (mapping.get(audience) or "").strip()
 
+    @staticmethod
+    def is_same_origin_path(url: str) -> bool:
+        """True when ``url`` is a path on the hub's own origin, e.g. ``/qagent``.
+
+        An agent mounted behind the hub's own reverse proxy is configured as a
+        path rather than an origin. That is not a degenerate case of the
+        subdomain arrangement — it is the *strongest* form of it, because a
+        same-origin request always carries the session cookie and needs no
+        ``Domain`` attribute at all.
+
+        A protocol-relative ``//host/path`` is deliberately **not** a path: it is
+        an origin with the scheme left off, and treating it as same-origin would
+        hand the "always ready" verdict to an arbitrary host.
+        """
+        candidate = (url or "").strip()
+        return candidate.startswith("/") and not candidate.startswith("//")
+
     def handoff_ready(self, audience: str) -> bool:
         """Whether the sign-in hand-off can actually work for ``audience``.
 
-        Registration (a URL) is necessary but **not sufficient**: the hand-off
-        also needs the refresh cookie to reach the agent's origin, which requires
-        ``EMEHUB_COOKIE_DOMAIN`` to be set to a domain the agent is a subdomain
-        of (ADR 0008). Without that the browser never sends the cookie and the
-        agent's call fails — so a UI that offered a launch would be lying.
+        Registration (a URL) is necessary but **not sufficient** when the agent
+        is on its own origin: the hand-off needs the refresh cookie to reach that
+        origin, which requires ``EMEHUB_COOKIE_DOMAIN`` to name a domain the
+        agent is a subdomain of (ADR 0008). Without it the browser never sends
+        the cookie and the agent's call fails, so a UI offering a launch would be
+        lying.
+
+        **A same-origin path skips all of that.** There is no cross-origin
+        request to authorise and no cookie domain to widen, so the hand-off is
+        ready by construction — and requiring ``EMEHUB_COOKIE_DOMAIN`` here would
+        disable the launch button for the one deployment that needs the setting
+        least.
 
         Kept deliberately distinct from ``registered_audiences`` so "a URL is
         set" can never silently come to mean "single sign-on works".
@@ -244,6 +279,8 @@ class Settings(BaseSettings):
         url = self.agent_url(audience)
         if not url or audience not in self.registered_audiences:
             return False
+        if self.is_same_origin_path(url):
+            return True
         domain = (self.cookie_domain or "").strip().lstrip(".").lower()
         if not domain:
             return False
@@ -257,8 +294,14 @@ class Settings(BaseSettings):
         Returned to the UI so a disabled launch button can name the missing
         configuration instead of just being dead.
         """
-        if not self.agent_url(audience):
+        url = self.agent_url(audience)
+        if not url:
             return "no_url"
+        # Checked before the cookie domain: a same-origin agent needs none, and
+        # reporting `no_cookie_domain` for one would send the operator off to fix
+        # a setting that has no bearing on it.
+        if self.is_same_origin_path(url):
+            return None
         if not (self.cookie_domain or "").strip():
             return "no_cookie_domain"
         if not self.handoff_ready(audience):

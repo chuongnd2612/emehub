@@ -94,7 +94,29 @@ services:
     ports:
       - "${EMEHUB_WEB_PORT:-5180}:5180"
     restart: unless-stopped
+    networks:
+      # `default` is listed explicitly because naming any network on a service
+      # replaces the implicit one — omit it and `web` loses `api`.
+      default:
+      emesoft:
+        # An explicit alias, because both this stack and q-agent's have a service
+        # called `web`. On a shared network they would both register that name
+        # and the edge would round-robin between two different applications.
+        aliases:
+          - emehub-web
 
 volumes:
   emehub-workspace:
   emehub-db:
+
+networks:
+  default:
+  # The suite's shared network, so the front door (edge/docker-compose.yml) can
+  # reach this stack by name instead of through a published host port — which
+  # keeps working if the port mapping ever changes.
+  #
+  # External on purpose: the q-agent stack attaches to it too, and whichever
+  # project composes down last must not be able to delete the network out from
+  # under the other. Create it once with `docker network create emesoft`.
+  emesoft:
+    external: true

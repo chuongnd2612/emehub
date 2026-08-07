@@ -112,6 +112,18 @@ def test_a_matching_domain_is_handoff_ready(client, hub_headers, monkeypatch):
         ("", "https://qagent.chuongnd.click", False, "no_cookie_domain"),
         (".chuongnd.click", "", False, "no_url"),
         ("", "", False, "no_url"),
+        # A same-origin path: the agent is mounted behind the hub's own reverse
+        # proxy, so the cookie is already on the origin. Ready with NO cookie
+        # domain at all — the case a hostname-only rule gets exactly backwards,
+        # because `urlsplit("///qagent").hostname` is None and the suffix test
+        # then reports `domain_mismatch` for the *strongest* hand-off there is.
+        ("", "/qagent", True, None),
+        (".chuongnd.click", "/qagent", True, None),
+        ("", "/qagent/", True, None),
+        # Protocol-relative is an ORIGIN with the scheme left off, not a path.
+        # Treating it as same-origin would hand "always ready" to any host.
+        ("", "//evil.example.com/qagent", False, "no_cookie_domain"),
+        (".chuongnd.click", "//evil.example.com/qagent", False, "domain_mismatch"),
     ],
 )
 def test_handoff_readiness(cookie_domain, url, ready, reason):
