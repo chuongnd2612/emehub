@@ -84,10 +84,19 @@ let it reach hub-only routes.
 > not rotate, which is what makes the cookie safe to share. Every call is audited, because this is
 > the one path that accepts the refresh token without rotating it.
 
-This requires the hub and the agent to be same-site: set `EMEHUB_COOKIE_DOMAIN` to the shared
-parent (e.g. `.chuongnd.click`) and add the agent's origin to `EMEHUB_CORS_ORIGINS`. An agent on an
-unrelated registrable domain cannot use this path; that case needs a short-lived single-use
-hand-off code redeemed server-to-server, recorded as the fallback in ADR 0008 and not built.
+**Where the agent is served decides what this needs.** Two supported arrangements:
+
+| Arrangement | `EMEHUB_AGENT_<X>_URL` | Also required |
+|---|---|---|
+| **Same origin as the hub**, mounted on a path behind the shared front door (ADR 0010) | `/qagent` | nothing — the cookie is already on the origin, so no cookie `Domain` and no CORS entry |
+| **Its own host**, a sibling subdomain (ADR 0008) | `https://qagent.example` | `EMEHUB_COOKIE_DOMAIN` set to the shared parent, and the agent's origin in `EMEHUB_CORS_ORIGINS` |
+
+Prefer the first. It is the arrangement with the smallest cookie scope, and `GET /agents` reports
+`handoffReady: true` for it without any further configuration.
+
+An agent on an unrelated registrable domain can do neither; that case needs a short-lived
+single-use hand-off code redeemed server-to-server, recorded as the fallback in ADR 0008 and not
+built.
 
 The agent is expected to establish **its own** session from the token it receives, so the hub token
 is consumed once at bootstrap rather than held. An agent that instead keeps using hub tokens for
