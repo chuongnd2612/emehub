@@ -2,9 +2,9 @@
 //
 // Members and invitations are real; roles and the invitation LIST are not.
 //
-//   GET   /auth/users          getMembers
-//   PATCH /auth/users/{id}     changeRole
-//   POST  /auth/users/invite   invite
+//   GET    /auth/users          getMembers
+//   PATCH  /auth/users/{id}     updateMember   role, name, active state
+//   POST   /auth/users/invite   invite
 //
 // ## The role vocabulary is narrower on the wire than in the design
 //
@@ -67,7 +67,10 @@ interface AdminUserWire {
   sessionCount: number;
 }
 
-const toMember = (wire: AdminUserWire): Member => ({
+/** `UserOut` — what the *mutating* routes return. It carries no session count. */
+type UserWire = Omit<AdminUserWire, "sessionCount">;
+
+const toMember = (wire: UserWire, sessionCount: number): Member => ({
   id: wire.id,
   name: displayNameFrom(wire.firstName, wire.lastName, wire.email),
   email: wire.email,
@@ -75,7 +78,7 @@ const toMember = (wire: AdminUserWire): Member => ({
   lastActive: relativeTime(wire.lastActive),
   initials: initialsFrom(wire.firstName, wire.lastName, wire.email),
   isActive: wire.isActive,
-  sessionCount: wire.sessionCount ?? 0,
+  sessionCount,
   // STUB (no endpoint yet): nothing on the hub maps a user to a Claude
   // credential, so this column reads "Not assigned" for every live row.
   credential: "none",
@@ -85,25 +88,44 @@ const toMember = (wire: AdminUserWire): Member => ({
 /** `GET /auth/users`. Admin-only — a plain member gets a 403 here. */
 export const getMembers = async (): Promise<Member[]> => {
   const rows = await api.get<AdminUserWire[]>("/auth/users");
-  return rows.map(toMember);
+  return rows.map((row) => toMember(row, row.sessionCount ?? 0));
 };
 
+/** The fields `PATCH /auth/users/{id}` accepts. Omitted keys are left alone. */
+export interface MemberPatch {
+  firstName?: string;
+  lastName?: string;
+  role?: RoleName;
+  isActive?: boolean;
+}
+
 /**
- * `PATCH /auth/users/{id}` — the role change from the Members table.
+ * `PATCH /auth/users/{id}` — every mutation the Members table makes: role,
+ * name, and active state.
  *
- * Takes the user **id**, not the email: the hub keys this route on the id and
- * there is no lookup-by-email endpoint. Resolves to the single updated member
- * so the caller can patch one row instead of re-reading the list.
+ * Takes the whole `Member` rather than an id because the response carries no
+ * `sessionCount` and the right value depends on what changed: deactivating
+ * revokes the account's sessions server-side, so the count is 0 by
+ * construction, while any other change leaves them untouched and the listed
+ * count still holds. Deriving it here keeps that rule in one place instead of
+ * leaving every caller to repair the row afterwards.
+ *
+ * The zero-active-admins guard is the hub's and stays the hub's — it is the only
+ * party that can count admins correctly. `ApiError.message` carries a readable
+ * reason for the caller to surface verbatim.
  */
-export const changeRole = async (
-  userId: number,
-  role: RoleName,
+export const updateMember = async (
+  member: Member,
+  patch: MemberPatch,
 ): Promise<Member> => {
-  const updated = await api.patch<Omit<AdminUserWire, "sessionCount">>(
-    `/auth/users/${userId}`,
-    { role: roleWire(role) },
-  );
-  return toMember({ ...updated, sessionCount: 0 });
+  const body: Record<string, unknown> = {};
+  if (patch.firstName !== undefined) body.firstName = patch.firstName;
+  if (patch.lastName !== undefined) body.lastName = patch.lastName;
+  if (patch.role !== undefined) body.role = roleWire(patch.role);
+  if (patch.isActive !== undefined) body.isActive = patch.isActive;
+
+  const updated = await api.patch<UserWire>(`/auth/users/${member.id}`, body);
+  return toMember(updated, updated.isActive ? member.sessionCount : 0);
 };
 
 /* ── Invitations ─────────────────────────────────────────────────────────── */
