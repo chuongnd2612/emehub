@@ -12,6 +12,7 @@ import { useNavigate } from "react-router-dom";
 
 import { useUi } from "@/store/ui";
 import { AddKnowledgeModal } from "./AddKnowledgeModal";
+import { AddUserModal } from "./AddUserModal";
 import { InviteMemberModal } from "./InviteMemberModal";
 import { NewProjectModal } from "./NewProjectModal";
 
@@ -31,6 +32,13 @@ export function ModalHost() {
         // The sent invitation lands on User Management › Invitations, so go
         // there — wherever the modal was opened from.
         onInvited={() => navigate("/app/users?tab=invitations")}
+      />
+      <AddUserModal
+        open={modal === "addUser"}
+        onClose={close}
+        // A created account is a member, not an invitation — it lands on the
+        // Members tab, which is where the list that must re-read lives.
+        onCreated={() => navigate("/app/users?tab=members")}
       />
     </>
   );

@@ -10,6 +10,7 @@ import { create } from "zustand";
 export type ModalKey =
   | "project"
   | "invite"
+  | "addUser"
   | "knowledge"
   | "integration"
   | "import"
@@ -66,7 +67,8 @@ export const useUi = create<UiState>()((set) => ({
     })),
   setDrawer: (drawer) => set({ drawer }),
   setThemeOpen: (themeOpen) => set({ themeOpen, dd: null, claudeOpen: false }),
-  setClaudeOpen: (claudeOpen) => set({ claudeOpen, dd: null, themeOpen: false }),
+  setClaudeOpen: (claudeOpen) =>
+    set({ claudeOpen, dd: null, themeOpen: false }),
   closeAll: () =>
     set({
       modal: null,
