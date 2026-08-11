@@ -4,6 +4,7 @@
 //
 //   GET    /auth/users          getMembers
 //   PATCH  /auth/users/{id}     updateMember   role, name, active state
+//   DELETE /auth/users/{id}     removeMember   hard delete
 //   POST   /auth/users/invite   invite
 //
 // ## The role vocabulary is narrower on the wire than in the design
@@ -126,6 +127,19 @@ export const updateMember = async (
 
   const updated = await api.patch<UserWire>(`/auth/users/${member.id}`, body);
   return toMember(updated, updated.isActive ? member.sessionCount : 0);
+};
+
+/**
+ * `DELETE /auth/users/{id}` — a hard delete. The row goes, and its auth sessions
+ * with it; the `identity` audit record keeps the email, so the trail outlives the
+ * account.
+ *
+ * There is no soft-delete to fall back on, which is why the UI puts deactivation
+ * first and gates this behind a typed confirmation. Refuses with 400 on the last
+ * active admin — again the hub's count, not ours.
+ */
+export const removeMember = async (userId: number): Promise<void> => {
+  await api.delete(`/auth/users/${userId}`);
 };
 
 /* ── Invitations ─────────────────────────────────────────────────────────── */

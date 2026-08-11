@@ -42,13 +42,17 @@ import {
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { useAuth } from "@/store/auth";
+import { RemoveMemberModal } from "./RemoveMemberModal";
 import { RenameMemberModal } from "./RenameMemberModal";
 
 const COLUMNS =
   "36px minmax(0,1.05fr) minmax(0,1.3fr) 150px 110px 90px 130px 34px";
 
-/** The row action menu. `rename` opens a modal; the rest are direct PATCHes. */
-type RowAction = "rename" | "deactivate" | "reactivate";
+/**
+ * The row action menu. `rename` and `remove` open modals; the other two are
+ * direct PATCHes, because they are reversible and need no second thought.
+ */
+type RowAction = "rename" | "deactivate" | "reactivate" | "remove";
 
 const ROLE_TONE: Record<RoleName, PillTone> = {
   Owner: "accent",
@@ -64,6 +68,7 @@ export function MembersTable() {
   const [busyId, setBusyId] = useState<number | null>(null);
 
   const [renaming, setRenaming] = useState<Member | null>(null);
+  const [removing, setRemoving] = useState<Member | null>(null);
 
   const me = useAuth((s) => s.user);
   const refreshUser = useAuth((s) => s.refreshUser);
@@ -140,6 +145,10 @@ export function MembersTable() {
   const runAction = (member: Member, action: RowAction) => {
     if (action === "rename") {
       setRenaming(member);
+      return;
+    }
+    if (action === "remove") {
+      setRemoving(member);
       return;
     }
     const isActive = action === "reactivate";
@@ -298,6 +307,15 @@ export function MembersTable() {
                           label: "Reactivate",
                           icon: <Icon name="check" size={13} />,
                         },
+                    // `destructive` renders it in rose and separated from the
+                    // group above, so the reversible action is the one that falls
+                    // under the cursor.
+                    {
+                      value: "remove",
+                      label: "Remove…",
+                      icon: <Icon name="trash" size={13} />,
+                      destructive: true,
+                    },
                   ]}
                   onSelect={(action) => runAction(m, action)}
                   trigger={({ ref, toggle }) => (
@@ -328,6 +346,14 @@ export function MembersTable() {
         member={renaming}
         onClose={() => setRenaming(null)}
         onRenamed={replaceRow}
+      />
+
+      <RemoveMemberModal
+        member={removing}
+        onClose={() => setRemoving(null)}
+        onRemoved={(userId) =>
+          setMembers((prev) => prev?.filter((m) => m.id !== userId) ?? null)
+        }
       />
     </>
   );
