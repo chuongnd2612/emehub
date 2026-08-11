@@ -14,7 +14,7 @@
 // render fixtures and each says so up front. Rendering fixture data without a
 // label would be presenting it as real, which the design rules forbid.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Button, Icon, Notice } from "@/components/ui";
 import { getInvitations, revokeInvitation, type Invitation } from "@/data";
@@ -56,6 +56,23 @@ export default function UsersScreen() {
     };
   }, [modal]);
 
+  // `MembersTable` reads on mount, so a newly created account would not appear
+  // until the screen was left and returned to. Remount it when the Add user
+  // modal closes — the same signal the invitations re-read above uses, and the
+  // only one available here, because `ModalHost` owns that modal globally.
+  const [membersEpoch, setMembersEpoch] = useState(0);
+  const wasAdding = useRef(false);
+  useEffect(() => {
+    if (modal === "addUser") {
+      wasAdding.current = true;
+      return;
+    }
+    if (wasAdding.current) {
+      wasAdding.current = false;
+      setMembersEpoch((epoch) => epoch + 1);
+    }
+  }, [modal]);
+
   const setTab = (next: UsersTab) => {
     const p = new URLSearchParams(params);
     p.set("tab", next);
@@ -71,17 +88,24 @@ export default function UsersScreen() {
         value={tab}
         onChange={setTab}
         action={
-          <Button
-            variant="primary"
-            icon={<Icon name="plus" size={15} strokeWidth={2.4} />}
-            onClick={openInvite}
-          >
-            Invite member
-          </Button>
+          <div className="flex items-center gap-2">
+            {/* Secondary to Invite: most accounts should be for a person with a
+                mailbox, who sets their own password. */}
+            <Button variant="ghost" onClick={() => setModal("addUser")}>
+              Add user
+            </Button>
+            <Button
+              variant="primary"
+              icon={<Icon name="plus" size={15} strokeWidth={2.4} />}
+              onClick={openInvite}
+            >
+              Invite member
+            </Button>
+          </div>
         }
       />
 
-      {tab === "members" && <MembersTable />}
+      {tab === "members" && <MembersTable key={membersEpoch} />}
 
       {tab === "roles" && (
         <>

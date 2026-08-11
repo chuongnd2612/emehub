@@ -3,9 +3,10 @@
 // Members and invitations are real; roles and the invitation LIST are not.
 //
 //   GET    /auth/users          getMembers
+//   POST   /auth/users          createUser     usable immediately
 //   PATCH  /auth/users/{id}     updateMember   role, name, active state
 //   DELETE /auth/users/{id}     removeMember   hard delete
-//   POST   /auth/users/invite   invite
+//   POST   /auth/users/invite   invite         usable once redeemed
 //
 // ## The role vocabulary is narrower on the wire than in the design
 //
@@ -140,6 +141,39 @@ export const updateMember = async (
  */
 export const removeMember = async (userId: number): Promise<void> => {
   await api.delete(`/auth/users/${userId}`);
+};
+
+/** What `POST /auth/users` needs. Names are optional; the hub defaults them to "". */
+export interface NewUser {
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  role: RoleName;
+  password: string;
+}
+
+/**
+ * `POST /auth/users` — create an account that is usable immediately, because the
+ * admin sets the password.
+ *
+ * This is the difference from `invite`, and the reason both exist: an invitation
+ * is only usable once the invitee redeems a reset token, and on a deployment
+ * where email delivery is not wired that token has to be carried over by hand.
+ * Direct creation is the right shape for a shared or service account, and for
+ * handing someone working credentials in the room.
+ *
+ * 409 when the email is taken. The response is a plain `UserOut`, so the new row
+ * starts with no sessions — nobody has signed in as them yet.
+ */
+export const createUser = async (input: NewUser): Promise<Member> => {
+  const created = await api.post<UserWire>("/auth/users", {
+    email: input.email,
+    firstName: input.firstName ?? "",
+    lastName: input.lastName ?? "",
+    role: roleWire(input.role),
+    password: input.password,
+  });
+  return toMember(created, 0);
 };
 
 /* ── Invitations ─────────────────────────────────────────────────────────── */
