@@ -48,7 +48,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import Field
 from sqlalchemy.orm import Session
 
@@ -155,6 +155,33 @@ class ProjectConfigOut(ApiModel):
     extra: dict = Field(default_factory=dict)
     manual_auth: bool = False
     shared: bool = False
+    #: When this configuration last changed (#147). The change signal for anyone
+    #: mirroring it — poll this, or revalidate with `If-None-Match` against the
+    #: `ETag` the same endpoint returns. `null` means never configured.
+    updated_at: datetime | None = None
+
+
+def _if_none_match(request: Request, etag: str) -> bool:
+    """Does the caller already hold this exact representation? (#147)
+
+    `If-None-Match` is a comma-separated **list**, and `*` matches anything that
+    exists, so neither a bare string compare nor a substring test is correct.
+
+    Comparison is weak: our validator is a `W/`-prefixed timestamp, and RFC 9110
+    requires weak comparison for `If-None-Match` anyway — a strong compare would
+    make every weak tag miss and quietly disable revalidation altogether, which
+    looks exactly like it working (the responses are simply always 200).
+    """
+    header = request.headers.get("if-none-match")
+    if not header:
+        return False
+
+    def weak(tag: str) -> str:
+        tag = tag.strip()
+        return tag[2:] if tag.startswith("W/") else tag
+
+    candidates = [weak(t) for t in header.split(",") if t.strip()]
+    return "*" in candidates or weak(etag) in candidates
 
 
 class ProjectConfigIn(ApiModel):
@@ -422,8 +449,12 @@ def delete_project(
 # ---------------------------------------------------------------- config
 @router.get("/{key}/config", response_model=ProjectConfigOut)
 def get_project_config(
-    key: str, principal: User = Depends(require_principal), db: Session = Depends(get_db)
-) -> ProjectConfigOut:
+    key: str,
+    response: Response,
+    request: Request,
+    principal: User = Depends(require_principal),
+    db: Session = Depends(get_db),
+) -> ProjectConfigOut | Response:
     """Full project configuration (INTEGRATION.md §3).
 
     **Test-account passwords are returned only to the owning user.** ``reveal``
@@ -431,10 +462,32 @@ def get_project_config(
     (``owner_id IS NULL``) is owned by nobody, so its accounts stay masked even
     for an admin — a shared credential that everyone can read is a credential
     that has left the hub.
+
+    Conditional (#147). Agents mirror this config and render it read-only, so
+    without a change signal they cannot tell a stale copy from a current one and
+    their screens quietly lie. Two are offered, from the same value:
+    ``updatedAt`` in the body for anyone who would rather poll a field, and an
+    ``ETag`` for anyone who would rather revalidate and get ``304`` with no body.
     """
     _project_or_404(db, key, principal)
     row = project_config_service.get_config(db, key, principal)
     reveal = row is not None and row.owner_id is not None and row.owner_id == principal.id
+
+    etag = project_config_service.config_etag(row, reveal=reveal)
+    # Private, not public: the body varies by caller (see `reveal`), so a shared
+    # cache must never serve one user's copy to another. `must-revalidate` keeps
+    # a client from treating a stored copy as fresh without asking.
+    response.headers["Cache-Control"] = "private, no-cache, must-revalidate"
+    response.headers["ETag"] = etag
+
+    if _if_none_match(request, etag):
+        # 304 carries no body, but the validator has to be repeated or the client
+        # has nothing to revalidate against next time.
+        return Response(
+            status_code=304,
+            headers={"ETag": etag, "Cache-Control": "private, no-cache, must-revalidate"},
+        )
+
     return ProjectConfigOut(**project_config_service.config_payload(row, key, reveal=reveal))
 
 

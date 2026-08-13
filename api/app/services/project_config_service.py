@@ -194,6 +194,11 @@ def config_payload(
     The router sets it exclusively when the caller owns the row. A ``None`` row
     serialises to the empty config so an unconfigured project reads as blank
     rather than 404-ing the agent mid-run.
+
+    ``updated_at`` is carried so a consumer mirroring this config can tell a stale
+    copy from a current one (#147). It is the row's own timestamp, not the
+    project's: a project row does not change when its configuration does, so
+    polling the project would miss exactly the edits that matter here.
     """
     if row is None:
         return {
@@ -208,6 +213,10 @@ def config_payload(
             "extra": {},
             "manual_auth": False,
             "shared": True,
+            # Nothing has ever been written, so there is no revision to report.
+            # None is the honest answer and it is stable, which is what a polling
+            # consumer needs — the first save gives them a timestamp to move to.
+            "updated_at": None,
         }
     return {
         "key": row.key,
@@ -223,7 +232,28 @@ def config_payload(
         "extra": dict(row.extra or {}),
         "manual_auth": bool(row.manual_auth),
         "shared": row.owner_id is None,
+        "updated_at": row.updated_at,
     }
+
+
+def config_etag(row: ProjectConfig | None, *, reveal: bool) -> str:
+    """Validator for ``GET /projects/{key}/config`` (#147).
+
+    Derived from the row's ``updated_at``, which ``onupdate=utcnow`` maintains on
+    every write, so it changes exactly when the configuration does.
+
+    **``reveal`` is part of the identity, not a detail.** The same row serialises
+    differently depending on whether the caller owns it — test-account passwords
+    are present for the owner and masked for everyone else. An ETag that ignored
+    that would let a caller whose ownership changed revalidate against a cached
+    body it is no longer entitled to, and be told `304`.
+
+    A missing row still gets a stable validator rather than no header, so the
+    "not configured yet" case revalidates like any other and does not silently
+    fall back to full bodies forever.
+    """
+    stamp = "none" if row is None or row.updated_at is None else row.updated_at.isoformat()
+    return f'W/"cfg-{stamp}-{"own" if reveal else "masked"}"'
 
 
 # ----------------------------------------------------------- filesystem seams
