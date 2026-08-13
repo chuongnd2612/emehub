@@ -7,7 +7,9 @@
 //
 // The active tab lives in the `?tab=` QUERY PARAM — never in Zustand and never
 // in the path (CLAUDE.md › "Intra-screen selection goes in query params").
-// `:projectId` is the registry KEY and comes from the URL via useParams.
+// `:projectId` is the project's GUID (#150), read from the URL via useParams and
+// passed straight to the API, which accepts a GUID anywhere it accepts a key. A
+// key-shaped param therefore still resolves, so older links keep working.
 //
 // ## The two header buttons the handoff draws, and why one is gone
 //

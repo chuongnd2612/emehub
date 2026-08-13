@@ -163,7 +163,7 @@ export function CommandPalette() {
                 <Command.Item
                   key={p.id}
                   value={`project ${p.name} ${p.repo}`}
-                  onSelect={() => go(`/app/projects/${p.id}`)}
+                  onSelect={() => go(`/app/projects/${encodeURIComponent(p.guid || p.id)}`)}
                   className={ROW_CLASS}
                 >
                   <span className="flex w-[18px] shrink-0 justify-center text-ps-text">

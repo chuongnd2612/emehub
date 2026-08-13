@@ -6,8 +6,11 @@
 //    values; agent tag pills, provider name right-aligned, `Configure` ghost
 //    button + 'updated' timestamp."
 //
-// `Configure` navigates to /app/projects/:projectKey — the URL is the source of
-// truth for navigation (CLAUDE.md).
+// `Configure` navigates to /app/projects/:guid — the URL is the source of truth
+// for navigation (CLAUDE.md). By GUID rather than key (#150): a key is derived
+// from the name and unique only within one owner's namespace, so two members can
+// each own a `surency` and a rename moves a bookmarked page. Endpoints accept
+// both, so existing key-shaped links still resolve.
 //
 // ## The three mini stats
 //
@@ -127,7 +130,7 @@ function ProjectCard({ project }: { project: Project }) {
         <Button
           className="flex-1"
           onClick={() =>
-            navigate(`/app/projects/${encodeURIComponent(project.id)}`)
+            navigate(`/app/projects/${encodeURIComponent(project.guid || project.id)}`)
           }
         >
           Configure
