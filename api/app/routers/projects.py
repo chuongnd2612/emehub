@@ -447,7 +447,29 @@ def delete_project(
 
 
 # ---------------------------------------------------------------- config
-@router.get("/{key}/config", response_model=ProjectConfigOut)
+@router.get(
+    "/{key}/config",
+    response_model=ProjectConfigOut,
+    # Declared, because a raw `Response` is invisible to the generated schema:
+    # without this the contract advertises only 200, and a client generated from
+    # it treats the 304 this endpoint deliberately returns as an unexpected
+    # status. The header is documented for the same reason — it is the half of
+    # the exchange the caller has to send back.
+    responses={
+        304: {
+            "description": (
+                "Not Modified — the `If-None-Match` validator still matches, so the "
+                "configuration has not changed since it was issued. No body."
+            ),
+            "headers": {
+                "ETag": {
+                    "description": "Repeated so the next revalidation has a validator.",
+                    "schema": {"type": "string"},
+                }
+            },
+        }
+    },
+)
 def get_project_config(
     key: str,
     response: Response,
