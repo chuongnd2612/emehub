@@ -654,3 +654,136 @@ def test_delete_writes_an_audit_line_with_no_secrets(client, alice, auth_headers
     assert logs.status_code == 200
     assert "Deleted project" in logs.text
     assert PASSWORD not in logs.text
+
+
+# ------------------------------------------------- change detection (#147)
+#
+# Q-Agent mirrors this config and renders it read-only, telling the user to edit
+# it in EmeHub. Without a change signal it cannot tell a stale copy from a current
+# one, so the screen quietly lies and — being read-only — offers no way to correct
+# it. These pin the two signals it can use.
+
+
+def test_config_reports_when_it_last_changed(client, alice, auth_headers):
+    headers = auth_headers("alice@emesoft.net", PASSWORD)
+    client.post("/projects", json={"key": "shop"}, headers=headers)
+
+    before = client.get("/projects/shop/config", headers=headers).json()
+    assert before["updatedAt"] is None, "never configured — nothing to report"
+
+    _save_config(client, headers, "shop", baseUrl="https://shop.example")
+    after = client.get("/projects/shop/config", headers=headers).json()
+    assert after["updatedAt"], "a saved config must carry its revision"
+
+    # And it MOVES on a subsequent edit: a timestamp that is present but frozen
+    # is worse than none, because a consumer would trust it and never re-read.
+    _save_config(client, headers, "shop", baseUrl="https://shop.example/v2")
+    later = client.get("/projects/shop/config", headers=headers).json()
+    assert later["updatedAt"] > after["updatedAt"]
+
+
+def test_config_revalidates_with_if_none_match(client, alice, auth_headers):
+    headers = auth_headers("alice@emesoft.net", PASSWORD)
+    client.post("/projects", json={"key": "shop"}, headers=headers)
+    _save_config(client, headers, "shop", baseUrl="https://shop.example")
+
+    first = client.get("/projects/shop/config", headers=headers)
+    etag = first.headers.get("ETag")
+    assert etag, "no validator means every poll pays for a full body"
+
+    again = client.get("/projects/shop/config", headers={**headers, "If-None-Match": etag})
+    assert again.status_code == 304
+    assert not again.content, "304 must not carry a body"
+    assert again.headers.get("ETag") == etag, "repeat the validator or the next poll has nothing"
+
+    # A real edit must break the match, or the consumer never learns of it.
+    _save_config(client, headers, "shop", baseUrl="https://shop.example/v2")
+    changed = client.get("/projects/shop/config", headers={**headers, "If-None-Match": etag})
+    assert changed.status_code == 200
+    assert changed.json()["baseUrl"] == "https://shop.example/v2"
+
+
+def test_if_none_match_is_parsed_as_a_list_and_honours_star(client, alice, auth_headers):
+    """`If-None-Match` is a comma-separated list, and `*` matches anything extant.
+
+    A bare string compare would miss the list form and answer 200 forever — which
+    looks exactly like the feature working, because the bodies are still correct.
+    """
+    headers = auth_headers("alice@emesoft.net", PASSWORD)
+    client.post("/projects", json={"key": "shop"}, headers=headers)
+    _save_config(client, headers, "shop", baseUrl="https://shop.example")
+    etag = client.get("/projects/shop/config", headers=headers).headers["ETag"]
+
+    listed = client.get(
+        "/projects/shop/config",
+        headers={**headers, "If-None-Match": f'W/"someone-elses", {etag}'},
+    )
+    assert listed.status_code == 304
+
+    star = client.get("/projects/shop/config", headers={**headers, "If-None-Match": "*"})
+    assert star.status_code == 304
+
+    stale = client.get(
+        "/projects/shop/config", headers={**headers, "If-None-Match": 'W/"cfg-nonsense-own"'}
+    )
+    assert stale.status_code == 200
+
+
+def test_the_validator_is_not_shared_between_a_masked_and_an_owned_read(
+    client, db_session, alice, admin, auth_headers
+):
+    """The body varies by caller, so the validator must too.
+
+    Test-account passwords reach the owner and nobody else. If the ETag ignored
+    that, a caller holding the owner's validator could revalidate and be told 304
+    for a body it is not entitled to.
+    """
+    owner = auth_headers("alice@emesoft.net", PASSWORD)
+    client.post("/projects", json={"key": "shop"}, headers=owner)
+    _save_config(
+        client,
+        owner,
+        "shop",
+        testAccounts=[{"role": "admin", "username": "qa@example.com", "password": "s3cret!"}],
+    )
+
+    owner_read = client.get("/projects/shop/config", headers=owner)
+    assert owner_read.json()["testAccounts"][0]["password"] == "s3cret!"
+    owner_etag = owner_read.headers["ETag"]
+
+    # A shared CONFIG row is owned by nobody, so even the admin who wrote it reads
+    # it back masked — and must not be able to match the owner's validator.
+    #
+    # `shared` belongs on the config PUT: a shared *project* does not imply a
+    # shared *config*, and omitting it here silently writes an admin-owned row
+    # that reveals its own passwords, which is not the case under test.
+    shared = auth_headers("admin@emesoft.net", PASSWORD)
+    client.post("/projects", json={"key": "platform", "shared": True}, headers=shared)
+    _save_config(
+        client,
+        shared,
+        "platform",
+        shared=True,
+        testAccounts=[{"role": "admin", "username": "qa@example.com", "password": "s3cret!"}],
+    )
+    masked_read = client.get("/projects/platform/config", headers=shared)
+    assert masked_read.json()["testAccounts"][0]["password"] is None
+    assert masked_read.headers["ETag"] != owner_etag
+
+
+def test_an_agent_token_gets_the_change_signal_too(client, db_session, alice, agent_headers, auth_headers):
+    """The consumer that needs this is an agent, so it must work for that audience."""
+    owner = auth_headers("alice@emesoft.net", PASSWORD)
+    client.post("/projects", json={"key": "shop"}, headers=owner)
+    _save_config(client, owner, "shop", baseUrl="https://shop.example")
+
+    agent = agent_headers("alice@emesoft.net")
+    read = client.get("/projects/shop/config", headers=agent)
+    assert read.status_code == 200
+    assert read.json()["updatedAt"]
+    etag = read.headers["ETag"]
+
+    assert (
+        client.get("/projects/shop/config", headers={**agent, "If-None-Match": etag}).status_code
+        == 304
+    )
