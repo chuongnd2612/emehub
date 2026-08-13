@@ -229,8 +229,20 @@ export interface ProjectConfig {
  * behind them here and they are deliberately absent rather than invented.
  */
 export interface Project {
-  /** Registry key — the path parameter for every `/projects` endpoint. */
+  /** Registry key — accepted as the path parameter by every `/projects` endpoint. */
   id: string;
+  /**
+   * Stable external identity (#150), and what the app **routes by**.
+   *
+   * The key makes a poor URL: it is derived from the name and is unique only
+   * within one owner's namespace, so two members can each have a `surency`, and
+   * a rename changes the address of a page somebody bookmarked. The GUID changes
+   * under neither.
+   *
+   * Endpoints accept both, so a key-shaped URL still resolves — old links, and
+   * anything already deep-linking by key, keep working.
+   */
+  guid: string;
   /** Numeric row id — the `projectId` filter on `GET /tickets`. */
   rowId: number;
   name: string;

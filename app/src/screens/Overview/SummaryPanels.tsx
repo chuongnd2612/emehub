@@ -95,7 +95,7 @@ export function TopProjects({ projects }: { projects: Project[] }) {
             key={p.id}
             type="button"
             data-surface
-            onClick={() => navigate(`/app/projects/${p.id}`)}
+            onClick={() => navigate(`/app/projects/${encodeURIComponent(p.guid || p.id)}`)}
             className="flex w-full cursor-pointer items-center gap-[11px] rounded-[13px] border border-bd3 bg-inset px-3 py-[11px] text-left hover:bg-bd3"
           >
             <Glyph size={30} gradient={p.gradient} label={p.initials} />

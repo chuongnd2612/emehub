@@ -70,6 +70,8 @@ interface ProjectSummaryWire {
 
 interface ProjectWire {
   id: number;
+  /** Stable external identity (emehub#150). The routing handle. */
+  guid?: string;
   key: string;
   name?: string;
   shared?: boolean;
@@ -266,6 +268,7 @@ const assemble = async (wire: ProjectWire): Promise<Project> => {
 
   return {
     id: wire.key,
+    guid: wire.guid ?? "",
     rowId: wire.id,
     name,
     repo: repo?.name || repo?.repoUrl || "",
@@ -302,6 +305,7 @@ const fromSummary = (wire: ProjectWire): Project => {
     providerFromKind(s.provider ?? "") ?? providerFromRepoUrl(s.repoUrl ?? "");
   return {
     id: wire.key,
+    guid: wire.guid ?? "",
     rowId: wire.id,
     name,
     repo: s.repo || s.repoUrl || "",
