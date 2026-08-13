@@ -787,3 +787,87 @@ def test_an_agent_token_gets_the_change_signal_too(client, db_session, alice, ag
         client.get("/projects/shop/config", headers={**agent, "If-None-Match": etag}).status_code
         == 304
     )
+
+
+# ------------------------------------------------- project GUID (#150)
+#
+# A stable external identity, so a consumer can hold a reference that survives a
+# rename and does not depend on our internal numbering. `key` and `id` keep
+# working; this is additive, with no cutover.
+
+
+def test_every_project_gets_a_guid_and_it_is_stable_across_a_rename(
+    client, db_session, alice, auth_headers
+):
+    headers = auth_headers("alice@emesoft.net", PASSWORD)
+    created = client.post("/projects", json={"key": "shop", "name": "Shop"}, headers=headers).json()
+    assert created["guid"], "a project without a GUID cannot be referenced by one"
+
+    renamed = client.patch("/projects/shop", json={"name": "Shopfront"}, headers=headers).json()
+    assert renamed["guid"] == created["guid"], "rename must not change identity — that is the point"
+
+
+def test_guids_are_unique_across_projects_and_owners(client, alice, bob, auth_headers):
+    a = client.post("/projects", json={"key": "shop"}, headers=auth_headers("alice@emesoft.net", PASSWORD))
+    b = client.post("/projects", json={"key": "shop"}, headers=auth_headers("bob@emesoft.net", PASSWORD))
+    # Same key in two namespaces — legal, and exactly the case a GUID disambiguates.
+    assert a.json()["key"] == b.json()["key"]
+    assert a.json()["guid"] != b.json()["guid"]
+
+
+def test_a_guid_addresses_the_project_everywhere_a_key_does(client, alice, auth_headers):
+    """Reads that stop at the project would be a half-migration: config and
+    knowledge are most of what a consumer actually fetches."""
+    headers = auth_headers("alice@emesoft.net", PASSWORD)
+    guid = client.post("/projects", json={"key": "shop", "name": "Shop"}, headers=headers).json()["guid"]
+    _save_config(client, headers, "shop", baseUrl="https://shop.example")
+
+    detail = client.get(f"/projects/{guid}", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["key"] == "shop"
+
+    config = client.get(f"/projects/{guid}/config", headers=headers)
+    assert config.status_code == 200
+    assert config.json()["baseUrl"] == "https://shop.example", "the GUID must reach the CONFIG, not just the project"
+    # The payload still identifies itself by key — the GUID is a way in, not a rename.
+    assert config.json()["key"] == "shop"
+
+
+def test_a_guid_shaped_key_cannot_shadow_another_projects_guid(
+    client, db_session, alice, bob, auth_headers
+):
+    """The reason resolution is by shape and not by fallback.
+
+    If a key were tried first and the GUID only on miss, a member could create a
+    project whose KEY is spelled like someone else's GUID and quietly capture that
+    identifier for themselves — for their own requests only, which is the kind of
+    bug that never reproduces for anyone else.
+    """
+    victim = client.post(
+        "/projects", json={"key": "victim"}, headers=auth_headers("alice@emesoft.net", PASSWORD)
+    ).json()
+
+    impostor_headers = auth_headers("bob@emesoft.net", PASSWORD)
+    client.post("/projects", json={"key": victim["guid"], "name": "Impostor"}, headers=impostor_headers)
+
+    # Bob asking for that string gets the project it IDENTIFIES, not the one he
+    # named after it — and Alice's project is not his to see, so it is a 404.
+    assert client.get(f"/projects/{victim['guid']}", headers=impostor_headers).status_code == 404
+
+
+def test_a_guid_that_does_not_exist_is_a_404_not_a_blank_config(client, alice, auth_headers):
+    """An unconfigured project serialises to a blank config on purpose, so an
+    unknown GUID must be refused *before* that, or a typo reads as 'no config'."""
+    headers = auth_headers("alice@emesoft.net", PASSWORD)
+    missing = "00000000-0000-4000-8000-000000000000"
+    assert client.get(f"/projects/{missing}", headers=headers).status_code == 404
+    assert client.get(f"/projects/{missing}/config", headers=headers).status_code == 404
+
+
+def test_an_agent_token_can_use_the_guid(client, alice, agent_headers, auth_headers):
+    owner = auth_headers("alice@emesoft.net", PASSWORD)
+    guid = client.post("/projects", json={"key": "shop"}, headers=owner).json()["guid"]
+    _save_config(client, owner, "shop", baseUrl="https://shop.example")
+
+    agent = agent_headers("alice@emesoft.net")
+    assert client.get(f"/projects/{guid}/config", headers=agent).status_code == 200

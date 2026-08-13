@@ -20,6 +20,7 @@ in the shared namespace, exactly as it does in QAgent under ADR 0009 §3.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 from sqlalchemy import ForeignKey, String, UniqueConstraint
@@ -28,11 +29,23 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db import Base, timestamp_column, utcnow
 
 
+def new_guid() -> str:
+    """A project's external identity. uuid4 hex-with-dashes, lowercased."""
+    return str(uuid.uuid4())
+
+
 class Project(Base):
     __tablename__ = "projects"
     __table_args__ = (UniqueConstraint("key", "owner_id", name="uq_projects_key_owner"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    #: Stable external identity, for consumers that must not depend on `key` (which
+    #: is derived from the name and can be regenerated) or on `id` (an internal
+    #: surrogate, and enumerable). Unique globally, not per owner: the whole point
+    #: is that it identifies one project everywhere, in any namespace.
+    guid: Mapped[str] = mapped_column(
+        String(36), unique=True, index=True, default=new_guid
+    )
     key: Mapped[str] = mapped_column(String(200), index=True)
     name: Mapped[str] = mapped_column(String(200), default="")
 

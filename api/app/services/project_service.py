@@ -19,6 +19,7 @@ a 404, never a 403 (a 403 would confirm it exists).
 from __future__ import annotations
 
 import shutil
+import uuid
 from pathlib import Path
 from typing import TypeVar
 
@@ -75,8 +76,32 @@ def list_projects(db: Session, user: User | None) -> list[Project]:
     return [by_key[key] for key in sorted(by_key)]
 
 
+def looks_like_guid(value: str) -> bool:
+    """Is this the GUID form? Shape only — it says nothing about existence."""
+    try:
+        # `UUID()` accepts several spellings (braced, `urn:`, undashed). Comparing
+        # the canonical round-trip against the input keeps this to the one form we
+        # issue, so a near-miss is treated as a key rather than as a malformed id.
+        return str(uuid.UUID(value)) == value.lower()
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
 def get_project(db: Session, key: str, user: User | None) -> Project | None:
-    """Resolve one project by key with own → shared precedence."""
+    """Resolve one project by **GUID or key**, with own → shared precedence.
+
+    A GUID is matched as a GUID and nothing else (#150). The tempting alternative
+    — try it as a key first and fall back to the GUID — would let a project whose
+    key happened to be spelled like a UUID shadow the project that GUID belongs
+    to, and only for whoever owned the impostor. Identity that depends on lookup
+    order is not identity.
+
+    GUIDs are globally unique, so the own → shared precedence is moot on that
+    branch: there is at most one row, and the usual scoping still decides whether
+    this caller may see it.
+    """
+    if looks_like_guid(key):
+        return own_then_shared(db, Project, user, Project.guid == key.lower())
     return own_then_shared(db, Project, user, Project.key == key)
 
 

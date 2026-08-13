@@ -91,6 +91,10 @@ class ProjectSummaryOut(ApiModel):
 
 class ProjectOut(ApiModel):
     id: int
+    #: Stable external identity (#150). Prefer this over `id` (internal, and
+    #: enumerable) or `key` (derived from the name, and regenerable) when storing
+    #: a reference to this project in another system. Accepted anywhere `{key}` is.
+    guid: str = ""
     key: str
     name: str = ""
     shared: bool = False
@@ -266,6 +270,7 @@ class KnowledgeMergeOut(ApiModel):
 def _project_out(row: Project, summary: dict | None = None) -> ProjectOut:
     return ProjectOut(
         id=row.id,
+        guid=row.guid or "",
         key=row.key,
         name=row.name or row.key,
         shared=row.owner_id is None,
@@ -307,6 +312,23 @@ def _project_or_404(db: Session, key: str, user: User | None) -> Project:
     if row is None:
         raise HTTPException(status_code=404, detail=f"Project '{key}' not found")
     return row
+
+
+def _key_for(db: Session, value: str, user: User | None) -> str:
+    """Translate a GUID path parameter into the project's key (#150).
+
+    Config and knowledge are stored against the project **key**, so a route that
+    accepts a GUID must resolve it before touching them — otherwise the project
+    resolves, its configuration does not, and the caller gets a plausible empty
+    config instead of their data.
+
+    A non-GUID passes through untouched, deliberately: that leaves every existing
+    call path byte-for-byte as it was, with no extra query and no new opportunity
+    to 404. Only the new spelling takes the new branch.
+    """
+    if not project_service.looks_like_guid(value):
+        return value
+    return _project_or_404(db, value, user).key
 
 
 # ---------------------------------------------------------------- projects
@@ -491,6 +513,7 @@ def get_project_config(
     ``updatedAt`` in the body for anyone who would rather poll a field, and an
     ``ETag`` for anyone who would rather revalidate and get ``304`` with no body.
     """
+    key = _key_for(db, key, principal)
     _project_or_404(db, key, principal)
     row = project_config_service.get_config(db, key, principal)
     reveal = row is not None and row.owner_id is not None and row.owner_id == principal.id
@@ -526,6 +549,7 @@ def save_project_config(
     blank password preserves the stored one, so saving the masked form back is
     safe. The response re-reads through the same masking rule as the GET.
     """
+    key = _key_for(db, key, user)
     _project_or_404(db, key, user)
     patch = body.model_dump(exclude_unset=True, exclude={"shared"})
     if body.repos is not None:
@@ -558,6 +582,7 @@ def get_project_knowledge(
     key: str, principal: User = Depends(require_principal), db: Session = Depends(get_db)
 ) -> KnowledgeOut:
     """Project-level knowledge (INTEGRATION.md §3)."""
+    key = _key_for(db, key, principal)
     row = knowledge_service.get_knowledge(db, key, "", principal)
     if row is None:
         raise HTTPException(status_code=404, detail=f"No knowledge base for project '{key}'")
@@ -572,6 +597,7 @@ def get_repo_knowledge(
     db: Session = Depends(get_db),
 ) -> KnowledgeOut:
     """Per-repository knowledge, falling back to the project-level row."""
+    key = _key_for(db, key, principal)
     row = knowledge_service.get_knowledge(db, key, repo, principal)
     if row is None:
         raise HTTPException(status_code=404, detail=f"No knowledge base for repo '{repo}'")
@@ -600,6 +626,7 @@ def report_repo_knowledge(
     """
     if body.status is not None and body.status not in KNOWLEDGE_STATUSES:
         raise HTTPException(status_code=400, detail=f"Unknown status '{body.status}'")
+    key = _key_for(db, key, principal)
     row = knowledge_service.write_target(db, key, repo, principal)
     knowledge_service.apply_metadata(row, body.model_dump(exclude_unset=True))
     knowledge_service.apply_build_result(
@@ -648,6 +675,7 @@ def build_repo_knowledge(
     the shared row when they are an admin, else a new row owned by them. The
     clone, the artefacts and the Claude spend all land in that same scope.
     """
+    key = _key_for(db, key, user)
     _project_or_404(db, key, user)
     row, started = knowledge_service.request_build(db, key, repo, user)
     if started:
@@ -684,6 +712,7 @@ def contribute_repo_knowledge(
     contribution because nothing has been indexed yet would make the endpoint
     useless; the row simply stays ``not_indexed`` until an agent reports a build.
     """
+    key = _key_for(db, key, principal)
     row = knowledge_service.write_target(db, key, repo, principal)
     merged = knowledge_service.merge_discovery(
         row, {"routes": body.routes, "selectors": body.selectors}, source=body.source
