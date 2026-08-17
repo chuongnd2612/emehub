@@ -88,6 +88,10 @@ class TicketOut(ApiModel):
     epic: str = ""
     labels: list = Field(default_factory=list)
     ac_count: int = 0
+    #: The work item's page in the provider, ready to link. ``""`` when the
+    #: connection carried no org / base URL to build one from — so a consumer
+    #: renders a link only when there is one, and never constructs its own.
+    url: str = ""
     synced_at: datetime | None = None
 
 
@@ -194,6 +198,10 @@ class TestCaseOut(ApiModel):
     external_id: str = ""
     title: str = ""
     state: str = ""
+    #: The case's page in the provider. ``""`` where the adapter cannot build
+    #: one, which is why a consumer must treat this as optional rather than as
+    #: "the link is broken".
+    url: str = ""
 
 
 class TestCaseListOut(ApiModel):
@@ -725,6 +733,7 @@ def _preview_row(item: dict) -> dict:
         "area_path": item.get("area_path", ""),
         "epic": item.get("epic", ""),
         "labels": item.get("labels", []),
+        "url": item.get("url", ""),
     }
 
 

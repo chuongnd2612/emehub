@@ -252,7 +252,10 @@ class ProviderAdapter(ABC):
         return []
 
     def list_test_cases(self, ticket_external_id: str | None = None) -> list[dict[str, Any]]:
-        """Existing test cases as ``[{external_id, title, state}]``.
+        """Existing test cases as ``[{external_id, title, state, url}]``.
+
+        ``url`` is the case's page in the provider, or ``""`` where the adapter
+        has no org / base URL to build one from — optional, not broken.
 
         ``ticket_external_id`` is a *hint*, not a guarantee: Azure DevOps has no
         cheap per-work-item query for this and answers project-wide, which is

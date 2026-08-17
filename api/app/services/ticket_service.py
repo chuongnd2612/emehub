@@ -49,7 +49,8 @@ from app.services.ownership import owned, stamp_owner
 #: A provider-agnostic ticket, exactly the shape of
 #: ``app.services.adapters.base.NormalizedTicket``. Keys (all optional except
 #: ``external_id``): external_id, provider_kind, title, work_item_type, status,
-#: priority, assignee, sprint, area_path, epic, description, labels(list[str]),
+#: priority, assignee, sprint, area_path, epic, description, url,
+#: labels(list[str]),
 #: acceptance_criteria(list[str]), acceptance_criteria_html(str),
 #: comments(list[dict]), attachments(list[dict]), linked_prs(list[dict]).
 #: ``note`` may be present and is ignored — the hub does not store QA notes.
@@ -393,6 +394,7 @@ _SYNCED_FIELDS: tuple[tuple[str, Any], ...] = (
     ("epic", ""),
     ("description", ""),
     ("acceptance_criteria_html", ""),
+    ("url", ""),
 )
 _SYNCED_LIST_FIELDS = (
     "labels",

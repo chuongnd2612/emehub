@@ -219,6 +219,36 @@ def test_lookup_by_external_id_returns_the_full_detail(client, member, make_tick
     assert body["linkedPrs"] == [{"id": 42}]
 
 
+def test_the_provider_url_is_on_both_the_list_and_the_detail(client, member, make_ticket):
+    """INTEGRATION.md §3 › *The work item's own URL*.
+
+    On the LIST too, not only the detail: a consumer rendering a table of work
+    items would otherwise need one detail request per row to link any of them.
+    """
+    user, headers = member
+    make_ticket(
+        "SUR-1428",
+        owner=user,
+        url="https://dev.azure.com/emesoft/Surency/_workitems/edit/1428",
+    )
+
+    listed = client.get("/tickets", headers=headers).json()["items"][0]
+    detail = client.get("/tickets/SUR-1428", headers=headers).json()
+    assert listed["url"] == detail["url"] == (
+        "https://dev.azure.com/emesoft/Surency/_workitems/edit/1428"
+    )
+
+
+def test_a_ticket_with_no_provider_url_answers_empty_not_absent(client, member, make_ticket):
+    """`""` is "no link to offer" — a present, empty field, so a consumer can
+    branch on it without treating a missing key as a schema change."""
+    user, headers = member
+    make_ticket("SUR-9", owner=user)
+
+    detail = client.get("/tickets/SUR-9", headers=headers).json()
+    assert "url" in detail and detail["url"] == ""
+
+
 def test_lookup_of_an_unknown_id_is_404(client, member):
     _, headers = member
     assert client.get("/tickets/NOPE-1", headers=headers).status_code == 404
@@ -346,6 +376,7 @@ def test_the_migration_created_the_tickets_table(workspace_dir):
         "comments",
         "attachments",
         "linked_prs",
+        "url",
         "synced_at",
         "owner_id",
     } <= columns

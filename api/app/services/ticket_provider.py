@@ -284,7 +284,7 @@ def list_comments(db: Session, ticket: Any) -> ProviderRead:
 
 
 def list_test_cases(db: Session, ticket: Any) -> ProviderRead:
-    """Provider-side test cases as ``[{external_id, title, state}]``.
+    """Provider-side test cases as ``[{external_id, title, state, url}]``.
 
     **Not necessarily scoped to this ticket** — Azure DevOps has no cheap
     per-work-item query and answers project-wide, which the returned

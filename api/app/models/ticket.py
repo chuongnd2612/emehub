@@ -70,6 +70,12 @@ class Ticket(Base):
     epic: Mapped[str] = mapped_column(String(300), default="")
 
     description: Mapped[str] = mapped_column(Text, default="")
+    #: The work item's page in the provider — the ADO ``_workitems/edit`` link,
+    #: the Jira ``/browse`` link, the GitHub issue's ``html_url``. Every adapter
+    #: already normalises it; storing it is what lets a consumer send a human
+    #: back to the source without holding a connection of its own. ``""`` when
+    #: the connection had no org/base URL to build one from.
+    url: Mapped[str] = mapped_column(String(1000), default="")
 
     labels: Mapped[list] = mapped_column(JSON, default=list)
     acceptance_criteria: Mapped[list] = mapped_column(JSON, default=list)  # list[str]

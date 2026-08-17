@@ -781,7 +781,7 @@ class AzureDevOpsAdapter(ProviderAdapter):
         return None
 
     def list_test_cases(self, ticket_external_id: str | None = None) -> list[dict[str, Any]]:
-        """The project's ``Test Case`` work items as ``{external_id, title, state}``.
+        """The project's ``Test Case`` work items as ``{external_id, title, state, url}``.
 
         Project-wide: ADO has no cheap per-work-item query, and the consumer
         (continuing existing numbering) wants the project anyway. Documented on
@@ -815,6 +815,13 @@ class AzureDevOpsAdapter(ProviderAdapter):
                 "external_id": str(it.get("id", "")),
                 "title": (it.get("fields") or {}).get("System.Title", ""),
                 "state": (it.get("fields") or {}).get("System.State", ""),
+                # Built from the case's OWN team project, not `self.project`: the
+                # WIQL above is project-scoped so they agree today, but reading
+                # the field is what keeps the link right if that ever widens.
+                "url": self._web_url(
+                    (it.get("fields") or {}).get("System.TeamProject") or self.project,
+                    it.get("id"),
+                ),
             }
             for it in items
         ]
