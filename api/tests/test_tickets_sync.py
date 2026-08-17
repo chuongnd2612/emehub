@@ -74,6 +74,7 @@ ITEM = {
     "comments": [{"author": "duna"}],
     "attachments": [{"name": "log.txt"}],
     "linked_prs": [{"id": 42}],
+    "url": "https://dev.azure.com/emesoft/Surency/_workitems/edit/1428",
     # QAgent's local QA annotation. The hub does not store it — asserted below.
     "note": "ignore me",
 }
@@ -203,6 +204,8 @@ def test_sync_stores_every_normalised_field(client, member, db_session):
     assert ticket.acceptance_criteria == ["Given a file", "Then it imports"]
     assert ticket.acceptance_criteria_html == "<ol><li>Given a file</li></ol>"
     assert ticket.linked_prs == [{"id": 42}]
+    # The adapters normalise the work item's own page; the hub used to drop it.
+    assert ticket.url == "https://dev.azure.com/emesoft/Surency/_workitems/edit/1428"
     assert not hasattr(ticket, "note")  # the hub stores no QA annotation
 
 

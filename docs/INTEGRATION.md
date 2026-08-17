@@ -171,7 +171,7 @@ noted.
 | `PATCH` | `/projects/{key}/repos/{repo}/knowledge` | **Write.** Contribute discovered entries (QAgent's runtime selector discovery). Must not clobber existing `verified_at_runtime` entries. |
 | `PUT` | `/projects/{key}/repos/{repo}/knowledge` | **Write.** Report the result of a build the agent ran on its own host — status, blob, confidence, and `docPath` (an opaque agent-host path the hub stores and never resolves). |
 | `GET` | `/tickets` | Synced tickets, paged and filterable by project, provider, connection, state, assignee, sprint and free text. |
-| `GET` | `/tickets/{external_id}` | One ticket, normalised. Optional `?providerKind=` disambiguates the same id across providers. |
+| `GET` | `/tickets/{external_id}` | One ticket, normalised. Optional `?providerKind=` disambiguates the same id across providers. Carries `url` — see *The work item's own URL* below. |
 | `GET` | `/tickets/{external_id}/comments` | The work item's comment thread, read **live** from the provider through the hub's own PAT. `{items, supported}`. |
 | `GET` | `/tickets/{external_id}/test-cases` | Provider-side test cases, for continuing existing numbering when generating. `{items, supported, projectWide}`. |
 | `POST` | `/tickets/{external_id}/comments` | **Write, to the provider.** Post a comment on the work item. `{body, attachments?}` → `{externalCommentId}`. |
@@ -235,6 +235,27 @@ treat them as scoped and you will over-count.
 The comment shape is `{who, when, text}`, deliberately identical to the `comments` snapshot on
 `GET /tickets/{external_id}`. Same shape, different freshness: the snapshot is as of `syncedAt`,
 this endpoint is current. One concept, one shape.
+
+### The work item's own URL
+
+Every ticket the hub returns — list, detail, preview sample and sync result alike — carries a
+**`url`**: the work item's page in the provider. Azure DevOps gives
+`{org}/{project}/_workitems/edit/{id}`, Jira gives `{base}/browse/{key}`, GitHub gives the issue's
+`html_url`. Provider-side test cases (`GET …/test-cases`) carry one too.
+
+It exists so that **sending a human back to the source never requires a provider connection**. An
+agent that wants to put "open the work item" in a comment, a report or a UI would otherwise have to
+hold the org URL and reconstruct the path per provider — which means knowing each provider's URL
+grammar, and getting it wrong for on-premises Azure DevOps and Jira Data Center, where the base is
+not guessable. The hub already knows the base, because the connection it synced through told it.
+
+`""` means **the hub has no link to offer**, not that the link is broken: an adapter without an org
+or base URL configured cannot build one. Render a link only when the field is non-empty, and never
+construct a fallback — a wrong deep link is worse than no deep link.
+
+Additive and defaulted, so a consumer that ignores it is unaffected. Existing rows read `""` until
+their next sync fills them; nothing is backfilled from the provider, because a sync is the only
+place the hub is entitled to make that call.
 
 ### Saying what to sync: a clause query
 
