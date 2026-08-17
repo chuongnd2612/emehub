@@ -15,7 +15,7 @@
 // of truth (CLAUDE.md). Query + field filters are transient screen state.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import {
   buildTicketFilterSchema,
@@ -43,11 +43,11 @@ import {
   TableFootnote,
   TablePager,
   TableRowsSkeleton,
-  toast,
 } from "@/components/ui";
 import { ImportDialog, useImportRun } from "@/components/import";
 import { ApiError } from "@/lib/api";
 import { useUi } from "@/store/ui";
+import { ticketPath } from "@/screens/TicketDetail/shared";
 import { TicketsTable } from "./TicketsTable";
 import { TicketsToolbar } from "./TicketsToolbar";
 
@@ -92,6 +92,7 @@ const lastImportLabel = (rows: Ticket[]): string | null => {
 };
 
 export default function TicketsScreen() {
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const source = params.get("source");
   const provider: ProviderKey = isProvider(source) ? source : "ado";
@@ -315,11 +316,20 @@ export default function TicketsScreen() {
     resetPage();
   }, [draftQuery, resetPage]);
 
+  /**
+   * Open the work item's detail page.
+   *
+   * The row's OWN provider, not the active `?source=` — they agree today because
+   * the list is filtered by source, but the row is the authority on which
+   * provider it came from, and `(providerKind, externalId)` is what identifies it
+   * on the far side. Falling back to the active provider keeps the link
+   * disambiguated for a row the mirror stored without a recognised kind.
+   */
   const openRow = useCallback(
     (ticket: Ticket) => {
-      toast(ticket.id, "info");
+      navigate(ticketPath(ticket.id, ticket.provider ?? provider));
     },
-    [provider],
+    [navigate, provider],
   );
 
   const providerName = PROVIDERS[provider].name;

@@ -105,5 +105,9 @@ export function routeHeader(pathname: string): HeaderContent {
   const clean = pathname.replace(/\/+$/, "") || "/app";
   if (ROUTE_HEADER[clean]) return ROUTE_HEADER[clean];
   if (clean.startsWith("/app/projects/")) return ROUTE_HEADER["/app/projects"];
+  // A ticket's detail page keeps the Tickets header. Without this it fell all
+  // the way through to Overview, which reads as having navigated away from the
+  // section — and the sidebar's Tickets item stays active, so the two disagreed.
+  if (clean.startsWith("/app/tickets/")) return ROUTE_HEADER["/app/tickets"];
   return ROUTE_HEADER["/app"];
 }

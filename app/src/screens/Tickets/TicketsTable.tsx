@@ -1,7 +1,12 @@
 // Handoff § 4. Tickets › Table — glass container, columns
 // `110px | 2.4fr | 1fr | 120px | 120px | 110px | 110px` with gap 12, a
 // 9.5px/700/.11em header row, 14px/20px rows on a 1px var(--bd3) divider,
-// var(--card3) on hover and a "read-only mirror" toast on click.
+// var(--card3) on hover.
+//
+// A click opens the work item's detail page (#157). The handoff specified a
+// "read-only mirror" toast, which was all a click could do while there was
+// nowhere to go — the sentence itself now lives on the detail page and in the
+// footnote under this table, where it is a statement rather than an interruption.
 //
 // ## Two of the handoff's seven columns have no source
 //
