@@ -236,6 +236,27 @@ The comment shape is `{who, when, text}`, deliberately identical to the `comment
 `GET /tickets/{external_id}`. Same shape, different freshness: the snapshot is as of `syncedAt`,
 this endpoint is current. One concept, one shape.
 
+### The detail payload's nested shapes
+
+`GET /tickets/{external_id}` carries three lists the list endpoint does not, and each one now has
+a declared item shape rather than being an untyped array:
+
+| Field | Items |
+|---|---|
+| `comments` | `{who, when, text}` — the snapshot as of `syncedAt`. Identical to the live read above. |
+| `attachments` | `{name, size}`. `size` is the provider's own string, unparsed: Jira gives bytes, Azure DevOps gives nothing, and turning the two into a number would invent precision neither offers. |
+| `linkedPrs` | `{repo, num, title, status, url}`. `num` is a string — GitHub numbers and Azure DevOps ids are not the same kind of thing. |
+
+**Every field is optional and defaults to `""`.** These dicts were written by provider adapters
+over time, so a stored row missing a key normalises to an empty string rather than failing the
+read — a detail request must not 500 over a field the caller does not even display. Unknown keys
+are dropped. The typing is documentation plus a normalisation floor, not a validation gate.
+
+`acceptanceCriteria` (a `string[]`) and `acceptanceCriteriaHtml` stay as they were: the split list
+when the provider's criteria divide cleanly, and the provider's original HTML alongside it for when
+they do not. Render the list when it has two or more entries and fall back to the HTML otherwise —
+and **sanitize the HTML**, because it is the provider's, not the hub's.
+
 ### The work item's own URL
 
 Every ticket the hub returns — list, detail, preview sample and sync result alike — carries a

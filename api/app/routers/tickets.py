@@ -95,15 +95,59 @@ class TicketOut(ApiModel):
     synced_at: datetime | None = None
 
 
+class TicketCommentOut(ApiModel):
+    """One comment from the snapshot taken at ``syncedAt``.
+
+    The same three fields as the live ``GET /tickets/{id}/comments`` read, on
+    purpose: one concept, one shape, two freshnesses.
+    """
+
+    who: str = ""
+    when: str = ""
+    text: str = ""
+
+
+class TicketAttachmentOut(ApiModel):
+    """A provider attachment. ``size`` is the provider's own string, unparsed —
+    Jira gives bytes, Azure DevOps gives nothing, and normalising the two into a
+    number here would invent precision neither offers."""
+
+    name: str = ""
+    size: str = ""
+
+
+class LinkedPullRequestOut(ApiModel):
+    """A pull request the provider has linked to the work item."""
+
+    repo: str = ""
+    num: str = ""
+    title: str = ""
+    status: str = ""
+    url: str = ""
+
+
 class TicketDetailOut(TicketOut):
-    """Detail shape — everything the provider gave us, normalised."""
+    """Detail shape — everything the provider gave us, normalised.
+
+    The three nested lists are **typed but wholly optional**. The adapters have
+    agreed on their shapes since the first one shipped
+    (``adapters/base.py``), but the wire said only ``list``, so a consumer had to
+    read the hub's source to learn them and a drifting adapter shipped a
+    different shape in silence.
+
+    Every field defaults, and nothing is required, because these rows were
+    written by adapters over time and out of the hub's control: a stored dict
+    missing a key must normalise to ``""``, not turn a detail read into a 500.
+    This is documentation plus a normalisation floor — not a new validation gate,
+    and deliberately not the place to discover that an old row is imperfect.
+    """
 
     description: str = ""
     acceptance_criteria: list = Field(default_factory=list)
     acceptance_criteria_html: str = ""
-    comments: list = Field(default_factory=list)
-    attachments: list = Field(default_factory=list)
-    linked_prs: list = Field(default_factory=list)
+    comments: list[TicketCommentOut] = Field(default_factory=list)
+    attachments: list[TicketAttachmentOut] = Field(default_factory=list)
+    linked_prs: list[LinkedPullRequestOut] = Field(default_factory=list)
 
 
 class TicketPageOut(ApiModel):
@@ -178,13 +222,11 @@ class SyncResult(ApiModel):
     tickets: list[TicketOut] = Field(default_factory=list)
 
 
-class CommentOut(ApiModel):
-    """One provider comment. Same shape as the ``comments`` snapshot on
-    ``TicketDetailOut``, so an agent handles one shape, not two."""
-
-    who: str = ""
-    when: str = ""
-    text: str = ""
+#: One provider comment, read live. An **alias** of the snapshot's own model
+#: rather than a second class with the same three fields: "same shape as the
+#: snapshot" is a contract promise (INTEGRATION.md §3), and two declarations are
+#: two things to keep in step. Now they cannot drift.
+CommentOut = TicketCommentOut
 
 
 class CommentListOut(ApiModel):
