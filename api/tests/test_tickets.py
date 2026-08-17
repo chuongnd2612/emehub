@@ -204,9 +204,17 @@ def test_lookup_by_external_id_returns_the_full_detail(client, member, make_tick
         description="<p>Import fails</p>",
         acceptance_criteria=["Given a file", "Then it imports"],
         acceptance_criteria_html="<ol><li>Given a file</li></ol>",
-        comments=[{"author": "duna", "body": "looking"}],
-        attachments=[{"name": "log.txt"}],
-        linked_prs=[{"id": 42}],
+        comments=[{"who": "duna", "when": "2h ago", "text": "looking"}],
+        attachments=[{"name": "log.txt", "size": "2048"}],
+        linked_prs=[
+            {
+                "repo": "surency-etl",
+                "num": "42",
+                "title": "Fix the import",
+                "status": "Active",
+                "url": "https://dev.azure.com/emesoft/_git/surency-etl/pullrequest/42",
+            }
+        ],
     )
 
     body = client.get("/tickets/SUR-1428", headers=headers).json()
@@ -214,9 +222,50 @@ def test_lookup_by_external_id_returns_the_full_detail(client, member, make_tick
     assert body["description"] == "<p>Import fails</p>"
     assert body["acceptanceCriteria"] == ["Given a file", "Then it imports"]
     assert body["acceptanceCriteriaHtml"] == "<ol><li>Given a file</li></ol>"
-    assert body["comments"] == [{"author": "duna", "body": "looking"}]
-    assert body["attachments"] == [{"name": "log.txt"}]
-    assert body["linkedPrs"] == [{"id": 42}]
+    assert body["comments"] == [{"who": "duna", "when": "2h ago", "text": "looking"}]
+    assert body["attachments"] == [{"name": "log.txt", "size": "2048"}]
+    assert body["linkedPrs"] == [
+        {
+            "repo": "surency-etl",
+            "num": "42",
+            "title": "Fix the import",
+            "status": "Active",
+            "url": "https://dev.azure.com/emesoft/_git/surency-etl/pullrequest/42",
+        }
+    ]
+
+
+def test_a_partial_stored_nested_row_normalises_rather_than_500ing(
+    client, member, make_ticket
+):
+    """The three nested lists are typed, and the typing must not be a gate.
+
+    These dicts were written by adapters over time and out of the hub's control,
+    so a row missing a key — or carrying one the adapter has since stopped
+    emitting — has to come back with the missing fields as `""` and the unknown
+    ones dropped. Failing the read instead would make a detail page unopenable
+    because of a field it does not even show.
+    """
+    user, headers = member
+    make_ticket(
+        "SUR-99",
+        owner=user,
+        comments=[{"who": "duna"}, {"text": "no author", "legacyId": 7}],
+        attachments=[{"name": "log.txt"}],
+        linked_prs=[{"num": "42"}],
+    )
+
+    body = client.get("/tickets/SUR-99", headers=headers)
+    assert body.status_code == 200, body.text
+    detail = body.json()
+    assert detail["comments"] == [
+        {"who": "duna", "when": "", "text": ""},
+        {"who": "", "when": "", "text": "no author"},
+    ]
+    assert detail["attachments"] == [{"name": "log.txt", "size": ""}]
+    assert detail["linkedPrs"] == [
+        {"repo": "", "num": "42", "title": "", "status": "", "url": ""}
+    ]
 
 
 def test_the_provider_url_is_on_both_the_list_and_the_detail(client, member, make_ticket):
