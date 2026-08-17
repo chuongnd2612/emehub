@@ -37,6 +37,13 @@ export const ICON_PATHS = {
   alert: '<path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/>',
   doc: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
   link: '<path d="M10 13.5a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7L11.4 6.5"/><path d="M14 10.5a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 0 0 5.7 5.7l1.2-1.2"/>',
+  // Feather `external-link`. Distinct from `link`, which is a chain and means
+  // "these two things are related" — this one means "leaves the hub".
+  externalLink:
+    '<path d="M18 13.5v5A1.5 1.5 0 0 1 16.5 20h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6h5"/><path d="M14 4h6v6"/><path d="M10.5 13.5L20 4"/>',
+  // Feather `check-square` — a test case, as distinct from a bare `check`.
+  checkSquare:
+    '<path d="M9 11.5l2.5 2.5L20 5.5"/><path d="M20 12v6.5A1.5 1.5 0 0 1 18.5 20h-13A1.5 1.5 0 0 1 4 18.5v-13A1.5 1.5 0 0 1 5.5 4H16"/>',
   bolt: '<path d="M13 2L4.5 13.5H11l-1 8.5L19.5 10H13z"/>',
   git: '<circle cx="6" cy="6" r="2.6"/><circle cx="6" cy="18" r="2.6"/><circle cx="17" cy="12" r="2.6"/><path d="M6 8.6v6.8M8.6 6h3.4a2.4 2.4 0 0 1 2.4 2.4v1.2"/>',
   azure: '<path d="M9.5 3L4 18.5h4L14.5 3z"/><path d="M13 8l7 12.5H7l4-2.5"/>',

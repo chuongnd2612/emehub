@@ -37,6 +37,7 @@ import ProjectsScreen from "./screens/Projects";
 import ResetPasswordScreen from "./screens/Public/ResetPassword";
 import SettingsScreen from "./screens/Settings";
 import SignedOutScreen from "./screens/Public/SignedOut";
+import TicketDetailScreen from "./screens/TicketDetail";
 import TicketsScreen from "./screens/Tickets";
 import UsersScreen from "./screens/Users";
 import { RedirectIfAuthed } from "./screens/RedirectIfAuthed";
@@ -71,6 +72,13 @@ export const router = createBrowserRouter([
           { path: "projects", element: <ProjectsScreen /> },
           { path: "projects/:projectId", element: <ProjectDetailScreen /> },
           { path: "tickets", element: <TicketsScreen /> },
+          // The provider is NOT a path segment: ticket identity is
+          // `(providerKind, externalId)`, and putting the kind in the path would
+          // make `/app/tickets/ado/1234` the canonical URL for a row whose
+          // provider the caller may not know. It rides in `?source=` instead —
+          // the same param the list uses — so the id stays the only path part
+          // and an unqualified link still resolves.
+          { path: "tickets/:externalId", element: <TicketDetailScreen /> },
           { path: "claude", element: <ClaudeScreen /> },
           { path: "auth", element: <AuthScreen /> },
           { path: "users", element: <UsersScreen /> },

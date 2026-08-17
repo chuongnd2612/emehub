@@ -1,9 +1,11 @@
 // Tickets — the synced work-item mirror, its filter schema, and importing.
 //
-//   GET    /tickets            getTicketPage / getTickets
-//   GET    /tickets/{id}       getTicket
-//   DELETE /tickets/{id}       deleteTicket
-//   POST   /tickets/sync       runImport
+//   GET    /tickets                  getTicketPage / getTickets
+//   GET    /tickets/{id}              getTicket / getTicketDetail
+//   GET    /tickets/{id}/comments     getTicketComments   (live, via the hub's PAT)
+//   GET    /tickets/{id}/test-cases   getTicketTestCases  (live, via the hub's PAT)
+//   DELETE /tickets/{id}              deleteTicket
+//   POST   /tickets/sync              runImport
 //
 // ## Filtering moved to the server
 //
@@ -43,7 +45,12 @@ import type {
   ImportRequest,
   ImportResult,
   ProviderKey,
+  ProviderRead,
+  ProviderTestCase,
+  ProviderTestCaseRead,
   Ticket,
+  TicketComment,
+  TicketDetail,
   TicketFilterField,
   TicketFilters,
   TicketFilterSchema,
@@ -68,7 +75,23 @@ interface TicketWire {
   epic?: string;
   labels?: unknown[];
   acCount?: number;
+  url?: string;
   syncedAt?: string | null;
+}
+
+interface TicketDetailWire extends TicketWire {
+  description?: string;
+  acceptanceCriteria?: unknown[];
+  acceptanceCriteriaHtml?: string;
+  comments?: { who?: string; when?: string; text?: string }[];
+  attachments?: { name?: string; size?: string }[];
+  linkedPrs?: {
+    repo?: string;
+    num?: string;
+    title?: string;
+    status?: string;
+    url?: string;
+  }[];
 }
 
 interface TicketPageWire {
@@ -98,8 +121,46 @@ const toTicket = (
   epic: wire.epic ?? "",
   labels: (wire.labels ?? []).filter((l): l is string => typeof l === "string"),
   acCount: wire.acCount ?? 0,
+  url: wire.url ?? "",
   synced: relativeTime(wire.syncedAt ?? null),
   syncedAt: wire.syncedAt ?? null,
+});
+
+/**
+ * The detail shape, on top of the row.
+ *
+ * Every nested field is defaulted here as well as on the wire: the hub already
+ * normalises a partial stored row to `""` (INTEGRATION.md §3 › *The detail
+ * payload's nested shapes*), and doing it again is what lets the screen render
+ * each field unconditionally instead of guarding at every use site.
+ */
+const toTicketDetail = (
+  wire: TicketDetailWire,
+  projectNameById: Map<number, string>,
+): TicketDetail => ({
+  ...toTicket(wire, projectNameById),
+  description: wire.description ?? "",
+  acceptanceCriteria: (wire.acceptanceCriteria ?? [])
+    .filter((c): c is string => typeof c === "string")
+    .map((c) => c.trim())
+    .filter(Boolean),
+  acceptanceCriteriaHtml: wire.acceptanceCriteriaHtml ?? "",
+  comments: (wire.comments ?? []).map((c) => ({
+    who: c.who ?? "",
+    when: c.when ?? "",
+    text: c.text ?? "",
+  })),
+  attachments: (wire.attachments ?? []).map((a) => ({
+    name: a.name ?? "",
+    size: a.size ?? "",
+  })),
+  linkedPrs: (wire.linkedPrs ?? []).map((pr) => ({
+    repo: pr.repo ?? "",
+    num: pr.num ?? "",
+    title: pr.title ?? "",
+    status: pr.status ?? "",
+    url: pr.url ?? "",
+  })),
 });
 
 /* ── The filter schema ───────────────────────────────────────────────────── */
@@ -293,20 +354,126 @@ export const getTickets = async (
 ): Promise<Ticket[]> =>
   (await getTicketPage({ provider, filters, query })).items;
 
-/** GET /tickets/{externalId}. */
+/**
+ * `providerKind` for a detail read, or nothing.
+ *
+ * Load-bearing: ticket identity in the hub is `(providerKind, externalId)`, so
+ * an ADO `1234` and a GitHub `1234` are two rows and the path alone does not say
+ * which. Omitting it lets the hub pick, which is right only when the caller
+ * genuinely does not know.
+ */
+const providerQuery = (provider?: ProviderKey | null) =>
+  provider ? { providerKind: PROVIDER_WIRE_KIND[provider] } : undefined;
+
+/** GET /tickets/{externalId} — the row only, for callers that want no more. */
 export const getTicket = async (
   externalId: string,
   provider?: ProviderKey,
 ): Promise<Ticket> => {
   const [wire, projects] = await Promise.all([
     api.get<TicketWire>(`/tickets/${encodeURIComponent(externalId)}`, {
-      query: provider
-        ? { providerKind: PROVIDER_WIRE_KIND[provider] }
-        : undefined,
+      query: providerQuery(provider),
     }),
     projectNameMap(),
   ]);
   return toTicket(wire, projects);
+};
+
+/**
+ * `GET /tickets/{externalId}` — the full detail, for the detail screen.
+ *
+ * Same endpoint as `getTicket`; a separate function because the two want
+ * different shapes and a screen that only renders a row should not be handed
+ * three lists it has to ignore.
+ *
+ * A 404 arrives as an `ApiError` — the correct answer for an id that is not
+ * mirrored, or one that belongs to another member (the hub 404s rather than 403s
+ * so it cannot confirm the row exists).
+ */
+export const getTicketDetail = async (
+  externalId: string,
+  provider?: ProviderKey | null,
+): Promise<TicketDetail> => {
+  const [wire, projects] = await Promise.all([
+    api.get<TicketDetailWire>(`/tickets/${encodeURIComponent(externalId)}`, {
+      query: providerQuery(provider),
+    }),
+    projectNameMap(),
+  ]);
+  return toTicketDetail(wire, projects);
+};
+
+/**
+ * `GET /tickets/{externalId}/comments` — the thread, read **live** from the
+ * provider through the hub's own PAT.
+ *
+ * Distinct from `TicketDetail.comments`, which is the snapshot as of `syncedAt`.
+ * Same shape, different freshness — so refreshing swaps one for the other with
+ * nothing else to reconcile.
+ *
+ * `supported: false` means the provider has no comment concept; an empty
+ * `items` with `supported: true` means there genuinely are none. A failed
+ * provider call is a non-2xx and therefore an `ApiError` — never an empty list
+ * (INTEGRATION.md §3 › *`supported` is not the same as empty*).
+ */
+export const getTicketComments = async (
+  externalId: string,
+  provider?: ProviderKey | null,
+): Promise<ProviderRead<TicketComment>> => {
+  const wire = await api.get<{
+    items?: { who?: string; when?: string; text?: string }[];
+    supported?: boolean;
+  }>(`/tickets/${encodeURIComponent(externalId)}/comments`, {
+    query: providerQuery(provider),
+  });
+  return {
+    items: (wire.items ?? []).map((c) => ({
+      who: c.who ?? "",
+      when: c.when ?? "",
+      text: c.text ?? "",
+    })),
+    // Absent defaults to `true`: an older hub that omits the flag really does
+    // support comments, and defaulting to `false` would render "not supported"
+    // over a thread that loaded fine.
+    supported: wire.supported ?? true,
+  };
+};
+
+/**
+ * `GET /tickets/{externalId}/test-cases` — provider-side test cases.
+ *
+ * **Read `projectWide`.** Azure DevOps has no cheap per-work-item test-case
+ * query and answers for the entire project; the ticket in the path selects the
+ * *connection*, not the result set.
+ */
+export const getTicketTestCases = async (
+  externalId: string,
+  provider?: ProviderKey | null,
+): Promise<ProviderTestCaseRead> => {
+  const wire = await api.get<{
+    items?: {
+      externalId?: string;
+      title?: string;
+      state?: string;
+      url?: string;
+    }[];
+    supported?: boolean;
+    projectWide?: boolean;
+  }>(`/tickets/${encodeURIComponent(externalId)}/test-cases`, {
+    query: providerQuery(provider),
+  });
+  return {
+    items: (wire.items ?? []).map(
+      (c): ProviderTestCase => ({
+        externalId: c.externalId ?? "",
+        title: c.title ?? "",
+        state: c.state ?? "",
+        url: c.url ?? "",
+      }),
+    ),
+    supported: wire.supported ?? true,
+    projectWide: wire.projectWide ?? false,
+  };
 };
 
 /** DELETE /tickets/{externalId}. Local only — a re-sync restores the row. */

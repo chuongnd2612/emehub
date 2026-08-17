@@ -343,10 +343,93 @@ export interface Ticket {
   epic: string;
   labels: string[];
   acCount: number;
+  /**
+   * The work item's page in the provider (INTEGRATION.md §3 › *The work item's
+   * own URL*). `""` means the hub has **no link to offer** — an adapter without
+   * an org or base URL configured cannot build one — so render a link only when
+   * this is non-empty and never construct a fallback.
+   */
+  url: string;
   /** Relative `syncedAt`, e.g. "26m ago". */
   synced: string;
   /** ISO `syncedAt` — drives the toolbar's "last import" line. */
   syncedAt: string | null;
+}
+
+/** One comment from the snapshot taken at `syncedAt`. */
+export interface TicketComment {
+  who: string;
+  /** The provider's own timestamp string, already humanised upstream. */
+  when: string;
+  text: string;
+}
+
+/** A provider attachment. `size` is the provider's string, unparsed. */
+export interface TicketAttachment {
+  name: string;
+  size: string;
+}
+
+/** A pull request the provider has linked to the work item. */
+export interface LinkedPullRequest {
+  repo: string;
+  /** A string: GitHub numbers and Azure DevOps ids are not the same thing. */
+  num: string;
+  title: string;
+  status: string;
+  url: string;
+}
+
+/**
+ * `GET /tickets/{externalId}` — the row plus everything the list omits.
+ *
+ * Extends `Ticket` so the table's row and the detail's header render from the
+ * same fields, and a caller that already holds a `Ticket` can widen rather than
+ * re-map.
+ *
+ * QAgent's `note` is absent, and stays absent: it is a QA-run annotation, which
+ * is domain work the hub does not do (`api/app/models/ticket.py`).
+ */
+export interface TicketDetail extends Ticket {
+  description: string;
+  /** The criteria split into a list — empty when they did not divide cleanly. */
+  acceptanceCriteria: string[];
+  /** The provider's original AC markup. Must be sanitized before rendering. */
+  acceptanceCriteriaHtml: string;
+  comments: TicketComment[];
+  attachments: TicketAttachment[];
+  linkedPrs: LinkedPullRequest[];
+}
+
+/**
+ * One provider-side test case from `GET /tickets/{externalId}/test-cases`.
+ *
+ * `url` may be `""` where the adapter cannot build one — optional, not broken.
+ */
+export interface ProviderTestCase {
+  externalId: string;
+  title: string;
+  state: string;
+  url: string;
+}
+
+/**
+ * A read that went through to the provider — `{items, supported}` rather than a
+ * bare array, because an empty list means three different things and only one
+ * of them is "there are none" (INTEGRATION.md §3).
+ */
+export interface ProviderRead<T> {
+  items: T[];
+  /** `false` when the provider has no such concept — Jira has no test cases. */
+  supported: boolean;
+}
+
+export interface ProviderTestCaseRead extends ProviderRead<ProviderTestCase> {
+  /**
+   * `true` when the provider answered for the whole project rather than this
+   * work item. Azure DevOps always does.
+   */
+  projectWide: boolean;
 }
 
 /** One page of `GET /tickets`. Filtering and paging are server-side. */
