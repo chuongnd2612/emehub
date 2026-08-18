@@ -1,0 +1,149 @@
+# D-Agent (`ticket-executor`) — run it locally, the way Q-Agent runs.
+#
+#   1. cp dagent/.env.example dagent/.env      # then fill it in
+#   2. docker compose -f dagent/docker-compose.yml up -d --build
+#   3. open http://localhost:3000
+#
+# ## Its own compose project, not a service in the hub's
+#
+# Same reasoning as edge/docker-compose.yml: this fronts an application that
+# deploys on its own schedule and lives in another repository. Folding it into
+# the hub's compose file would mean a hub rebuild recreates D-Agent, and
+# `docker compose down` in the hub would take it away.
+#
+# The build context is the sibling checkout, so this file only works with the
+# repos laid out as siblings (CLAUDE.md › Sibling repositories):
+#
+#     claude-projects/emehub/            ← you are here
+#     claude-projects/ticket-executor/ticket-executor/
+#
+# ## Ports
+#
+# web 3000 is D-Agent's own default and the port the rest of the suite's
+# documentation already assumes for it. db 5458 continues the suite's series
+# (q-agent 5456, emehub 5457) and stays clear of the 5438 D-Agent's README
+# suggests for a *host* Postgres, so a developer running both does not collide.
+
+services:
+  dagent-web:
+    build:
+      # The sibling application, used as build context and never written to.
+      context: ../../ticket-executor/ticket-executor
+      # Resolved relative to the context, which is why it climbs back out: the
+      # Dockerfile belongs to this repository (dagent/Dockerfile), the sources
+      # belong to the other one.
+      dockerfile: ../../emehub/dagent/Dockerfile
+    environment:
+      # Prisma's connection, pointed at the bundled Postgres over the compose
+      # network. Not the maintenance database — D-Agent's README is explicit that
+      # `prisma migrate reset` against a shared `postgres` database would take
+      # other tools' schemas with it.
+      DATABASE_URL: postgresql://${DAGENT_DB_USER:-dagent}:${DAGENT_DB_PASSWORD:-dagent}@dagent-db:5432/${DAGENT_DB_NAME:-dagent}?schema=public
+      # The app's single shared login password.
+      #
+      # REQUIRED HERE, unlike in D-Agent's own .env.example, where empty means
+      # "local machine, no gate". This container publishes a port, so an empty
+      # value would leave an app that pushes commits and opens pull requests
+      # answering to anyone who can reach it. `:?` fails the *start*, which is the
+      # only failure mode that cannot be missed.
+      #
+      # The gate itself still disables itself when this is empty — that is
+      # D-Agent's `authDisabled()`, the fail-open this project does not allow
+      # (CLAUDE.md › Security rules; INTEGRATION.md § 6.1). This line refuses to
+      # deploy into that state; removing the fail-open is D-Agent's own change
+      # (docs/DAGENT-HANDOFF.md § 3).
+      APP_ACCESS_PASSWORD: ${DAGENT_APP_ACCESS_PASSWORD:?set DAGENT_APP_ACCESS_PASSWORD in dagent/.env}
+      # AES-256-GCM key for the provider PAT at rest. Also required rather than
+      # optional: unset, D-Agent derives the key from DATABASE_URL, and every
+      # stored PAT then becomes undecryptable the day that URL changes — which,
+      # for a containerised database, is the day someone renames this service.
+      SETTINGS_ENC_KEY: ${DAGENT_SETTINGS_ENC_KEY:?set DAGENT_SETTINGS_ENC_KEY in dagent/.env}
+      # The hub's API, as this container reaches it: the api service publishes
+      # 8790 on the host, and host.docker.internal is how a container gets back
+      # out to it without both stacks sharing a network. Empty is valid — the
+      # Settings page then says the hub is not configured instead of failing a
+      # sync (D-Agent's .env.example § EmeHub integration).
+      DAGENT_HUB_URL: ${DAGENT_HUB_URL:-}
+      # Optional CLI knobs, passed through so they can be set without editing the
+      # image. CLAUDE_BIN is unset on purpose: the image installs the CLI on PATH.
+      CLAUDE_SKILLS_DIR: ${DAGENT_CLAUDE_SKILLS_DIR:-}
+      CLAUDE_DEFAULT_PROJECT: ${DAGENT_CLAUDE_DEFAULT_PROJECT:-}
+      TICKET_PROVIDER: ${DAGENT_TICKET_PROVIDER:-azure-devops}
+    volumes:
+      # The Claude CLI's home. Persisted because authenticating the CLI is an
+      # interactive step (`docker compose exec dagent-web claude`), and without
+      # this it would have to be repeated after every recreate.
+      #
+      # **Sensitive**: holds the plaintext Claude credential, exactly like the
+      # hub's workspace volume (ADR 0007). Not a mount to copy around.
+      - dagent-claude:/root/.claude
+      # Where repositories a run acts on are cloned. A run's working directory is
+      # the ticket's "Root repo" value verbatim, so paths typed into the UI must
+      # exist *in here* — a host path like C:\repos\svc means nothing to this
+      # container. See dagent/README.md.
+      - dagent-repos:/repos
+    ports:
+      - "${DAGENT_WEB_PORT:-3000}:3000"
+    depends_on:
+      dagent-db:
+        condition: service_healthy
+    healthcheck:
+      # The login page, because it is the one route that answers without a
+      # session whatever the auth gate is doing. A 200 here means Next booted and
+      # migrations did not abort the entrypoint.
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "require('http').get('http://127.0.0.1:3000/login',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      # Next's first request compiles; migrations run before that. Generous on
+      # purpose — a container reported unhealthy while still starting is noise.
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      # `default` is named explicitly because listing any network replaces the
+      # implicit one — omit it and this service loses `dagent-db`.
+      default:
+      emesoft:
+        # An explicit alias: the hub's and q-agent's stacks each have a service
+        # whose name collides on a shared network, and the suite's front door
+        # addresses upstreams by name. `dagent-web` is the name edge/nginx.conf
+        # would use if D-Agent is ever mounted behind it.
+        aliases:
+          - dagent-web
+
+  dagent-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DAGENT_DB_USER:-dagent}
+      POSTGRES_PASSWORD: ${DAGENT_DB_PASSWORD:-dagent}
+      POSTGRES_DB: ${DAGENT_DB_NAME:-dagent}
+    volumes:
+      - dagent-db:/var/lib/postgresql/data
+    # Published so host tools (DBeaver, psql, `prisma studio`) can connect.
+    ports:
+      - "${DAGENT_DB_PORT:-5458}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DAGENT_DB_USER:-dagent} -d ${DAGENT_DB_NAME:-dagent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  dagent-db:
+  dagent-claude:
+  dagent-repos:
+
+networks:
+  default:
+  # The suite's shared network — the same external one the hub, q-agent and the
+  # edge attach to. External so no single project owns it: whichever stack is
+  # composed down last must not be able to delete the network out from under the
+  # others. Create it once with `docker network create emesoft`.
+  emesoft:
+    external: true

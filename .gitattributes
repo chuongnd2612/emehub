@@ -1,0 +1,10 @@
+# Line endings.
+#
+# `core.autocrlf=true` on Windows checks files out with CRLF, which is harmless
+# for source but not for files a Linux container reads verbatim. dagent/Dockerfile
+# writes its entrypoint with `printf`, so a checked-out `\r` would end up inside
+# the generated shell script — a `/bin/sh\r` shebang, failing at container start
+# with an error that names neither git nor line endings.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*/Dockerfile    text eol=lf
