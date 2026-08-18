@@ -33,6 +33,18 @@ services:
       # Dockerfile belongs to this repository (dagent/Dockerfile), the sources
       # belong to the other one.
       dockerfile: ../../emehub/dagent/Dockerfile
+      args:
+        # The URL prefix the app is served under, as the BROWSER sees it.
+        #
+        # `/dagent` mounts it on the suite's shared origin behind edge/nginx.conf,
+        # the way q-agent's VITE_BASE mounts it at `/qagent`. Empty builds it for
+        # its own origin instead. Either way the container listens on 3000 — this
+        # only changes the paths the app emits and expects.
+        #
+        # Changing it needs a REBUILD, not a restart: it is compiled into the
+        # bundle. And it must agree with the hub's EMEHUB_AGENT_DAGENT_URL and the
+        # edge's location block; a mismatch is a 404 on every asset.
+        DAGENT_BASE_PATH: ${DAGENT_BASE_PATH-/dagent}
     environment:
       # Prisma's connection, pointed at the bundled Postgres over the compose
       # network. Not the maintenance database — D-Agent's README is explicit that
@@ -69,6 +81,9 @@ services:
       CLAUDE_SKILLS_DIR: ${DAGENT_CLAUDE_SKILLS_DIR:-}
       CLAUDE_DEFAULT_PROJECT: ${DAGENT_CLAUDE_DEFAULT_PROJECT:-}
       TICKET_PROVIDER: ${DAGENT_TICKET_PROVIDER:-azure-devops}
+      # Same value as the build arg, for the healthcheck below — which runs
+      # against the *running* container and so cannot read a build arg.
+      HEALTH_BASE_PATH: ${DAGENT_BASE_PATH-/dagent}
     volumes:
       # The Claude CLI's home. Persisted because authenticating the CLI is an
       # interactive step (`docker compose exec dagent-web claude`), and without
@@ -91,11 +106,16 @@ services:
       # The login page, because it is the one route that answers without a
       # session whatever the auth gate is doing. A 200 here means Next booted and
       # migrations did not abort the entrypoint.
+      #
+      # The path carries DAGENT_BASE_PATH: under a basePath build, `/login` is a
+      # 404 and only `/dagent/login` exists. A healthcheck that probes the wrong
+      # one reports the container unhealthy forever, and `depends_on` then never
+      # releases anything waiting on it.
       test:
         - "CMD"
         - "node"
         - "-e"
-        - "require('http').get('http://127.0.0.1:3000/login',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+        - "require('http').get('http://127.0.0.1:3000'+(process.env.HEALTH_BASE_PATH||'')+'/login',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
       interval: 15s
       timeout: 5s
       retries: 5
