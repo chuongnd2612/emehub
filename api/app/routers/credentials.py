@@ -1,8 +1,12 @@
 """Claude credentials — the one secret the hub deliberately hands out.
 
 INTEGRATION.md §4: ``GET /credentials/claude/resolve`` returns credential
-material an agent writes to a private ``CLAUDE_CONFIG_DIR``. Everything in this
-module exists to make that the *only* leak, and a recorded one.
+material an agent writes to a private directory and points
+``CLAUDE_SECURESTORAGE_CONFIG_DIR`` at — the narrow variable, which relocates the
+CLI's credential file alone. ``CLAUDE_CONFIG_DIR`` also relocates ``skills/``,
+``settings.json`` and ``projects/``, so an agent that reaches for it loses its own
+skills along with its login; see the box in INTEGRATION.md §4. Everything in this
+module exists to make the credential the *only* leak, and a recorded one.
 
 ## Posture — ``GRANTED``, tightened per route
 

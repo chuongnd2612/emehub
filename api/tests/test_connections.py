@@ -4,6 +4,13 @@ The load-bearing test here is
 :func:`test_the_pat_never_appears_in_any_connection_response`, which walks every
 endpoint the router exposes and asserts the stored secret is in none of their
 bodies (CLAUDE.md › "Provider PATs never leave the hub"; INTEGRATION.md §4).
+
+**One endpoint is excluded, deliberately and by name**: ``GET /connections/{id}/secret``
+returns the PAT to an agent audience (ADR 0010). It is covered by
+:mod:`test_connection_secret`, where the refusals are the point. Excluding it by
+hand rather than by introspection is intentional — a future route must not be
+able to escape this assertion by being forgotten.
+
 The rest cover encryption at rest, per-owner isolation, the shared namespace and
 the capability rules.
 """
@@ -66,6 +73,9 @@ def test_the_pat_never_appears_in_any_connection_response(client, member, header
     upstream messages and exception strings, which is exactly where a credential
     would slip out. The connection points at an unroutable host so those calls
     fail — which is the interesting case, not an inconvenience.
+
+    ``GET /{id}/secret`` is the one exclusion and is listed in the module
+    docstring; see :mod:`test_connection_secret`.
     """
     hdrs = headers("member@emesoft.net")
     created = _create(

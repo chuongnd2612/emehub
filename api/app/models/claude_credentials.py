@@ -1,10 +1,11 @@
 """Claude CLI credential — one row per user, plus one shared row.
 
-The Claude CLI reads its OAuth session from ``<CLAUDE_CONFIG_DIR>/.credentials.json``.
+The Claude CLI reads its OAuth session from a ``.credentials.json``, found under
+``CLAUDE_SECURESTORAGE_CONFIG_DIR ?? CLAUDE_CONFIG_DIR ?? ~/.claude``.
 Rather than every host sharing one machine-wide login, each row here holds the
 **encrypted** contents of one user's (or the shared/admin) credentials file, so
 an agent can fetch the credential it should run with from
-``GET /credentials/claude/resolve`` and materialise it into a private config dir
+``GET /credentials/claude/resolve`` and materialise it into a private directory
 (INTEGRATION.md §4 — the one documented secret that leaves the hub).
 
 ``owner_id`` NULL identifies the single **shared** credential, following the
