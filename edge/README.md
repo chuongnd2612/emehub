@@ -8,15 +8,20 @@ app.<domain>
   /            -> emehub SPA
   /api/*       -> emehub API
   /qagent/*    -> q-agent SPA, its /api and its /auth
+  /dagent*     -> D-Agent (Next), prefix passed through rather than stripped
 ```
 
-**D-Agent is deliberately not here.** It runs as a container in the suite
-([`dagent/README.md`](../dagent/README.md)) but on its own origin, because mounting a Next server
-under a path prefix means `basePath`, and D-Agent's client code has ~48 root-relative
-`fetch("/api/…")` calls that would then land on the hub's API instead of its own. That is a change
-inside D-Agent ([docs/DAGENT-HANDOFF.md §2](../docs/DAGENT-HANDOFF.md)). Its container already
-answers to `dagent-web` on the `emesoft` network, so adding the location block here is the small
-half of that work.
+**The two agents get here differently, and the difference matters when editing `nginx.conf`.**
+q-agent is a static bundle, so its prefix is *stripped* and its own nginx never learns the mount
+exists. D-Agent is a Next server built with `basePath=/dagent` ([`dagent/README.md`](../dagent/README.md)),
+so its prefix is *passed through* — the server expects it on every request.
+
+D-Agent's block also carries two patches for things `basePath` does not cover: its auth gate's
+redirect loses the prefix, and ~48 root-relative `fetch("/api/…")` calls in its client code would
+otherwise resolve to the hub's API. Both are workarounds for another repo's code and both are
+deleted when D-Agent ships the real fix
+([docs/DAGENT-HANDOFF.md §2](../docs/DAGENT-HANDOFF.md), ticket-executor#93). They are commented in
+place; read them before changing that block.
 
 ## Cutting over
 

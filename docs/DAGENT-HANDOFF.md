@@ -14,7 +14,7 @@ the deployment as it stands; each one removes a limitation the deployment curren
 | § | What | Why it needs D-Agent |
 |---|---|---|
 | 1 | Own the container image | The Dockerfile tracks D-Agent's layout from another repo |
-| 2 | A shared-origin mount (`/dagent`) | `basePath` + ~48 root-relative `fetch("/api/…")` calls |
+| 2 | Retire the mount's two proxy patches | the mount works, on patches only this repo can remove |
 | 3 | Remove the auth fail-open | `authDisabled()` lives in `lib/auth.ts` |
 | 4 | Consume a hub token as a session | The hand-off carries identity D-Agent does not read |
 | 5 | A health endpoint | The container healthcheck currently probes `/login` |
@@ -48,44 +48,71 @@ each needs a file in the app's own root:
 When you take it over, tell the hub — `emehub/dagent/` should then be deleted, not left to rot as a
 second definition of the same image.
 
-## 2. A shared-origin mount at `/dagent`
+## 2. Take the `/dagent` mount off its two proxy patches
 
-Q-Agent is served as a path on the suite's single origin (`/qagent`, [ADR 0010](adr/0010-one-origin-for-the-suite.md));
-D-Agent is served from its own origin instead. That asymmetry is not a preference — the front door
-cannot mount D-Agent as it is.
+D-Agent **is** now mounted at `/dagent` on the suite's shared origin, alongside q-agent's `/qagent`.
+It works — verified in a browser, every API call on every page landing under `/dagent/api` and none
+on the hub's. It works because the hub side compiles in a `basePath` and then patches two things
+from nginx that `basePath` does not cover, and those patches are what this section is asking you to
+make unnecessary.
 
-**Why Q-Agent's arrangement does not transfer.** Q-Agent's frontend is a static Vite bundle:
-`VITE_BASE=/qagent/` changes the URLs it *emits*, the edge strips the `/qagent` prefix, and
-Q-Agent's own nginx keeps seeing exactly the paths it always saw. D-Agent is a Next *server*.
-Mounting it under a prefix means `basePath`, and then the server expects that prefix on every
-request — so the edge must pass it through rather than strip it. Next handles its pages, its assets
-and its route handlers under that prefix by itself.
+**Why q-agent's arrangement did not transfer.** q-agent's frontend is a static Vite bundle:
+`VITE_BASE=/qagent/` changes the URLs it *emits*, the edge strips the prefix, and q-agent's own
+nginx keeps seeing exactly the paths it always saw. D-Agent is a Next *server*, so the prefix is
+`basePath` and the server expects it on every request — the edge passes it through instead of
+stripping it, which is why the two location blocks in `edge/nginx.conf` look nothing alike.
 
-What it does not handle is client code. There are ~48 root-relative fetches across 14 files
-(`fetch("/api/settings")`, `fetch("/api/dashboard?…")`, `app/hubSession.ts`, `app/login/page.tsx`, …).
-Next does not rewrite string literals, so under `basePath` every one of them resolves to
-`https://<origin>/api/…` — which on the shared origin is **the hub's API**, not D-Agent's. The
-symptom would be a UI that loads and then 401s or 404s on everything.
+### What the hub currently does on your behalf
 
-The change:
+1. **`basePath` by wrapper.** `dagent/Dockerfile` renames `next.config.ts` and re-exports it through
+   a generated wrapper that adds `basePath`, from a build arg. Additive rather than a patch, but it
+   is still this repo compiling your config, and it assumes a default export.
+2. **A `proxy_redirect` for the login redirect.** `proxy.ts` sends unauthenticated page requests to
+   `new URL("/login", request.url)`, and a plain `URL` built that way **drops the basePath** — the
+   app answers `Location: /login`, which on the shared origin is the *hub's* login screen. nginx
+   rewrites the header. Using `request.nextUrl.clone()` (a `NextURL`, which re-applies basePath)
+   instead of `new URL(…, request.url)` fixes it at the source.
+3. **An injected fetch shim.** `basePath` prefixes what the framework emits; it does not touch string
+   literals, and there are ~48 root-relative `fetch("/api/…")` calls across 14 files plus one
+   `new EventSource("/api/executions/…/stream")`. Without help, every one resolves to the hub's
+   `/api`. The edge injects a script into `<head>` that prefixes root-relative `fetch`, `XHR` and
+   `EventSource` URLs before they leave the page.
 
-1. A single client helper — `apiUrl(path)` or a thin `apiFetch()` — that prefixes the base path, and
-   every root-relative `fetch` routed through it. This is the bulk of the work and it is mechanical.
-2. `basePath` in `next.config.ts`, from an env var so standalone deployment stays possible
-   (Q-Agent's equivalent is `QAGENT_BASE_PATH`, driving both halves of its build).
-3. The auth cookie's `Path` scoped to the mount path. Q-Agent learned this one the hard way: a
-   cookie scoped to a path the browser never requests makes the session end silently at the next
-   reload.
-4. `proxy.ts`: verify the gate still matches. `PUBLIC_PATHS` compares `nextUrl.pathname` against
-   literals (`/login`, `/api/auth/login`), and the redirect builds `new URL("/login", request.url)`
-   — check against a real `basePath` build whether the prefix is present or stripped in each, rather
-   than reasoning about it. Getting this wrong either opens the gate or produces a redirect loop.
+Point 3 is the one that should not last. A proxy rewriting another application's client code is
+invisible from inside that application: someone adding a new `fetch("/api/…")` in this repo will
+have it silently work in the suite and fail anywhere else, and someone debugging a URL in DevTools
+will see a path no source file contains.
 
-The hub side is already prepared: `docker-compose.yml` attaches D-Agent to the `emesoft` network
-with the alias **`dagent-web`**, which is the upstream name `edge/nginx.conf` will use. When the
-above lands, the hub adds one location block and sets `EMEHUB_AGENT_DAGENT_URL=/dagent` — a
-same-origin path is hand-off-ready by construction, so it needs no cookie domain and no CORS entry
-at all.
+### The change that retires them
+
+1. One client helper — `apiUrl(path)` / `apiFetch()` — with every root-relative `fetch` and the
+   `EventSource` routed through it. Mechanical, and the bulk of the work.
+2. `basePath` in your own `next.config.ts`, from an env var (q-agent's equivalent is
+   `QAGENT_BASE_PATH`, driving both halves of its build). The hub's build arg then goes away.
+3. `proxy.ts`: build the login redirect from `request.nextUrl`, and add `"/"` to the matcher — see
+   the gap below.
+4. Scope the `te_session` cookie's `Path` to the mount when one is set. It is `/` today, which
+   happens to work under a prefix; it stops being accidental once the mount is a real setting.
+
+Tell the hub when it lands and `edge/nginx.conf` loses both patches in the same PR.
+
+### A gap the mount exposed
+
+`proxy.ts` matches `/((?!_next/static|_next/image|favicon.ico).*)`, and under a basePath the bare
+`/dagent` arrives with an **empty** pathname — which that pattern does not match. The app's root
+route therefore renders **without the auth gate**. It is the static landing page, every other page
+still redirects and every `/api/*` route still answers 401, so nothing is exposed; but it is a gate
+that quietly stopped applying to a route, and it would apply to any future public-facing root
+content too. `matcher: ["/", "/((?!_next/static|_next/image|favicon.ico).*)"]` closes it.
+
+### A second variable for the hub URL
+
+`DAGENT_HUB_URL` is read for two different jobs: your server-side hub reads, and the value the
+browser mints its token against. One variable cannot be right for both — the fast internal address
+(`http://host.docker.internal:8790`) is unreachable from a browser, and a relative `/api` is caught
+by the shim above. The deployment therefore sets the public URL and eats a tunnel round trip on
+every server-side read (~500ms against ~2ms, measured on q-agent). q-agent solved this with
+`QAGENT_HUB_BASE_URL` plus `QAGENT_HUB_INTERNAL_BASE_URL`; the same split here would pay for itself.
 
 ## 3. Remove the auth fail-open
 
@@ -102,10 +129,10 @@ leaves the off switch in production.
 
 ## 4. Consume a hub token as a session
 
-The hub mints tokens for the `dagent` audience and, with `EMEHUB_AGENT_DAGENT_URL` set to an origin
-under `EMEHUB_COOKIE_DOMAIN`, `GET /agents` reports D-Agent `handoffReady`. What that buys today is
-*navigation*: pressing `Launch` on the hub's Overview card lands on D-Agent — at D-Agent's own login
-form, because nothing there exchanges the hub session for a local one.
+The hub mints tokens for the `dagent` audience, and with the `/dagent` mount `GET /agents` reports
+D-Agent `handoffReady` — a same-origin path needs no cookie domain and no CORS entry at all. What
+that buys today is *navigation*: pressing `Launch` on the hub's Overview card lands on D-Agent — at
+D-Agent's own login form, because nothing there exchanges the hub session for a local one.
 
 D-Agent already talks to the hub as a client (`lib/hub.ts`, `lib/hubGateway.ts`,
 `lib/hubCredential.ts` call `/dagent/connections` and `/credentials/claude/*`), so the token
@@ -115,10 +142,9 @@ without a local session, `POST <hub>/auth/agent-token` with credentials, and acc
 [ADR 0008](adr/0008-cross-app-session-handoff.md), [INTEGRATION.md § 2](INTEGRATION.md), and
 q-agent's `docs/HUB-INTEGRATION.md` as the worked example.
 
-Two hub-side prerequisites are already in place for
-[the current deployment](../dagent/README.md#launching-it-from-the-hub): the agent URL is
-registered, and D-Agent's origin is in `EMEHUB_CORS_ORIGINS` so that cross-origin POST is allowed
-with credentials.
+The mount makes this easier than it was: `POST {hub}/auth/agent-token` from a D-Agent page is now a
+**same-origin** request, so the hub's cookie is sent without a widened `Domain` and without a CORS
+entry. That is the strongest form of the ADR 0008 arrangement, not a degenerate one.
 
 Ordering note from INTEGRATION.md § 6.2, still worth keeping: hub *identity* and hub *credentials*
 are separate milestones and should not be bundled into one issue.
@@ -187,8 +213,9 @@ Nothing here needs action; it is what your side is now sitting behind.
   stops on drift instead of resetting the database).
 - `APP_ACCESS_PASSWORD` and `SETTINGS_ENC_KEY` promoted to hard start-up requirements for this
   deployment; see § 3 for why that is not the fix.
-- `EMEHUB_AGENT_DAGENT_URL` pointed at D-Agent's origin and that origin added to
-  `EMEHUB_CORS_ORIGINS`, so `GET /agents` reports D-Agent registered and hand-off-ready and the
+- Mounted at `/dagent` on the shared origin in `edge/nginx.conf` (prefix passed through, not
+  stripped, plus the two patches in § 2), `basePath` compiled in via `DAGENT_BASE_PATH`, and
+  `EMEHUB_AGENT_DAGENT_URL=/dagent` — so `GET /agents` reports registered and hand-off-ready and the
   Overview card's button is live.
 - The Overview product card's `live` flag flipped from `false` to `true`: it read "Placeholder" for
   an application that is now deployed and reachable.

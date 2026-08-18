@@ -31,7 +31,9 @@ docker compose -f dagent/docker-compose.yml up -d --build
 fallbacks (no auth gate at all; encryption key derived from `DATABASE_URL`) are wrong for something
 that publishes a port and pushes commits.
 
-Then open **http://localhost:3000** and sign in with the password you set.
+Then open **http://127.0.0.1:5190/dagent** — the suite's front door — and sign in with the password
+you set. The container also publishes 3000, but a `DAGENT_BASE_PATH` build serves nothing at the
+root of that port: direct access is `http://localhost:3000/dagent`.
 
 Migrations apply on every start (`prisma migrate deploy`), so a schema change in the sibling repo
 needs a rebuild, not a manual step.
@@ -49,50 +51,93 @@ disabled itself. Stop the stack rather than leaving it up.
 
 ## Launching it from the hub
 
-The hub's Overview card gets a working `Launch` only when `GET /agents` reports D-Agent both
-*registered* and *handoff-ready* — a URL alone is not enough, because single sign-on needs the
-refresh cookie to reach D-Agent's origin ([ADR 0008](../docs/adr/0008-cross-app-session-handoff.md)).
-So the origin has to sit under `EMEHUB_COOKIE_DOMAIN`.
+D-Agent is mounted at **`/dagent` on the suite's shared origin**, the way q-agent is mounted at
+`/qagent` ([ADR 0010](../docs/adr/0010-one-origin-for-the-suite.md)). Press `Launch` on the hub's
+Overview card and the address bar goes to `<origin>/dagent` — no second hostname, no CORS entry, and
+no cookie-domain question, because a same-origin path is hand-off-ready by construction.
 
 In `emehub/.env`:
 
 ```
-EMEHUB_AGENT_DAGENT_URL=https://dagent.<domain>
-EMEHUB_CORS_ORIGINS=…,https://dagent.<domain>
+EMEHUB_AGENT_DAGENT_URL=/dagent
 ```
 
-then `docker compose up -d` in the hub to pick it up. Check it took:
+then `docker compose up -d` in the hub. Check it took:
 
 ```bash
-docker compose exec -T api python -c "from app.config import settings as s; print(s.handoff_ready('dagent'), s.handoff_blocker('dagent'))"
-# True None
+docker compose exec -T api python -c "from app.config import settings as s; print(s.agent_url('dagent'), s.handoff_ready('dagent'), s.handoff_blocker('dagent'))"
+# /dagent True None
 ```
 
-The last step is **outside this repo**: add a tunnel ingress for `dagent.<domain>` pointing at
-`http://localhost:3000`. The tunnel is remotely managed (`cloudflared … --token`), so that is a
-Cloudflare Zero Trust dashboard change, exactly like the one `edge/README.md` describes for the
-front door.
+Verify the mount end to end:
 
-Pressing `Launch` then navigates to D-Agent, and D-Agent's own login is reached — the hand-off
-carries the *hub session*, but D-Agent does not yet consume a hub token to sign a browser in
-([handoff § 2](../docs/DAGENT-HANDOFF.md)). Navigation is live; single sign-on is not, and the hub is
-not the side that can finish it.
+```bash
+curl -s -o /dev/null -w '%{http_code}
+' http://127.0.0.1:5190/dagent          # 200
+curl -s -o /dev/null -w '%{http_code}
+' http://127.0.0.1:5190/dagent/dashboard # 307 -> /dagent/login
+curl -s -o /dev/null -w '%{http_code}
+' http://127.0.0.1:5190/dagent/api/settings # 401
+curl -s -o /dev/null -w '%{http_code}
+' http://127.0.0.1:5190/api/health       # 200, hub untouched
+```
 
-### Why not `/dagent` behind the suite's front door
+A `Launch` that lands on D-Agent's own login form is correct today: the mount carries *navigation*,
+not single sign-on. D-Agent does not yet exchange a hub token for a session
+([handoff §4](../docs/DAGENT-HANDOFF.md)), and the hub is not the side that can finish that.
 
-Q-Agent is mounted as a path on the shared origin (`/qagent`), and D-Agent is not, which looks like
-an oversight. It isn't:
+### How the mount works, and what is a workaround
 
-- Q-Agent's frontend is a static Vite bundle. `VITE_BASE=/qagent/` changes the URLs it *emits*;
-  the edge strips the prefix and Q-Agent's nginx sees exactly the paths it always saw.
-- D-Agent is a Next server. Mounting it under a prefix means `basePath`, which the *server* then
-  expects on every request — and Next does not rewrite the ~48 root-relative `fetch("/api/…")`
-  calls in D-Agent's client code. Those would resolve against the shared origin and land on the
-  hub's `/api` instead of D-Agent's.
+Three pieces, and two of them should not be permanent.
 
-That is a change inside D-Agent ([handoff § 1](../docs/DAGENT-HANDOFF.md)), so until it lands
-D-Agent gets its own origin. `docker-compose.yml` already attaches it to the `emesoft` network as
-`dagent-web`, which is the name `edge/nginx.conf` will need on the day the mount becomes possible.
+1. **`basePath=/dagent`, compiled in.** `dagent/Dockerfile` takes `DAGENT_BASE_PATH` as a build arg
+   and re-exports D-Agent's own `next.config.ts` through a wrapper that adds the key. Changing the
+   prefix is a **rebuild**, not a restart, and it must agree with the edge block and
+   `EMEHUB_AGENT_DAGENT_URL`. Setting `DAGENT_BASE_PATH=` (empty) builds the app for its own origin
+   again, unchanged.
+2. **The prefix is passed through, not stripped** — the opposite of q-agent's block, because the Next
+   server expects it. Note that Next canonicalises `/dagent/` to `/dagent`, so the edge must *not*
+   redirect the bare form to the slashed one: that is an infinite redirect, and it is how this was
+   first found.
+3. **Two patches in `edge/nginx.conf`** — a `proxy_redirect` because D-Agent's auth gate builds its
+   login redirect with `new URL("/login", request.url)`, which drops the basePath; and a small
+   injected shim that prefixes root-relative `fetch`/`XHR`/`EventSource` URLs, because `basePath`
+   does not rewrite string literals and D-Agent's client code has ~48 `fetch("/api/…")` calls that
+   would otherwise hit **the hub's** API.
+
+Piece 3 is patching another repo's code from a proxy. It works — verified in a browser, with every
+API call on every page landing under `/dagent/api` and none on the hub's — and it is still a
+workaround with an expiry date: when D-Agent ships an `apiFetch()` helper and reads `basePath` from
+its own config ([handoff §2](../docs/DAGENT-HANDOFF.md), ticket-executor#93), both patches are
+deleted and only the proxy remains.
+
+### One known gap the mount introduces
+
+`proxy.ts` matches on `/((?!_next/static|_next/image|favicon.ico).*)`, and under a basePath the bare
+`/dagent` arrives with an **empty** pathname, which that pattern does not match. So the app's root
+route — a static landing page, `Ship tickets, not busywork` — renders without the auth gate. Every
+other page still redirects to `/dagent/login` and every `/dagent/api/*` route still answers 401, so
+no data is exposed; but it is a gate that stops applying to one route, which is not something to
+leave unsaid. The fix is one entry in D-Agent's matcher (handoff §2).
+
+### Hub mode needs the public hub URL
+
+`DAGENT_HUB_URL` is used for two different things — D-Agent's server-side reads *and* the value the
+browser mints its token against — and D-Agent has only the one variable for both (q-agent splits it
+into public and internal). So it must be the **browser-reachable** URL, including the hub's `/api`
+prefix:
+
+```
+DAGENT_HUB_URL=https://hub.<domain>/api
+```
+
+`http://host.docker.internal:8790` would be faster for the server side and unusable from a browser.
+A *relative* `/api` is likewise wrong here: the shim in the edge block would prefix it to
+`/dagent/api`. Splitting the variable is handoff §2's companion item.
+
+Because the mount puts D-Agent on the hub's own origin, that mint is now a same-origin request —
+so hub mode works when you browse the suite at `https://hub.<domain>/dagent`, and not when you
+browse the container directly at `http://localhost:3000`.
 
 ## What a containerised run can do
 
