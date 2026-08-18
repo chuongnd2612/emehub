@@ -96,14 +96,25 @@ D-Agent gets its own origin. `docker-compose.yml` already attaches it to the `em
 
 ## What a containerised run can do
 
-D-Agent's purpose is to spawn the Claude Code CLI inside a git repository. The image carries `git`
-and the CLI, but a run needs two things that cannot be baked into an image:
+D-Agent's purpose is to spawn the Claude Code CLI inside a git repository. The image carries `git`,
+the CLI, and the four skills a run drives (pre-installed at `/root/.claude/skills`, because a
+missing skill fails partway into a run rather than up front). Two things it cannot carry:
 
-**A logged-in Claude credential.** Authenticate once — it persists in the `dagent-claude` volume:
+**A Claude credential.** Two ways, and the first is much better in a container:
 
-```bash
-docker compose -f dagent/docker-compose.yml exec dagent-web claude
-```
+- *Hub mode.* Turn **Part of EmeHub** on in D-Agent's Settings. Every run then resolves its
+  credential from the hub and materialises it for that run only
+  (`lib/claudeConfig.ts`, `lib/hubCredential.ts`), with no login on this machine and rotated tokens
+  posted back — the arrangement [INTEGRATION.md §4](../docs/INTEGRATION.md) describes. It needs
+  `DAGENT_HUB_URL` set *and* a hub session, which the Settings page mints in the browser. That mint
+  is a cross-origin POST carrying the hub's cookie, so it works from D-Agent's registered origin and
+  **not** from `http://localhost:3000` — the hub's cookie is scoped to its domain, and the browser
+  will not send it to a bare loopback origin.
+- *Its own login,* for hub mode off. Interactive, once; it persists in the `dagent-claude` volume:
+
+  ```bash
+  docker compose -f dagent/docker-compose.yml exec dagent-web claude
+  ```
 
 **The repository itself.** A run's working directory is the ticket's *Root repo* value verbatim, so
 a host path like `C:\repos\my-service` means nothing inside the container. Clone into the
@@ -118,7 +129,9 @@ docker compose -f dagent/docker-compose.yml exec dagent-web git clone <url> /rep
 Verify by hand with `git -C /repos/my-service push --dry-run` before spending tokens on a run.
 
 Until both are done the app is fully usable for browsing tickets, projects and settings; it is the
-*Implement* / *Resolve Review* actions that need them.
+*Implement* / *Resolve Review* actions that need them. D-Agent's own **System Check** page is the
+thing to trust about all of it — as of `ticket-executor@62bba10` its deep probe verifies that the
+credential actually authenticates, rather than reporting the hub's status string.
 
 ## Stopping, and what persists
 

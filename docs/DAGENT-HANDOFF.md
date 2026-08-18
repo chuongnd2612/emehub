@@ -148,14 +148,26 @@ then types the container path. Worth considering on your side: a configured repo
 Root repo is resolved against, or a clone-on-demand step, so the field stops being a host path
 pasted into a container.
 
-**The Claude credential.** `lib/execution/claudeCli.ts` shells out to whatever `claude` is logged in
-where the app runs. In a container that is the container's own `/root/.claude`, so the deployment
-persists it as a volume and the operator authenticates once with
-`docker compose exec dagent-web claude`. You already have `lib/hubCredential.ts` reading the hub's
-`/credentials/claude/resolve`, so the better path may already be half-built — worth verifying
-whether a containerised run can materialise the hub credential and skip the interactive step
-entirely. The hub's `api/app/services/claude_credentials.py::materialize`
-([ADR 0007](adr/0007-knowledge-builds-run-on-the-hub.md)) is a worked example.
+**The Claude credential.** This one is largely *solved* on your side already, and the container is
+where it pays off. With hub mode off, `lib/execution/claudeCli.ts` shells out to whatever `claude` is
+logged in where the app runs — in a container, the container's own `/root/.claude`, so the deployment
+persists that as a volume and the operator authenticates interactively once. With **Part of EmeHub**
+on, `lib/claudeConfig.ts` materialises the hub-resolved credential per run into
+`~/.ticket-executor/claude-config/<source>` and points `CLAUDE_SECURESTORAGE_CONFIG_DIR` at it, the
+runner refuses a run whose credential cannot authenticate, and `62bba10` made System Check verify
+that for real. No login on the box at all.
+
+So the containerised recommendation is hub mode, and the remaining friction is not credentials but
+reaching the hub: the session that authorises `/credentials/claude/resolve` is minted **in the
+browser** from the hub's cookie, which means D-Agent has to be served from an origin the hub's cookie
+reaches. From `http://localhost:3000` it never is. Worth knowing when someone reports that hub mode
+"works on my machine but not in the container" — the difference is the origin, not the container.
+
+One gap the container exposed, small but ours to name: the four skills a run drives are installed
+into `~/.claude/skills` by the Settings-page installer, and a fresh container has none, so a run
+fails partway in with `Unknown command: /implement-ticket-v3` after spending tokens. The hub-side
+image pre-installs them from `skills/`. A first-run check — or installing them on boot when the
+directory is empty — would make that unnecessary.
 
 Also unchanged and still an open product question from INTEGRATION.md § 6.2:
 `--dangerously-skip-permissions` is defensible for a single-developer local tool and indefensible

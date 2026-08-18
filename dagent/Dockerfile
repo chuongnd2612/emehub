@@ -79,6 +79,21 @@ RUN npx prisma generate
 # real URL baked into an image is a credential in a layer.
 RUN DATABASE_URL="postgresql://build:build@127.0.0.1:5432/build?schema=public" npm run build
 
+# The four skills a run drives, pre-installed where the CLI reads them.
+#
+# D-Agent does not ship its skills to `~/.claude/skills` itself — the Settings
+# page has an installer that copies them there, and on a developer machine that
+# directory already exists. In a container it starts empty, and a run whose skill
+# is missing does not fail fast: the CLI answers `Unknown command:
+# /implement-ticket-v3` partway in, after spending tokens.
+#
+# Copied into the image rather than done by hand after start-up, because
+# /root/.claude is a named volume and Docker seeds a *fresh* volume from whatever
+# the image has at that path. So the first `up` gets working skills, and anything
+# installed or edited later survives, since the seed only happens once.
+RUN mkdir -p /root/.claude/skills \
+ && cp -r ./skills/. /root/.claude/skills/
+
 # Start-up: apply migrations, then serve.
 #
 # `migrate deploy` and never `migrate dev`: deploy applies committed migrations
