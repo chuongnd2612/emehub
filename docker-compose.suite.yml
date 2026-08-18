@@ -1,0 +1,207 @@
+# The whole EMESOFT suite, in one compose project.
+#
+#   docker compose -f docker-compose.suite.yml up -d --build
+#   open http://localhost:5190
+#
+# Nine services: the hub (api/db/web), Q-Agent (api/db/web), D-Agent (web/db) and
+# the front door that puts them on one origin. One `up`, one `down`, one `ps`.
+#
+# ## What this replaces, and what it does not
+#
+# The four per-stack compose files still exist and still work on their own — this
+# file **extends** them rather than restating them, so their environment blocks,
+# volumes, healthchecks and images have exactly one definition each. Bring up a
+# single stack when you want to work on it in isolation; bring up this file when
+# you want the suite.
+#
+# Run one or the other, **never both**: two projects starting the same image
+# publish the same host ports, and the second one loses. Each arrangement also has its
+# own volumes — see the note above `volumes:` at the bottom of this file.
+#
+# ## The trade-off being accepted
+#
+# `edge/docker-compose.yml` and `dagent/docker-compose.yml` each explain why they
+# are separate projects: the stacks deploy independently, and folding them
+# together means a rebuild of one can disturb another, while `down` takes
+# everything with it. That reasoning has not stopped being true — this file
+# chooses the other side of it deliberately, because one operator running the
+# whole suite on one host is better served by one command than by four. The
+# per-stack files remain the answer when the stacks really do need to move
+# independently.
+#
+# ## Why every service is renamed
+#
+# The hub and Q-Agent both call their services `api`, `db` and `web`. In separate
+# projects that is fine — each project gets its own network and its own DNS. In
+# one project the names collide, so they are prefixed here.
+#
+# But each app's *internal* wiring still expects the short names: the hub's nginx
+# has `server api:8790` and Q-Agent's has `server api:8787`, both baked into
+# images this repo does not rebuild. That is what the per-stack networks below are
+# for — `api` and `db` resolve inside each stack's own network, and the aliases
+# make the renamed services answer to them. Putting all nine on one network with a
+# shared `api` alias would round-robin two different applications, which is the
+# exact failure `docker-compose.yml` already warns about for `web`.
+#
+# ## Environment files
+#
+# Interpolation (`${QAGENT_SECRET_KEY:?…}`) is resolved against the *project's*
+# environment, not the file each service came from — so all three `.env` files have
+# to be passed. Every variable is prefixed (`EMEHUB_`, `QAGENT_`, `DAGENT_`), so
+# combining them cannot collide:
+#
+#   docker compose -f docker-compose.suite.yml \
+#     --env-file .env --env-file dagent/.env --env-file ../q-agent/.env \
+#     up -d --build
+#
+# `suite.ps1` / `suite.sh` in this directory do exactly that, so the long form is
+# there when a command needs adjusting and not something to retype.
+
+name: emesoft
+
+services:
+  # ── EmeHub ─────────────────────────────────────────────────────────────────
+  emehub-api:
+    extends:
+      file: docker-compose.yml
+      service: api
+    # `!override` on every depends_on and networks below, because `extends`
+    # *copies* both — and both name things in the other file's namespace: a
+    # `depends_on: db` that does not exist here (the project refuses to start,
+    # which is the good case) and the external `emesoft` network (which would
+    # quietly give every service a second route to its neighbours). Overriding
+    # replaces; plain merging appends.
+    depends_on: !override
+      emehub-db:
+        condition: service_healthy
+    networks: !override
+      emehub:
+        # The hub's own nginx image has `server api:8790` compiled into it.
+        aliases: [api]
+
+  emehub-db:
+    extends:
+      file: docker-compose.yml
+      service: db
+    networks: !override
+      emehub:
+        # EMEHUB_DATABASE_URL points at `db`.
+        aliases: [db]
+
+  emehub-web:
+    extends:
+      file: docker-compose.yml
+      service: web
+    depends_on: !override
+      emehub-api:
+        condition: service_healthy
+    networks: !override
+      emehub:
+      suite:
+        # The name edge/nginx.conf proxies to.
+        aliases: [emehub-web]
+
+  # ── Q-Agent ────────────────────────────────────────────────────────────────
+  qagent-api:
+    extends:
+      file: ../q-agent/docker-compose.yml
+      service: api
+    depends_on: !override
+      qagent-db:
+        condition: service_healthy
+    networks: !override
+      qagent:
+        # Q-Agent's nginx image has `server api:8787` compiled into it.
+        aliases: [api]
+
+  qagent-db:
+    extends:
+      file: ../q-agent/docker-compose.yml
+      service: db
+    networks: !override
+      qagent:
+        aliases: [db]
+
+  qagent-web:
+    extends:
+      file: ../q-agent/docker-compose.yml
+      service: web
+    depends_on: !override
+      qagent-api:
+        condition: service_healthy
+    networks: !override
+      qagent:
+      suite:
+        aliases: [qagent-web]
+
+  # ── D-Agent ────────────────────────────────────────────────────────────────
+  dagent-web:
+    extends:
+      file: dagent/docker-compose.yml
+      service: dagent-web
+    depends_on: !override
+      dagent-db:
+        condition: service_healthy
+    networks: !override
+      dagent:
+      suite:
+        aliases: [dagent-web]
+
+  dagent-db:
+    extends:
+      file: dagent/docker-compose.yml
+      service: dagent-db
+    networks: !override
+      dagent:
+        # D-Agent's DATABASE_URL names `dagent-db`, so the alias matches the
+        # service name here rather than shortening it.
+        aliases: [dagent-db]
+
+  # ── The front door ─────────────────────────────────────────────────────────
+  edge:
+    extends:
+      file: edge/docker-compose.yml
+      service: edge
+    # Not `depends_on` the three web services on purpose. The edge resolves its
+    # upstreams at request time precisely so it can start before them and survive
+    # them (edge/nginx.conf), and making it wait would hand one starting app the
+    # power to keep the whole suite's entry point down.
+    networks: !override
+      - suite
+
+networks:
+  # One network per application, so the short names each app's image expects
+  # (`api`, `db`) resolve to that app's own containers and nothing else.
+  emehub:
+  qagent:
+  dagent:
+  # Shared by the three web containers and the edge. Deliberately NOT the external
+  # `emesoft` network the per-stack files use: that one exists so separately
+  # deployed projects can find each other, and in a single project it would be a
+  # second way to reach the same containers — plus, if a stray per-stack project is
+  # also up, an ambiguous one.
+  suite:
+
+# ## Volumes belong to this project
+#
+# Compose namespaces a volume by project, so `emehub-db` here is
+# `emesoft_emehub-db` — a different volume from the `emehub_emehub-db` the
+# per-stack file fills. **Switching between the two arrangements therefore starts
+# from empty databases**: no users, no connections, no run history. That is the
+# accepted cost of the switch, not an oversight; the old volumes are left in place
+# (a plain `down` never deletes them) and can be removed with `docker volume rm`
+# once nothing is going back.
+#
+# Adopting the old ones instead — `external: true` with `name:` — is a two-line
+# change per volume if that is ever wanted. It was avoided here because sharing
+# storage with the per-stack files makes running both at once a corrupted
+# database rather than a port clash, and a port clash is the failure that
+# announces itself.
+volumes:
+  emehub-workspace:
+  emehub-db:
+  qagent-workspace:
+  qagent-db:
+  dagent-db:
+  dagent-claude:
+  dagent-repos:
