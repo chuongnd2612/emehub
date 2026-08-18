@@ -49,7 +49,9 @@ Note the app in `ticket-executor/` is one level down: `ticket-executor/ticket-ex
 ```
 api/                FastAPI (Python 3.13, uv), SQLAlchemy 2, Alembic, Postgres 16
 app/                React 19, Vite, TypeScript, Tailwind 4
-docker-compose.yml  api + db + web (nginx)
+docker-compose.yml  api + db + web (nginx) — the hub alone
+docker-compose.suite.yml  all nine services in one project; extends the three per-stack files
+suite.sh / suite.ps1      thin drivers for the above (they pass the three repos' .env files)
 edge/               the suite's front door — one origin for hub + agents (own compose project)
 dagent/             D-Agent's container, built from the sibling checkout (own compose project)
 design/             design system + landing mockup + brand assets
@@ -71,8 +73,10 @@ so both stacks can run on one host during migration.
 - **`api/`** — `uv run pytest` and the app must boot. Alembic migration for every schema change.
 - **`app/`** — `npm run typecheck` (`tsc -b --noEmit`) + `npm run build`. There is **no unit-test
   harness**; do not run `npm test`. Verify UI at runtime with `npm run dev` + Playwright.
-- **Docker** — after anything ships, rebuild: `docker compose up -d --build`. The running
-  container is stale until you do. Say so explicitly in your response.
+- **Docker** — after anything ships, rebuild: `docker compose up -d --build` for the hub alone,
+  or `./suite.sh up -d --build` when the suite project is the one running. The running container
+  is stale until you do. Say so explicitly in your response. Never run both arrangements at
+  once — same host ports, different volumes.
 
 ---
 

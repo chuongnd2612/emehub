@@ -163,7 +163,41 @@ which would only be needed for browser automation the hub does not do.
 
 ---
 
+## Running the whole suite
+
+One compose project for all nine services — the hub, Q-Agent, D-Agent and the front door that
+puts them on a single origin:
+
+```bash
+docker network create emesoft        # only if you also run the per-stack files
+./suite.sh up -d --build             # or  .\suite.ps1 up -d --build
+```
+
+| | |
+|---|---|
+| Everything | <http://localhost:5190> |
+| Hub | `/` |
+| Q-Agent | `/qagent` |
+| D-Agent | `/dagent` |
+
+`suite.sh` / `suite.ps1` are thin wrappers around `docker compose -f docker-compose.suite.yml`
+with the three repos' `.env` files passed in — read the header of
+[`docker-compose.suite.yml`](docker-compose.suite.yml) for why that is necessary and for what the
+file does and does not replace. Every argument passes straight through, so `./suite.sh logs -f
+dagent-web` and `./suite.sh ps` work as expected.
+
+The per-stack compose files still work on their own, and the suite file *extends* them rather than
+restating them. Run one or the other, **never both** — they publish the same host ports. Note that
+each arrangement has its own volumes, so switching between them starts from empty databases (and
+therefore needs `EMEHUB_ADMIN_EMAIL` / `EMEHUB_ADMIN_PASSWORD` set, or nobody can sign in).
+
+D-Agent's deployment has its own notes — [`dagent/README.md`](dagent/README.md) — because the hub
+builds that image on its behalf, and because a run inside a container needs a repository and a
+credential the image cannot carry.
+
 ## Getting started
+
+The hub on its own, without the agents:
 
 ```bash
 cp .env.example .env
