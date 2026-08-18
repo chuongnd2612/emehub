@@ -161,8 +161,9 @@ noted.
 |---|---|---|
 | `GET` | `/me` | The authenticated user: id, email, name, role. |
 | `GET` | `/credentials/claude/resolve` | The Claude credential this user should run with, already resolved through the own → shared → none precedence. Returns the credential material; see §4. |
-| `GET` | `/connections` | Provider connections visible to the user, with their capabilities (`work_item`, `repository`). Never includes the PAT. |
-| `POST` | `/connections/{id}/proxy` | *(deferred)* Ask the hub to make a provider call on the agent's behalf, so the PAT never leaves the hub. See §4. |
+| `GET` | `/connections` | Provider connections visible to the user, with their capabilities (`work_item`, `repository`) and `updatedAt`. Never includes the PAT. |
+| `GET` | `/connections/{id}/secret` | **The connection's PAT**, plus the base URL and config that go beside it. Agent audiences only — a hub token is refused. The one place a provider secret crosses; see §4 and [ADR 0010](adr/0010-a-provider-secret-may-cross-to-an-agent.md). |
+| `POST` | `/connections/{id}/proxy` | *(never)* A generic forwarder, abandoned rather than deferred. See §4. |
 | `GET` | `/projects` | Project registry. Each row carries a `summary` of non-secret card figures (repo, branch, counts, knowledge status) so a list screen costs one request, not 3N+1. **No test-account material, not even `hasPassword`.** |
 | `GET` | `/projects/{key}` | One project, same shape as a list row. |
 | `GET` | `/projects/{key}/config` | Full project configuration including repositories. Test-account passwords are returned **only to the owning user** — a shared config (`owner_id IS NULL`) is owned by nobody, so its accounts stay masked even for an admin. |
@@ -185,6 +186,92 @@ noted.
 
 Agents MAY cache any `GET` above. Cache lifetime is the agent's choice; the hub sets
 `Cache-Control` as a hint, not a rule.
+
+**Connections are the one resource with a real invalidation signal.** `updatedAt` is bumped on every
+write to a connection, a PAT rotation included, and `GET /connections` returns it. An agent that
+mirrors connections compares the value it holds against that list and re-reads
+`GET /connections/{id}/secret` only for a row that actually moved — one cheap call, and a secret read
+only when there is something new to read. There is deliberately no webhook: a push would need the hub
+to reach an agent that may be on a developer's laptop, with retries and ordering, to deliver what one
+list call already answers.
+
+### DAgent's provider surface: `/dagent/*`
+
+DAgent drives a coding agent against a work item and then against the pull request that work item
+produced. Pull requests have no other consumer in the hub, and DAgent needs work items at a fidelity
+the mirrored `tickets` table does not keep (the provider's own rich text, the deep link, the original
+estimate and story points). Widening the shared routes to serve that would change endpoints QAgent
+and the hub UI already depend on, so these live under their own prefix and are **purely additive** —
+a deployment that never calls them behaves exactly as it did before they existed.
+
+All are scoped to one connection the caller owns, and all read live at the provider.
+
+| Method | Path | Returns |
+|---|---|---|
+| `GET` | `/dagent/connections` | The catalogue, same no-PAT rule as `GET /connections`. |
+| `GET` | `/dagent/connections/{id}/projects` | The organisation's projects. |
+| `GET` | `/dagent/connections/{id}/sprints?project=` | Iterations plus which one is current, for the **project the caller named**. |
+| `GET` | `/dagent/connections/{id}/tickets?project=&sprint=&scope=` | One view's work items, at full fidelity. `scope` is `sprint` (default) \| `backlog` \| `board`. |
+| `GET` | `/dagent/connections/{id}/tickets/{ext}/comments` | The work item's comment thread. `{items, supported}`. |
+| `GET` | `/dagent/connections/{id}/tickets/{ext}/states` | The states **this work item type** may hold — not the union across the project. |
+| `GET` · `POST` | `/dagent/connections/{id}/tickets/{ext}/status` | Read the current state; **write** a transition. |
+| `GET` | `/dagent/connections/{id}/pull-request` | The PR linked to a work item, and its review threads. `pr: null` means nothing is linked — a real answer. |
+| `POST` | `/dagent/connections/{id}/pull-request/review-summaries` | The same question for **many** work items at once, answered with a count and the newest open comment rather than whole threads. See below. |
+| `GET` | `/dagent/connections/{id}/pull-request/commits` | Every commit on the PR's source branch. |
+| `GET` | `/dagent/connections/{id}/pull-request/commits/{sha}` | One commit's file changes, each with a unified diff. |
+| `POST` | `/dagent/connections/{id}/pull-request/outcomes` | What became of a batch of PRs — merged, abandoned, review-comment count. |
+
+**`project` is a caller argument on both work-item reads, and that is load-bearing.** One connection
+spans a whole organisation while DAgent picks a project in its own header, so a route that resolved the
+project from `connection.config` answers for whichever project the connection happens to name — and for
+nothing at all when it names none. `sprints` used to do exactly that, which left DAgent's sprint picker
+empty while the ticket list beside it, which does send a project, kept working: a picker that silently
+disagreed with the list it sat next to. `sprints` is therefore served from `dagent_provider`, not from
+the shared adapter, whose own `list_sprints()` still reads the connection's project for the hub UI.
+
+**A sprint list is scoped to a team, not to a project.** `/sprints` reads `work/teamsettings/iterations`
+under the project's **default team** — the same context `@currentIteration` resolves through, so the
+picker's default and a no-sprint ticket load agree. It deliberately does *not* read the project's
+classification tree: that is every iteration the project has ever defined across every team's sub-tree,
+and a project of any age answers with a soup (`CPCAG Sprint 75` beside `FM-Schwab-Egnyte\Sprint 8` beside
+`Sprint 47`) matching no screen a user has seen, since ADO's own sprint URL is `_sprints/backlog/<team>/…`.
+It also made "current" unanswerable: several of those sub-trees have a sprint spanning today, so a date
+comparison matched more than one. Team settings returns ADO's own `attributes.timeFrame`, so exactly one
+item is `current`, and `current` at the top level names it.
+
+**`sprint` is an iteration *path*, and `/sprints` hands you one.** `System.IterationPath` is rooted —
+`RIS\Sprint 61`, or `RIS\Release 1\Sprint 61` where iterations nest — and ADO does not treat a bare leaf
+name as a filter that matches nothing: it rejects the whole query with a `400`, which reaches the caller
+as a `502` about WIQL it never wrote. So pass back the `path` from `/sprints`, not the `name` the picker
+displayed. A bare name is still accepted and resolved against the project's iterations first, at the cost
+of one extra call; a name that matches no iteration falls back to `project\name`, which is right for a
+flat layout and leaves an unknown sprint as an empty list rather than an error. The `sprint` echoed in
+the response is always the **leaf**, because a header chip is a name and a path is a location.
+
+**The three `scope`s are three queries, not one query with a filter.** A sprint is bounded by its
+iteration and keeps its closed work — it is the record of what that iteration did. A backlog is open
+work whose iteration path is still the project root, i.e. not scheduled yet. A board is every open work
+item *regardless* of iteration, carrying `boardColumn` — the kanban column, which is not the state,
+because a board maps several states onto one column and may add custom ones. Two of the three
+deliberately sit outside the iteration the sprint query is bounded by, so no caller can derive them
+from a sprint fetch. An unrecognised `scope` is a `422` rather than a silent fall back to `sprint`:
+answering a question nobody asked is how a caller ends up trusting the wrong list. Both non-sprint
+scopes answer with an empty `sprint` label, since naming one iteration for a list that spans them all
+would be false, and every scope reports `truncated` when the provider had more than `MAX_TICKETS` to
+give — a sprint is bounded, a backlog and a board are not, and a capped list that says nothing reads as
+a short one.
+
+The two `POST`s that take a list are POSTs because a board's worth of ids does not fit a query string,
+not because they write anything. **Neither turns a caller's string into an upstream address**: a PR URL
+is parsed for a repository and PR id, and the request is then built from the connection's own base
+URL — which is what keeps these from being the generic forwarder §4 rules out.
+
+`review-summaries` exists because polling is not free. A notification bell asks about every ticket on
+screen on a timer; doing that through the single-ticket route cost one round-trip *and* one full review
+payload per ticket per poll, nearly all of it discarded on arrival. The batch form answers
+positionally, with `null` where there is nothing to notify about — and per §5, a batch that could not
+be read at all is a `502`, never a list of nulls, because an outage and an empty board must not render
+the same.
 
 ### Ticket sync: the hub calls the provider, so the PAT does not have to move
 
@@ -432,11 +519,25 @@ Two secrets are unavoidable in the current design, and both deserve an explicit 
 rather than a default.
 
 **Claude credential.** `GET /credentials/claude/resolve` returns credential material the
-agent writes to disk and points `CLAUDE_CONFIG_DIR` at. The credential therefore leaves the
-hub. Mitigations to implement: response is never cached to disk by the agent in plaintext
-beyond the CLI's config dir; the CLI's own token rotation is posted back
+agent writes to disk and points **`CLAUDE_SECURESTORAGE_CONFIG_DIR`** at. The credential
+therefore leaves the hub. Mitigations to implement: response is never cached to disk by the
+agent in plaintext beyond that directory; the CLI's own token rotation is posted back
 (`PUT /credentials/claude/refreshed`) so the hub stays authoritative; the endpoint is
 audited on every call.
+
+> **Not `CLAUDE_CONFIG_DIR`.** The CLI resolves the credential file from
+> `CLAUDE_SECURESTORAGE_CONFIG_DIR ?? CLAUDE_CONFIG_DIR ?? ~/.claude`, but `skills/`,
+> `settings.json` and `projects/` from `CLAUDE_CONFIG_DIR ?? ~/.claude` (verified against
+> claude 2.1.226). An agent that sets the wide variable to a directory holding only a
+> credential loses its own skills with it: DAgent did exactly that and every run failed at
+> its first node with `Unknown command: /implement-ticket-v3`, the slash-command table
+> having dropped from 125 entries to 42. The narrow variable moves the credential alone.
+> An agent must also never write into the host's own `~/.claude` — that is the developer's
+> login, and for a `shared` credential it would sign them in as somebody else.
+>
+> The hub's own knowledge build is the one place `CLAUDE_CONFIG_DIR` is still correct: it
+> runs in a container, wants the whole root isolated, and passes its skill as
+> `--append-system-prompt` rather than a slash command, so it depends on no installed skills.
 
 A **background run** reaches this endpoint with a run-scoped grant rather than an access token
 (§2) — the 15-minute token expires long before a run does, and a grant is bound to the hub
@@ -467,30 +568,39 @@ should be aware it will now see `refreshable` where it used to see `expired`. **
 token itself is not exposed**: the hub stores only the boolean, and the token stays inside the
 encrypted blob that `/resolve` already returns whole.
 
-**Provider PAT.** Deliberately *not* returned. Agents that need a provider call get one of:
+**Provider PAT.** Not returned *by default*, and returned by exactly one endpoint. An agent that
+needs a provider operation gets one of, in order of preference:
 
-- **the hub performs the call through a narrow, purpose-built endpoint** — `POST /tickets/sync`
-  today (§3), and this is the preferred answer, not a stopgap;
-- the hub performs the call through the generic `POST /connections/{id}/proxy` — **deferred**,
-  because a caller-directed forwarder needs its own security design;
-- or, where an agent must talk to the provider directly at volume, a scoped short-lived
-  token if the provider supports one.
+- **the hub performs the call through a narrow, purpose-built endpoint** — `POST /tickets/sync` and
+  the `/tickets/{external_id}/…` reads and writes (§3). This is the preferred answer, not a stopgap:
+  the caller names a *ticket*, never a URL, so the secret never has to move;
+- or, where the provider supports one, a scoped short-lived token the agent holds itself. GitHub
+  installation tokens qualify; classic Azure DevOps and Jira PATs have no equivalent;
+- or, **only where neither is possible**, `GET /connections/{id}/secret`.
 
-The first and second are the same principle at different widths, and the width is the whole
-argument: a narrow endpoint cannot be pointed at an arbitrary upstream, so it carries none of the
-SSRF or header-leak risk that deferred the generic one. Prefer adding a narrow endpoint over
-reviving the proxy.
+`POST /connections/{id}/proxy` — a generic, caller-directed forwarder — is **abandoned, not
+deferred**. It is an SSRF and header-leak surface, and the narrow endpoints cover every provider
+call an agent's own code makes. Prefer adding a narrow endpoint; never revive the proxy.
 
 **Where this now stands.** Every provider operation QAgent performs is covered by a narrow endpoint:
 work-item sync, comment reads, test-case reads, comment publishing, state transitions and test-case
-creation. So `/connections` staying informational is no longer what keeps an agent's
-`provider_connections` table alive — the remaining work is agent-side, cutting over to these
-endpoints and deleting the local table.
+creation. The remaining work there is agent-side — cutting over and deleting the local table.
 
-Two things are still genuinely uncovered, and both are agent-side by nature rather than blocked here:
-**cloning a repository** (the PAT has to be injected into a git remote on the machine doing the
-clone) and **anything DAgent hands to an MCP server**, which needs the credential locally by
-construction. Those need the scoped-short-lived-token answer, per provider, or nothing.
+**Two cases have no seam to insert a hub call into, and that is why the third bullet exists**
+([ADR 0010](adr/0010-a-provider-secret-may-cross-to-an-agent.md)). **Cloning a repository** needs the
+PAT in a git remote on the machine doing the clone. **Anything DAgent hands to an MCP server** needs
+it in a subprocess's environment — DAgent writes a config file, the Claude CLI starts
+`@azure-devops/mcp` from it, and *that* process calls the provider. Neither is a call the hub can
+make on the agent's behalf, so for these the credential crosses.
+
+An agent that reads it takes on three obligations:
+
+- **store it where a credential belongs** — encrypted at rest, never in a log, never in a response;
+- **treat the hub as the place it is edited.** The agent's copy is a mirror keyed on `updatedAt`
+  (§3), not a second editable source. An agent that lets a user edit a mirrored connection
+  re-creates exactly the drift the hub exists to remove;
+- **fail closed.** An unreadable or undecryptable credential is a refusal, not an empty string
+  passed on to the provider — §5, one level down.
 
 ---
 
@@ -511,8 +621,9 @@ everyone in" path.
 
 ## 6. Known blockers
 
-Recorded now because they are load-bearing, and both live in DAgent
-(`ticket-executor/ticket-executor/`).
+Recorded now because they are load-bearing, and they live in DAgent
+(`ticket-executor/ticket-executor/`). 6.2 is closed and kept for the record, since the
+mistake it ends on is the one another agent is most likely to repeat.
 
 ### 6.1 DAgent's auth gate disables itself
 
@@ -525,19 +636,23 @@ that turns authentication off entirely leaves the off switch in production. Phas
 `authDisabled()`, the `te_session` HMAC cookie and `/api/auth/*`, and replaces the gate in
 `proxy.ts` with hub-token validation.
 
-### 6.2 DAgent has no server-side Claude credential
+### 6.2 DAgent has no server-side Claude credential — **closed**
 
-DAgent shells out to whatever `claude` binary is logged in on the host
-(`lib/execution/claudeCli.ts`), with `--dangerously-skip-permissions`. There is no
-`ANTHROPIC_API_KEY` and no credential store anywhere in the repo.
+DAgent now has the materialisation path this entry asked for, in `lib/claudeConfig.ts` and
+`lib/hubCredential.ts`: with hub mode on, `startRun()` resolves the credential
+(`GET /credentials/claude/resolve`, with the access token — admission runs before a run id
+exists, so before a grant can be minted), writes it under
+`~/.ticket-executor/claude-config/<own|shared>/`, points
+`CLAUDE_SECURESTORAGE_CONFIG_DIR` there for every turn, and after each turn posts back the
+rotated token (`PUT …/refreshed`) and the spend (`POST …/usage`) with a run-scoped grant.
+It does **not** fall back to the host's login: no credential is an admission refusal,
+recorded before the run row exists so it is not counted as an agent failure.
 
-Consuming a hub-issued credential therefore means building a materialisation path
-equivalent to QAgent's `claude_credentials.materialize()` — write the resolved credential to a
-per-user `CLAUDE_CONFIG_DIR`, run the CLI against it, capture rotated tokens back to the hub.
-Until that exists, DAgent can consume hub *identity* but not hub *credentials*, and those two
-milestones should not be bundled into one issue. The hub's own
-`api/app/services/claude_credentials.py::materialize` ([ADR 0007](adr/0007-knowledge-builds-run-on-the-hub.md))
-is now a second worked example of that path, alongside QAgent's.
+With hub mode **off** the original behaviour is untouched — the CLI is spawned with an
+unmodified environment and uses whatever `claude` login the host has.
+
+Read the box in §4 before porting this to another agent: the env var is the narrow one, and
+the wide one silently costs the agent its own skills.
 
 Note that [ADR 0007](adr/0007-knowledge-builds-run-on-the-hub.md) removes one thing from
 DAgent's critical path: it can obtain a **knowledge base** from the hub today, with no build

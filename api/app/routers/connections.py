@@ -2,6 +2,7 @@
 
 ```
 GET    /connections                            -> list[ConnectionOut]
+GET    /connections/{id}/secret                -> ConnectionSecretOut
 POST   /connections                            -> ConnectionOut          (201)
 PATCH  /connections/{id}                       -> ConnectionOut
 DELETE /connections/{id}                       -> 204
@@ -12,15 +13,26 @@ GET    /connections/{id}/work-item-metadata    -> WorkItemMetadataOut
 GET    /connections/{id}/repos                 -> AvailableReposOut
 ```
 
-## The PAT never appears in a response
+## The PAT appears in exactly one response, and it is not a connection
 
-There is no schema in this module with a field that can hold one. ``ConnectionOut``
-carries ``hasPat: bool`` and nothing else about the credential (CLAUDE.md ›
-"Endpoints return ``hasPat: true``, never the PAT"; INTEGRATION.md §4). The
-encrypted column is read in exactly one place —
-``connection_service.adapter_for`` — and the plaintext never leaves that call.
-``config`` *is* echoed back, so writes reject credential-shaped keys outright
-rather than trusting the client not to park a token there.
+``ConnectionOut`` carries ``hasPat: bool`` and nothing else about the credential
+(CLAUDE.md › "Endpoints return ``hasPat: true``, never the PAT"), and ``_out()``
+builds it field by field so a new column can never silently start being returned.
+That is unchanged and load-bearing.
+
+``GET /connections/{id}/secret`` is the single deliberate exception (ADR 0010).
+It has its **own** response model, its own route and its own audit trail, and it
+is refused to the hub's own audience. The reason it exists is that DAgent hands
+the credential to an MCP subprocess and to ``git`` — neither of which is a call
+the hub can make on the agent's behalf, so the narrow-endpoint pattern that
+covers every other provider operation has nothing to attach to here.
+
+Two schemas rather than one optional field, on purpose: "does this response
+carry a secret" stays a question you answer by reading the type, not by reading
+a value at runtime.
+
+``config`` *is* echoed back by both, so writes reject credential-shaped keys
+outright rather than trusting the client not to park a token there.
 
 ## Auth posture: CONTRACT, tightened per route
 
@@ -28,10 +40,12 @@ Registered with ``CONTRACT`` in ``main.ROUTERS``, which applies a blanket
 ``Depends(require_principal)``. ``GET /connections`` is in the integration
 contract (INTEGRATION.md §3): an agent calls it with its own token, whose ``aud``
 is ``qagent`` / ``dagent``, so ``require_user`` would reject the very callers the
-contract promises. Every other route here **manages** the hub — creating a
-connection, storing a credential, spending a provider call — and declares
-``Depends(require_user)`` on top, so a hub token is required. An agent token
-therefore reads the catalogue and can do nothing else.
+contract promises. ``GET /connections/{id}/secret`` is contract for the same
+reason and goes further — it is the one route in the hub an agent token reaches
+that a *hub* token does not. Every other route here **manages** the hub —
+creating a connection, storing a credential, spending a provider call — and
+declares ``Depends(require_user)`` on top, so a hub token is required. An agent
+token therefore reads the catalogue, reads a credential, and does nothing else.
 
 ``CONTRACT`` rather than ``MIXED`` on purpose: ``MIXED`` applies no blanket
 dependency, so a future route added here without one would be protected by the
@@ -53,6 +67,7 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from app import crypto
+from app.config import AUDIENCE_HUB
 from app.db import get_db, utcnow
 from app.deps_auth import require_principal, require_user
 from app.logging import logger
@@ -97,6 +112,31 @@ class ConnectionOut(ApiModel):
     last_sync: datetime | None = None
     last_tested_at: datetime | None = None
     created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class ConnectionSecretOut(ApiModel):
+    """**The only schema in this module that carries a credential** (ADR 0010).
+
+    Kept deliberately separate from :class:`ConnectionOut` rather than adding an
+    optional field to it: ``_out()`` is the serialiser that must never leak, and
+    a nullable ``pat`` on the shared shape would make "does this response carry a
+    secret" a runtime question instead of a structural one. Two schemas, one of
+    which is reachable from exactly one route.
+    """
+
+    id: int
+    kind: str
+    label: str = ""
+    base_url: str = ""
+    config: dict[str, Any] = Field(default_factory=dict)
+    capabilities: list[str] = Field(default_factory=list)
+    #: The decrypted PAT. The agent writes it into its own credential store and
+    #: nowhere else; INTEGRATION.md §4 states the obligations that come with it.
+    pat: str
+    #: Bumped by ``onupdate`` on every write, a PAT rotation included. This is the
+    #: agent's cache key: compare it against ``GET /connections`` and re-read this
+    #: endpoint only for a connection that actually moved.
     updated_at: datetime | None = None
 
 
@@ -299,11 +339,89 @@ def list_connections(
 
     INTEGRATION.md §3. Reachable with an *agent* token as well as a hub one,
     because an agent needs to know which connections exist and what each one can
-    supply. It never includes the PAT — until the proxy in §4 exists, this
-    endpoint is informational and agents keep their own provider credentials.
+    supply. It never includes the PAT — an agent that needs the credential itself
+    reads :func:`connection_secret` per connection, and this list's ``updatedAt``
+    is how it knows which ones to bother re-reading.
     """
     rows = connection_service.list_connections(db, principal.id)
     return [_out(conn) for conn in rows]
+
+
+@router.get("/{connection_id}/secret", response_model=ConnectionSecretOut)
+def connection_secret(
+    connection_id: int,
+    principal: User = Depends(require_principal),
+    db: Session = Depends(get_db),
+) -> ConnectionSecretOut:
+    """**The one endpoint that returns a provider PAT** (ADR 0010).
+
+    Every other provider operation an agent performs goes through a narrow
+    endpoint where *the hub* makes the call, so the secret never has to move —
+    ``POST /tickets/sync`` and the ``/tickets/{external_id}/…`` reads and writes.
+    Two consumers have no such seam, both in DAgent: the config it hands to an
+    MCP subprocess, and ``git`` against an authenticated remote. Neither is a call
+    the hub can make on its behalf, so for those the credential crosses.
+
+    What keeps it narrow:
+
+    * **Agent audiences only.** The hub's own SPA deliberately never displays a
+      PAT, so a browser origin must not be able to read one — the same guard
+      ``POST /auth/agent-grant`` applies for the same reason.
+    * **Scoped like every other connection read**, so another member's connection
+      404s rather than 403s.
+    * **Its own response model.** :func:`_out` is untouched and still cannot leak;
+      this is the only serialiser in the module that is allowed to.
+    * **Audited on every call** — success, miss and failure alike. This is the
+      second endpoint in the hub that returns a secret, and the audit row is the
+      only record that it happened.
+    """
+    audience = getattr(principal, "_aud", None) or ""
+    if audience == AUDIENCE_HUB:
+        raise HTTPException(
+            status_code=400, detail="A connection secret is for an agent, not the hub"
+        )
+    conn = get_owned_or_404(db, ProviderConnection, connection_id, principal)
+
+    def _audit(action: str, status: str) -> None:
+        audit_service.record(
+            category="credential",
+            action=action,
+            actor=principal.email,
+            actor_id=principal.id,
+            source=audience,
+            target=f"connection:{conn.id}:{conn.kind}",
+            status=status,
+            owner_id=conn.owner_id,
+            db=db,
+        )
+
+    if not conn.has_pat:
+        _audit("Provider secret resolve found none", "warning")
+        raise HTTPException(
+            status_code=404, detail=f"Connection {conn.id} has no stored credential"
+        )
+
+    pat = crypto.decrypt(conn.pat_encrypted)
+    if not pat:
+        # Never pass an undecryptable blob on as if it were the credential — the
+        # same rule the provider read-throughs apply, one level down.
+        _audit("Provider secret could not be decrypted", "error")
+        raise HTTPException(
+            status_code=502,
+            detail="The stored credential could not be decrypted with the current key",
+        )
+
+    _audit("Resolved a provider secret", "success")
+    return ConnectionSecretOut(
+        id=conn.id,
+        kind=conn.kind,
+        label=conn.label,
+        base_url=conn.base_url,
+        config=dict(conn.config or {}),
+        capabilities=list(conn.capabilities or []),
+        pat=pat,
+        updated_at=conn.updated_at,
+    )
 
 
 @router.post("", response_model=ConnectionOut, status_code=201)

@@ -49,6 +49,7 @@ from app.routers import (
     auth,
     connections,
     credentials,
+    dagent,
     health,
     me,
     projects,
@@ -97,6 +98,17 @@ ROUTERS = (
     # CONTRACT for the same reason: an agent that builds and runs queries has the
     # same reason to read a saved one. Scoped own + shared like everything else.
     (saved_queries, CONTRACT),
+    # CONTRACT: DAgent's own surface, under its own /dagent prefix. It is called
+    # with a token whose aud is "dagent", so require_user would refuse the only
+    # caller it exists for; every route inside is scoped through
+    # get_owned_or_404 exactly like the connections router.
+    #
+    # Registered last and kept entirely separate on purpose. DAgent needs a wider
+    # provider surface than anything else here — pull requests above all — and
+    # widening the shared routers to serve it would change endpoints QAgent and
+    # the hub UI already depend on. This router adds routes and modifies none, so
+    # a deployment that never calls /dagent/* behaves exactly as it did before.
+    (dagent, CONTRACT),
 )
 
 _POSTURE_DEPENDENCY = {

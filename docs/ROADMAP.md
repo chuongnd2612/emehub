@@ -135,12 +135,17 @@ without a second login. QAgent's `users` and `auth_sessions` tables are gone.
   path at all. A grant reaches only the three credential endpoints, dies with its hub session, and
   cannot renew itself.
 
+- ✅ **`GET /connections/{id}/secret`** ([ADR 0010](adr/0010-a-provider-secret-may-cross-to-an-agent.md)) —
+  the one endpoint that returns a provider PAT, to an agent audience only. Added because two cases
+  have no hub-side seam: cloning a repository, and the MCP config DAgent hands to a subprocess.
+  Both need the credential in a *process environment*, which no narrow endpoint can supply. Change
+  detection rides on the `updatedAt` the connection already carried.
+
 **Not done.**
-- `POST /connections/{id}/proxy` — deliberately unbuilt, and now **permanently** so rather than
-  pending. A generic forwarder is an SSRF and header-leak surface that needs its own design; the
-  narrow per-operation endpoints on `/tickets/{external_id}/…` cover every provider call an agent
-  actually makes, without that surface
-  ([INTEGRATION.md §4](INTEGRATION.md#4-secrets-that-cross-the-boundary)).
+- `POST /connections/{id}/proxy` — **abandoned, not deferred**. A generic forwarder is an SSRF and
+  header-leak surface; the narrow per-operation endpoints on `/tickets/{external_id}/…` cover every
+  provider call an agent's own code makes, and for the two that its code does *not* make, ADR 0010
+  is the answer instead ([INTEGRATION.md §4](INTEGRATION.md#4-secrets-that-cross-the-boundary)).
 - RS256 + JWKS, retiring the shared secret. `kid` is already emitted so this is additive.
 - Agent cutover.
 
@@ -203,9 +208,20 @@ base built once serves both agents.
 
 ## Phase 5 — DAgent onboards
 
+> **Hub side: done.** Nothing further is needed here for DAgent to start —
+> `dagent` is a registered audience out of the box, `/auth/agent-token` and
+> `/auth/agent-grant` mint for it, and `GET /connections/{id}/secret` closes the
+> last hub-side gap ([ADR 0010](adr/0010-a-provider-secret-may-cross-to-an-agent.md)).
+> Every remaining item below is agent-side.
+
+- Mirror the hub's provider connections into DAgent, keyed on `updatedAt`, with the hub as the
+  place they are *edited*. This removes DAgent's independently-configured second copy of the same
+  PAT — the duplication [ADR 0001](adr/0001-emehub-is-the-source-of-truth.md) was written about.
 - Delete `authDisabled()`, the `te_session` HMAC cookie and `/api/auth/*`
   ([INTEGRATION.md §6.1](INTEGRATION.md#61-dagents-auth-gate-disables-itself)).
-- Replace the gate in `proxy.ts` with hub-token validation.
+- Replace the gate in `proxy.ts` with hub-token validation. Note this needs a **user model first**:
+  DAgent's session cookie is a constant with no subject, so there is nothing for a hub identity to
+  land on.
 - Build credential materialisation so DAgent can run the Claude CLI with a hub-issued
   credential ([§6.2](INTEGRATION.md#62-dagent-has-no-server-side-claude-credential)).
 - Read projects, repositories and tickets from the hub instead of discovering them per-run.
