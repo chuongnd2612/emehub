@@ -50,9 +50,17 @@ Note the app in `ticket-executor/` is one level down: `ticket-executor/ticket-ex
 api/                FastAPI (Python 3.13, uv), SQLAlchemy 2, Alembic, Postgres 16
 app/                React 19, Vite, TypeScript, Tailwind 4
 docker-compose.yml  api + db + web (nginx)
+edge/               the suite's front door — one origin for hub + agents (own compose project)
+dagent/             D-Agent's container, built from the sibling checkout (own compose project)
 design/             design system + landing mockup + brand assets
 docs/               context, roadmap, integration contract, ADRs
 ```
+
+`dagent/` deploys an application that lives in another repository, which is the one place this repo
+builds something it does not own. It is a stopgap with a written exit
+([docs/DAGENT-HANDOFF.md §1](docs/DAGENT-HANDOFF.md)) and not a licence to keep sibling code here —
+D-Agent ships no container assets of its own, and the alternative was leaving it the one app in the
+suite that is not deployed.
 
 Mirrors QAgent deliberately ([ADR 0002](docs/adr/0002-stack-fastapi-react-mirroring-q-agent.md)).
 Config is prefixed `EMEHUB_`; ports must not clash with QAgent's (api 8787, web 5174, db 5456)

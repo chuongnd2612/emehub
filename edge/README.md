@@ -10,6 +10,14 @@ app.<domain>
   /qagent/*    -> q-agent SPA, its /api and its /auth
 ```
 
+**D-Agent is deliberately not here.** It runs as a container in the suite
+([`dagent/README.md`](../dagent/README.md)) but on its own origin, because mounting a Next server
+under a path prefix means `basePath`, and D-Agent's client code has ~48 root-relative
+`fetch("/api/…")` calls that would then land on the hub's API instead of its own. That is a change
+inside D-Agent ([docs/DAGENT-HANDOFF.md §2](../docs/DAGENT-HANDOFF.md)). Its container already
+answers to `dagent-web` on the `emesoft` network, so adding the location block here is the small
+half of that work.
+
 ## Cutting over
 
 Nothing here is switched on by default. Each step is reversible, and the old hostnames keep

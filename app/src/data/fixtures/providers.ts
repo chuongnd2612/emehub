@@ -25,7 +25,13 @@ export const PRODUCTS: Product[] = [
     key: "d",
     name: "D-Agent",
     code: "ticket-executor",
-    live: false,
+    // Was `false` while D-Agent was not deployed anywhere. It now runs as a
+    // container in the suite and the hub's Launch button reaches it
+    // (dagent/README.md), so "Placeholder" had stopped being true. Still a
+    // deliberate edit and not something the registry flips: `getProducts` reads
+    // launch state from GET /agents and must never turn this pill Live merely
+    // because somebody set a URL.
+    live: true,
     role: "Developer assistant",
     description:
       "Picks up a ticket, plans the change, writes the code and opens the pull request — inheriting the same knowledge base Q-Agent indexes.",
