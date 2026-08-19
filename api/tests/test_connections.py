@@ -102,6 +102,10 @@ def test_the_pat_never_appears_in_any_connection_response(client, member, header
             client.get(f"/connections/{cid}/sprints", headers=hdrs).json(),
         ),
         (
+            "GET /connections/{id}/organizations",
+            client.get(f"/connections/{cid}/organizations", headers=hdrs).json(),
+        ),
+        (
             "GET /connections/{id}/projects",
             client.get(f"/connections/{cid}/projects", headers=hdrs).json(),
         ),
@@ -356,6 +360,104 @@ def test_the_audit_trail_records_the_change_but_never_the_value(
     assert updated.meta == "pat"
 
 
+# ------------------------------------------------- organisation discovery (#167)
+def test_organizations_are_listed_for_a_connection_holding_only_a_pat(
+    client, member, headers, monkeypatch
+):
+    """The whole point of the endpoint: it answers *before* a base URL exists,
+    which is what lets the form ask for the credential first (#166)."""
+    from app.services.adapters.azure_devops import AzureDevOpsAdapter
+
+    monkeypatch.setattr(
+        AzureDevOpsAdapter,
+        "list_organizations",
+        lambda self: [
+            {"name": "emesoft", "url": "https://dev.azure.com/emesoft"},
+            {"name": "surency", "url": "https://dev.azure.com/surency"},
+        ],
+    )
+    hdrs = headers("member@emesoft.net")
+    created = _create(client, hdrs, baseUrl="", config={})
+    assert created["baseUrl"] == "", "a credential-only connection is a valid draft"
+
+    body = client.get(f"/connections/{created['id']}/organizations", headers=hdrs).json()
+    assert body["supported"] is True
+    assert body["error"] == ""
+    assert [o["name"] for o in body["organizations"]] == ["emesoft", "surency"]
+    assert body["organizations"][0]["url"] == "https://dev.azure.com/emesoft"
+
+
+def test_a_provider_without_discovery_says_unsupported_not_empty(
+    client, member, headers
+):
+    """`supported: false` and `organizations: []` must not be the same answer —
+    one means "type the URL", the other means "this token sees nothing"."""
+    hdrs = headers("member@emesoft.net")
+    created = _create(client, hdrs, kind="github", baseUrl="https://github.com/emesoft")
+
+    body = client.get(f"/connections/{created['id']}/organizations", headers=hdrs).json()
+    assert body["supported"] is False
+    assert body["organizations"] == []
+    assert body["error"] == ""
+
+
+def test_a_scope_failure_is_returned_as_a_message_not_a_500(
+    client, member, headers, monkeypatch
+):
+    """A PAT without `vso.profile` is a *working* credential that cannot do this
+    one thing, so the picker has to render the reason and offer manual entry."""
+    from app.services.adapters.azure_devops import AzureDevOpsAdapter
+    from app.services.adapters.base import ProviderError
+
+    def _refuse(self):
+        raise ProviderError(
+            "This token cannot list organisations — it needs the 'vso.profile' scope."
+        )
+
+    monkeypatch.setattr(AzureDevOpsAdapter, "list_organizations", _refuse)
+    hdrs = headers("member@emesoft.net")
+    created = _create(client, hdrs)
+
+    response = client.get(f"/connections/{created['id']}/organizations", headers=hdrs)
+    assert response.status_code == 200
+    assert "vso.profile" in response.json()["error"]
+    assert response.json()["organizations"] == []
+
+
+def test_discovery_does_not_require_a_capability_the_draft_has_not_chosen(
+    client, member, headers, monkeypatch
+):
+    """Every other metadata read is capability-gated. Discovery cannot be: it runs
+    while the connection is still being set up, and a repository-only connection
+    still has to be configured."""
+    from app.services.adapters.azure_devops import AzureDevOpsAdapter
+
+    monkeypatch.setattr(AzureDevOpsAdapter, "list_organizations", lambda self: [])
+    hdrs = headers("member@emesoft.net")
+    created = _create(client, hdrs, capabilities=["repository"])
+
+    assert (
+        client.get(f"/connections/{created['id']}/work-item-metadata", headers=hdrs).status_code
+        == 400
+    ), "the capability gate still applies to the reads that have one"
+    assert (
+        client.get(f"/connections/{created['id']}/organizations", headers=hdrs).status_code == 200
+    )
+
+
+def test_an_agent_token_cannot_spend_the_pat_on_discovery(
+    client, member, login, headers
+):
+    """Discovery costs a provider call against a stored credential, so it is
+    hub-only like every other metadata read."""
+    _create(client, headers("member@emesoft.net"))
+    agent = login("member@emesoft.net", PASSWORD)["tokens"][AUDIENCE_QAGENT]
+
+    assert client.get(
+        "/connections/1/organizations", headers={"Authorization": f"Bearer {agent}"}
+    ).status_code == 401
+
+
 # ---------------------------------------------------------------- auth posture
 def test_every_connection_endpoint_refuses_an_anonymous_caller(client, member):
     cases = [
@@ -365,6 +467,7 @@ def test_every_connection_endpoint_refuses_an_anonymous_caller(client, member):
         ("delete", "/connections/1"),
         ("post", "/connections/1/test"),
         ("get", "/connections/1/sprints"),
+        ("get", "/connections/1/organizations"),
         ("get", "/connections/1/projects"),
         ("get", "/connections/1/work-item-metadata"),
         ("get", "/connections/1/repos"),

@@ -43,6 +43,18 @@ from app.services.adapters.base import (
 API_VERSION = "7.1"
 COMMENTS_API_VERSION = "7.1-preview.3"
 
+#: Where accounts live. Azure DevOps splits its API across two hosts: everything
+#: scoped to an organisation is on ``dev.azure.com/{org}``, while *which
+#: organisations exist for this identity* is on the profile service, which is
+#: org-less by definition. So organisation discovery cannot reuse ``_client()``
+#: — it is the one read that runs before an organisation is known.
+VSSPS_BASE_URL = "https://app.vssps.visualstudio.com"
+
+#: The accounts and profile endpoints are older than the 7.1 surface and answer
+#: on the preview version; asking for 7.1 there returns 400.
+PROFILE_API_VERSION = "7.1-preview.3"
+ACCOUNTS_API_VERSION = "7.1-preview.1"
+
 #: Cap on a single fetch. A 2000-item project must not hang a sync.
 MAX_SYNC_ITEMS = 200
 
@@ -180,6 +192,7 @@ class AzureDevOpsAdapter(ProviderAdapter):
     # ADO has no cheap per-work-item test-case query, so list_test_cases answers
     # project-wide and says so rather than pretending to be scoped.
     test_cases_project_wide = True
+    supports_organizations = True
 
     def __init__(self, config: dict, secrets: dict, *, transport=None) -> None:
         super().__init__(config, secrets, transport=transport)
@@ -197,6 +210,24 @@ class AzureDevOpsAdapter(ProviderAdapter):
         token = base64.b64encode(f":{self.pat}".encode()).decode()
         return self._http(
             base_url=self.org_url,
+            headers={
+                "Authorization": f"Basic {token}",
+                "Content-Type": "application/json",
+            },
+        )
+
+    def _identity_client(self) -> httpx.Client:
+        """A client for the profile service — PAT only, no organisation.
+
+        Separate from :meth:`_client` because that one refuses to build without
+        an ``org_url``, which is correct for every other call and exactly wrong
+        for this one.
+        """
+        if not self.pat:
+            raise ProviderError("Azure DevOps PAT is not configured")
+        token = base64.b64encode(f":{self.pat}".encode()).decode()
+        return self._http(
+            base_url=VSSPS_BASE_URL,
             headers={
                 "Authorization": f"Basic {token}",
                 "Content-Type": "application/json",
@@ -238,6 +269,80 @@ class AzureDevOpsAdapter(ProviderAdapter):
                 "message": f"Azure DevOps connection failed: {self._scrub(exc)}",
                 "detail": {},
             }
+
+    def list_organizations(self) -> list[dict[str, Any]]:
+        """Organisations this PAT can see, newest API shape normalised.
+
+        Two calls, because the accounts endpoint identifies the member by id and
+        a PAT does not carry one: read the profile to learn ``id``, then ask for
+        that member's accounts.
+
+        ## The failure that matters
+
+        A PAT is scoped, and a token created for work items alone has no
+        ``vso.profile`` — the profile call then answers 401 while every other
+        call this adapter makes keeps working perfectly. That is not a broken
+        credential and must not read like one, so it is translated into a
+        sentence naming the scope. The caller's job is to fall back to asking for
+        the URL, not to reject the token.
+
+        On-premises collections do not host the profile service at all; they fail
+        the same way and take the same fallback.
+        """
+        try:
+            with self._identity_client() as client:
+                profile = client.get(
+                    f"/_apis/profile/profiles/me?api-version={PROFILE_API_VERSION}"
+                )
+                if profile.status_code in (401, 403):
+                    raise ProviderError(
+                        "This token cannot list organisations — it needs the "
+                        "'vso.profile' scope. Enter the organisation URL instead."
+                    )
+                profile.raise_for_status()
+                member_id = str(profile.json().get("id", "")).strip()
+                if not member_id:
+                    raise ProviderError(
+                        "Azure DevOps did not identify this token's account."
+                    )
+
+                resp = client.get(
+                    "/_apis/accounts",
+                    params={"memberId": member_id, "api-version": ACCOUNTS_API_VERSION},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except ProviderError:
+            raise
+        except httpx.HTTPStatusError as exc:
+            raise ProviderError(
+                f"Azure DevOps returned {exc.response.status_code} while listing organisations"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError(
+                f"Could not reach Azure DevOps: {self._scrub(exc)}"
+            ) from exc
+
+        out: list[dict[str, Any]] = []
+        for account in data.get("value", []):
+            name = str(account.get("accountName", "")).strip()
+            if not name:
+                continue
+            # `accountUri` is the provider's own address for the account, and it
+            # is what gets stored — derived URLs are a last resort, because an
+            # account's host is not reliably a function of its name.
+            #
+            # The one substitution: some tenants answer with a vssps identity URI
+            # (`https://vssps.dev.azure.com/{org}`), which is the profile
+            # service's address for the account and not an API root any of the
+            # other calls can use. A legacy `{org}.visualstudio.com` URI is left
+            # exactly as it is — that host is still live and `parse_org_url`
+            # already reads it.
+            url = str(account.get("accountUri", "")).strip()
+            if not url or "vssps." in url:
+                url = f"https://dev.azure.com/{quote(name)}"
+            out.append({"name": name, "url": url.rstrip("/")})
+        return sorted(out, key=lambda o: o["name"].lower())
 
     # -- Read -------------------------------------------------------------
     def list_projects(self) -> list[dict[str, Any]]:

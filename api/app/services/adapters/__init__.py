@@ -22,6 +22,15 @@ from app.services.adapters.base import (
 
 _REGISTRY: dict[str, type[ProviderAdapter]] = {}
 
+#: Whether the built-in adapter modules have been imported. A separate flag and
+#: not ``bool(_REGISTRY)``: importing *one* adapter module — which anything
+#: holding a direct reference to a concrete adapter does — registers that kind and
+#: makes the registry non-empty, and an emptiness check then treats the job as
+#: done. Every other provider is missing from that point on, with the symptom
+#: appearing much later as "No adapter registered for provider 'github'" on a
+#: connection that is perfectly well configured.
+_LOADED = False
+
 
 def register(kind: str, cls: type[ProviderAdapter]) -> None:
     """Register ``cls`` as the adapter for ``kind``. Called at module import."""
@@ -29,14 +38,18 @@ def register(kind: str, cls: type[ProviderAdapter]) -> None:
 
 
 def _load_builtin() -> None:
+    """Import every built-in adapter module, once, for its ``register()`` call."""
+    global _LOADED
+    if _LOADED:
+        return
+    _LOADED = True
     from app.services.adapters import azure_devops, github, jira  # noqa: F401
 
 
 def registered_kinds() -> tuple[str, ...]:
     """Every kind an adapter exists for. Used by the tests that assert the
     adapter registry and the model's kind list have not drifted apart."""
-    if not _REGISTRY:
-        _load_builtin()
+    _load_builtin()
     return tuple(_REGISTRY)
 
 
@@ -58,8 +71,7 @@ def get_adapter(
     Raises:
         ProviderError: no adapter is registered for ``kind``.
     """
-    if not _REGISTRY:
-        _load_builtin()
+    _load_builtin()
     cls = _REGISTRY.get(kind)
     if cls is None:
         raise ProviderError(f"No adapter registered for provider '{kind}'")

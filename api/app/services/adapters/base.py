@@ -124,6 +124,12 @@ class ProviderAdapter(ABC):
     #: :meth:`list_test_cases` answers for the whole project, ignoring the
     #: ``ticket_external_id`` hint. True for Azure DevOps.
     test_cases_project_wide: bool = False
+    #: :meth:`list_organizations` is really implemented. The distinction matters
+    #: more here than for the flags above, because a connection form reads it to
+    #: decide between offering a picker and asking the user to type a URL: "this
+    #: provider cannot enumerate accounts" and "this credential can see none" are
+    #: the same empty list and completely different sentences.
+    supports_organizations: bool = False
 
     def __init__(
         self,
@@ -249,6 +255,25 @@ class ProviderAdapter(ABC):
 
     def list_repos(self) -> list[dict[str, Any]]:
         """Git repositories as ``[{name, clone_url, web_url, default_branch}]``."""
+        return []
+
+    def list_organizations(self) -> list[dict[str, Any]]:
+        """Organisations this **credential** can see, as ``[{name, url}]``.
+
+        The one read that deliberately does not need the connection to be
+        configured: it answers *before* an organisation URL exists, which is the
+        whole reason a connection form can offer a picker instead of asking for a
+        URL to be composed by hand.
+
+        ``url`` comes from the provider and is stored verbatim as ``base_url``.
+        It is never rebuilt from ``name`` — an account's host is not always
+        derivable from its name, and guessing it would send the credential
+        somewhere the provider never named.
+
+        Overriders must set :attr:`supports_organizations` and raise
+        :class:`ProviderError` on failure, so a caller can tell "cannot" from
+        "none" from "the provider did not answer".
+        """
         return []
 
     def list_test_cases(self, ticket_external_id: str | None = None) -> list[dict[str, Any]]:

@@ -266,6 +266,31 @@ class AvailableReposOut(ApiModel):
     error: str = ""
 
 
+class OrganizationOut(ApiModel):
+    name: str = ""
+    #: The provider's own address for the account, stored verbatim as
+    #: ``base_url`` when the user picks it.
+    url: str = ""
+
+
+class AvailableOrgsOut(ApiModel):
+    """The organisation picker's wrapper.
+
+    Carries ``supported`` as well as ``error`` because the picker has three
+    outcomes and only two of them are failures: this provider cannot enumerate
+    accounts at all (fall back to typing a URL, and say nothing alarming), the
+    call failed (say why), or it worked and there are none. Collapsing the first
+    into an empty list would have the UI report a working credential as seeing
+    nothing.
+    """
+
+    provider: str = ""
+    #: Whether the kind's adapter implements discovery at all.
+    supported: bool = True
+    organizations: list[OrganizationOut] = Field(default_factory=list)
+    error: str = ""
+
+
 # ----------------------------------------------------------------- helpers
 def _out(conn: ProviderConnection) -> ConnectionOut:
     """Serialise a connection. The one function that decides what leaves the hub.
@@ -603,6 +628,47 @@ def list_sprints(
         _log_unavailable("sprints", conn, exc)
         return []
     return [SprintOut.model_validate(s) for s in sprints]
+
+
+@router.get("/{connection_id}/organizations", response_model=AvailableOrgsOut)
+def list_organizations(
+    connection_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> AvailableOrgsOut:
+    """Organisations the stored credential can see.
+
+    The one metadata read that works on a connection holding **only a PAT**, which
+    is the point: it is what lets the connection form ask for the credential first
+    and then offer a picker, instead of asking the user to compose
+    ``https://dev.azure.com/{org}`` from memory (#166).
+
+    Deliberately takes no organisation parameter. An endpoint that accepted a URL
+    and spent the stored PAT against it would let any authenticated caller aim a
+    workspace credential at a host of their choosing; here the candidate URLs can
+    only ever come from the provider itself.
+
+    No capability requirement, unlike the reads below it: discovery runs before a
+    connection is configured enough to be bound to anything, and a connection that
+    advertises `repository` alone still has to be set up.
+    """
+    conn = _load(db, connection_id, user)
+    adapter = _adapter(conn)
+    if not getattr(adapter, "supports_organizations", False):
+        return AvailableOrgsOut(provider=conn.kind, supported=False)
+    try:
+        orgs = adapter.list_organizations()
+    except ProviderError as exc:
+        # Carries the adapter's own sentence — "this token needs the vso.profile
+        # scope" is actionable in a way that "discovery failed" is not.
+        return AvailableOrgsOut(provider=conn.kind, error=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        _log_unavailable("organizations", conn, exc)
+        return AvailableOrgsOut(provider=conn.kind, error="Could not list organisations")
+    return AvailableOrgsOut(
+        provider=conn.kind,
+        organizations=[OrganizationOut.model_validate(o) for o in orgs],
+    )
 
 
 @router.get("/{connection_id}/projects", response_model=list[ConnectionProjectOut])
