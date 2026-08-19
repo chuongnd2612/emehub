@@ -110,14 +110,18 @@ export function Dropdown<T extends string = string>({
             ref={panelRef}
             role="listbox"
             className={cn(
-              "fixed z-[1000] animate-scale-in overflow-hidden rounded-[13px]",
-              "border border-bd2 bg-pop p-1.5 shadow-pop",
+              // Scrolls vertically, never horizontally: a long list has to be
+              // reachable, and a sideways scrollbar under a menu is always a
+              // layout bug rather than a feature.
+              "fixed z-[1000] animate-scale-in overflow-x-hidden overflow-y-auto",
+              "rounded-[13px] border border-bd2 bg-pop p-1.5 shadow-pop",
               className,
             )}
             style={{
               top: pos.top,
               left: pos.left,
               width,
+              maxHeight: pos.maxHeight,
               transformOrigin: pos.transformOrigin,
             }}
           >
