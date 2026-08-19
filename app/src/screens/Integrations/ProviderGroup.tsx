@@ -31,6 +31,8 @@ export interface ProviderGroupProps {
   onSave: (connection: Connection) => void;
   onRemove: (connection: Connection) => void;
   onAdd: () => void;
+  /** Organisation URLs already configured elsewhere — see AzureDevOpsSetup. */
+  knownOrgUrls?: string[];
 }
 
 export function ProviderGroup({
@@ -49,6 +51,7 @@ export function ProviderGroup({
   onSave,
   onRemove,
   onAdd,
+  knownOrgUrls,
 }: ProviderGroupProps) {
   const count = group.connections.length;
   const connectionsLabel = `${count} ${count === 1 ? "connection" : "connections"}`;
@@ -102,6 +105,7 @@ export function ProviderGroup({
           onTest={() => onTest(c)}
           onSave={() => onSave(c)}
           onRemove={() => onRemove(c)}
+          knownOrgUrls={knownOrgUrls}
         />
       ))}
     </section>
