@@ -25,6 +25,7 @@ import {
 import {
   PROVIDERS,
   createConnection,
+  draftOf,
   getConnections,
   removeConnection,
   saveConnection,
@@ -152,12 +153,21 @@ export default function IntegrationsScreen() {
     // One test in flight at a time, as in the prototype.
     if (testingId) return;
     setTestingId(connection.id);
+    // Test what is on screen, not what is stored (#175). Proving a credential
+    // used to require committing it first, and the failure then described a
+    // connection the user had already changed — an organisation picked in the
+    // form, and "organisation URL is not configured" from the test underneath it.
+    const draft = draftOf(connection);
+    const isDraft = Object.keys(draft).length > 0;
     try {
-      const result = await testConnection(connection.id);
+      const result = await testConnection(connection.id, isDraft ? draft : undefined);
       patchConnection(connection.id, (c) => ({
         ...c,
-        status: result.ok ? "Connected" : "Attention",
-        lastTested: "active now",
+        // A draft verdict is not recorded by the hub, so the row must not claim
+        // otherwise: the pill keeps describing the *saved* connection, and the
+        // notice below the buttons carries what the probe actually said.
+        status: isDraft ? c.status : result.ok ? "Connected" : "Attention",
+        lastTested: isDraft ? c.lastTested : "active now",
       }));
       setResults((r) => ({
         ...r,

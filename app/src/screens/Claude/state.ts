@@ -14,7 +14,12 @@
 //     nothing to reveal. `GET /credentials/claude/resolve` is the agents'
 //     endpoint and is deliberately not called from the SPA.
 
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { toast } from "@/components/ui";
 import {
   InvalidCredentialFileError,
@@ -22,10 +27,12 @@ import {
   credentialStatus,
   deleteOwnCredential,
   deleteSharedCredential,
+  getClaudeCredentialRevision,
   getClaudeUsage,
   getCredentialState,
   setCredentialMode,
   statusOfCredential,
+  subscribeClaudeCredentials,
   testCredential,
   uploadOwnCredential,
   uploadSharedCredential,
@@ -193,6 +200,15 @@ export function useClaudeSettings(): ClaudeSettings {
   const [prefStream, setPrefStream] = useState(false);
 
   const reload = useCallback(() => setReloadKey((n) => n + 1), []);
+
+  // The same signal the header chip listens to, in the other direction: the
+  // chip's Shared|Personal switch changes the credential from outside this
+  // screen, and the screen behind it must not keep describing the old one.
+  const revision = useSyncExternalStore(
+    subscribeClaudeCredentials,
+    getClaudeCredentialRevision,
+  );
+  useEffect(reload, [reload, revision]);
 
   useEffect(() => {
     let live = true;

@@ -138,10 +138,14 @@ export function ConnectionRow({
       </div>
 
       {expanded && (
-        <div className="border-t border-bd3 px-[18px] pt-1 pb-[18px]">
-          <div className="my-4 grid grid-cols-2 gap-[14px]">
+        <div className="border-t border-bd3 px-[18px] pt-1 pb-[16px]">
+          {/* Three columns, not two, and the component's own 36px field height
+              rather than a local 40px override. The form is six short values;
+              at 2-up and 40px it filled a screen and read as heavier than the
+              decisions it holds. */}
+          <div className="mt-3 mb-[10px] grid grid-cols-3 gap-x-[14px] gap-y-[10px]">
             <div>
-              <div className="mb-[7px] text-[11.5px] font-semibold text-muted">
+              <div className="mb-[5px] text-[11px] font-semibold text-muted">
                 Label
               </div>
               <Input
@@ -150,20 +154,29 @@ export function ConnectionRow({
                 onChange={(e) => onLabelChange(e.target.value)}
                 autoComplete="off"
                 aria-label="Label"
-                className="h-10"
               />
             </div>
 
             {/* Azure DevOps is configured credential-first and discovers the
-                rest of its own settings, so it owns its fields (#166). The other
-                providers keep the plain grid: GitHub and Jira have equivalent
-                account APIs, but each with its own auth quirks, and a shared
-                abstraction guessed at from one example would be worse than two
-                honest implementations. */}
+                rest of its own settings, so it owns its fields (#166). It renders
+                *inside* this grid — the component wraps them in `display:
+                contents` so they take their own columns rather than starting a
+                second grid underneath, which is what stacked them full-width.
+                The other providers keep the plain grid: GitHub and Jira have
+                equivalent account APIs, but each with its own auth quirks, and a
+                shared abstraction guessed at from one example would be worse than
+                two honest implementations. */}
+            {connection.kind === "azure_devops" && (
+              <AzureDevOpsSetup
+                connection={connection}
+                onFieldChange={onFieldChange}
+                knownOrgUrls={knownOrgUrls}
+              />
+            )}
             {connection.kind !== "azure_devops" &&
               connection.fields.map((f) => (
                 <div key={f.key}>
-                  <div className="mb-[7px] text-[11.5px] font-semibold text-muted">
+                  <div className="mb-[5px] text-[11px] font-semibold text-muted">
                     {f.label}
                   </div>
                   {/* Secret fields stay type="password" and start empty — the hub
@@ -175,21 +188,12 @@ export function ConnectionRow({
                     onChange={(e) => onFieldChange(f.key, e.target.value)}
                     autoComplete="off"
                     aria-label={f.label}
-                    className="h-10"
                   />
                 </div>
               ))}
           </div>
 
-          {connection.kind === "azure_devops" && (
-            <AzureDevOpsSetup
-              connection={connection}
-              onFieldChange={onFieldChange}
-              knownOrgUrls={knownOrgUrls}
-            />
-          )}
-
-          <div className="flex flex-wrap items-center gap-[10px]">
+          <div className="mt-[14px] flex flex-wrap items-center gap-[8px]">
             <button
               type="button"
               onClick={onTest}

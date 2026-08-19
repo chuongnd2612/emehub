@@ -379,6 +379,39 @@ export interface ClaudeUsage {
 
 const CREDENTIAL_PATH = "/credentials/claude";
 
+/* ── Change notification ──────────────────────────────────────────────────
+   The header chip reports which Claude credential a run would use. It read it
+   on mount and when its popover opened, so changing the credential in Claude
+   Settings — uploading, switching mode, deleting — left the header describing
+   the previous state until the page was reloaded. A status that is wrong until
+   refreshed is worse than one that is absent: nothing about it looks stale.
+
+   The signal lives here, next to the mutations, rather than in a store each
+   screen has to remember to poke. Every write below announces itself, so a new
+   caller of any of them gets a live header for free, and a new *reader* only has
+   to subscribe. Deliberately a bare revision counter and not the state itself:
+   two subscribers must not disagree, and re-reading is one cheap request.       */
+
+let revision = 0;
+const listeners = new Set<() => void>();
+
+/** For `useSyncExternalStore`. */
+export function subscribeClaudeCredentials(onChange: () => void): () => void {
+  listeners.add(onChange);
+  return () => listeners.delete(onChange);
+}
+
+/** For `useSyncExternalStore` — changes whenever the credential might have. */
+export function getClaudeCredentialRevision(): number {
+  return revision;
+}
+
+/** Announce a change every reader should act on. */
+function credentialsChanged(): void {
+  revision += 1;
+  for (const listener of listeners) listener();
+}
+
 /** `GET /credentials/claude`. */
 export const getCredentialState = (): Promise<ClaudeCredentialState> =>
   api.get<ClaudeCredentialState>(CREDENTIAL_PATH);
@@ -391,15 +424,18 @@ export const uploadOwnCredential = async (
   file: File,
 ): Promise<ClaudeCredentialState> => {
   const { raw, parsed } = await readCredentialFile(file);
-  return api.put<ClaudeCredentialState>(CREDENTIAL_PATH, {
+  const next = await api.put<ClaudeCredentialState>(CREDENTIAL_PATH, {
     credentials: raw,
     label: parsed.filename,
   });
+  credentialsChanged();
+  return next;
 };
 
 /** `DELETE /credentials/claude` — falls the caller back to the shared account. */
 export const deleteOwnCredential = async (): Promise<void> => {
   await api.delete(CREDENTIAL_PATH);
+  credentialsChanged();
 };
 
 /**
@@ -407,25 +443,33 @@ export const deleteOwnCredential = async (): Promise<void> => {
  * deleting either. The hub 400s when there is no own credential to store the
  * preference on, or when `shared` has nothing to fall back to.
  */
-export const setCredentialMode = (
+export const setCredentialMode = async (
   mode: "own" | "shared",
-): Promise<ClaudeCredentialState> =>
-  api.put<ClaudeCredentialState>(`${CREDENTIAL_PATH}/mode`, { mode });
+): Promise<ClaudeCredentialState> => {
+  const next = await api.put<ClaudeCredentialState>(`${CREDENTIAL_PATH}/mode`, {
+    mode,
+  });
+  credentialsChanged();
+  return next;
+};
 
 /** `PUT /credentials/claude/shared` — admin only; 403 for a member. */
 export const uploadSharedCredential = async (
   file: File,
 ): Promise<ClaudeCredentialState> => {
   const { raw, parsed } = await readCredentialFile(file);
-  return api.put<ClaudeCredentialState>(`${CREDENTIAL_PATH}/shared`, {
-    credentials: raw,
-    label: parsed.filename,
-  });
+  const next = await api.put<ClaudeCredentialState>(
+    `${CREDENTIAL_PATH}/shared`,
+    { credentials: raw, label: parsed.filename },
+  );
+  credentialsChanged();
+  return next;
 };
 
 /** `DELETE /credentials/claude/shared` — admin only. */
 export const deleteSharedCredential = async (): Promise<void> => {
   await api.delete(`${CREDENTIAL_PATH}/shared`);
+  credentialsChanged();
 };
 
 /**

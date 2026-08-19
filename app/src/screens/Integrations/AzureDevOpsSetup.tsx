@@ -38,8 +38,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Dropdown, Icon, Input, Spinner } from "@/components/ui";
 import {
-  discoverConnectionProjects,
   getConnectionOrganizations,
+  previewConnectionProjects,
   type Connection,
   type ProviderOrganization,
 } from "@/data";
@@ -135,9 +135,7 @@ function messageOf(err: unknown, fallback: string): string {
 /** A label above a field, matching the generic grid's. */
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mb-[7px] text-[11.5px] font-semibold text-muted">
-      {children}
-    </div>
+    <div className="mb-[5px] text-[11px] font-semibold text-muted">{children}</div>
   );
 }
 
@@ -167,8 +165,8 @@ function PickerButton({
       aria-label={label}
       aria-expanded={open}
       className={cn(
-        "flex h-10 w-full cursor-pointer items-center gap-2 rounded-control border border-bd2",
-        "bg-card2 px-[11px] text-left text-[12.5px] transition-colors duration-200",
+        "flex h-9 w-full cursor-pointer items-center gap-2 rounded-control-lg border border-bd2",
+        "bg-card2 px-3 text-left text-[12.5px] font-semibold transition-colors duration-200",
         "hover:border-bd focus-visible:border-pb focus-visible:outline-none",
         value ? "text-txt2" : "text-faint",
       )}
@@ -202,7 +200,7 @@ function StepNote({
   onAction?: () => void;
 }) {
   return (
-    <p className="mt-[6px] mb-0 text-[11.5px] leading-[1.5] text-faint">
+    <p className="mt-[5px] mb-0 text-[11px] leading-[1.45] text-faint">
       {children}
       {action && onAction && (
         <>
@@ -252,6 +250,10 @@ export function AzureDevOpsSetup({
     connection.fields.find((f) => f.key === key)?.value ?? "";
   const baseUrl = fieldValue(FIELD_BASE_URL);
   const project = fieldValue(FIELD_PROJECT);
+  // Declared here rather than beside the picker's options: the project effect
+  // depends on it, and a `const` referenced above its declaration is a temporal
+  // dead zone error at render, not a subtle bug — the screen simply throws.
+  const currentRoot = orgRoot(baseUrl);
   const patField = connection.fields.find((f) => f.key === "pat");
 
   const [orgs, setOrgs] = useState<ProviderOrganization[]>([]);
@@ -310,7 +312,13 @@ export function AzureDevOpsSetup({
     async (forUrl: string) => {
       setProjectPhase({ state: "loading" });
       try {
-        const found = await discoverConnectionProjects(connection.id);
+        // The organisation on screen, not the saved one (#175). Choosing an
+        // organisation and then being told to save before its projects appear
+        // makes the second picker feel broken — nothing in the flow explains why
+        // choosing a thing does not populate the thing next to it.
+        const found = await previewConnectionProjects(connection.id, {
+          baseUrl: forUrl,
+        });
         projectsFor.current = forUrl;
         setProjects(found.map((p) => p.name).filter(Boolean));
         setProjectPhase({ state: "ready" });
@@ -320,7 +328,6 @@ export function AzureDevOpsSetup({
           message: messageOf(err, "The hub could not list projects."),
           retryable: true,
         });
-        setProjectManual(true);
       }
     },
     [connection.id],
@@ -333,20 +340,24 @@ export function AzureDevOpsSetup({
     void loadOrgs();
   }, [connection.hasPat, orgPhase.state, loadOrgs]);
 
-  // Projects, whenever the *saved* organisation changes — `savedBaseUrl`, never
-  // the editable field, because the hub reads the stored connection. So this
-  // does not fire on every keystroke, and it does fire after a save.
+  // Projects follow the organisation that is *selected*, which since #175 no
+  // longer has to be the saved one.
+  //
+  // Keyed on `orgRoot` rather than the raw field: it changes once per
+  // organisation rather than once per keystroke, so typing a URL by hand does
+  // not fire a provider call per character. A picked organisation lands in one
+  // step and loads immediately, which is the point.
   useEffect(() => {
-    if (!connection.hasPat || !connection.savedBaseUrl) return;
-    if (projectsFor.current === connection.savedBaseUrl) return;
-    void loadProjects(connection.savedBaseUrl);
-  }, [connection.hasPat, connection.savedBaseUrl, loadProjects]);
+    if (!connection.hasPat || !currentRoot) return;
+    if (projectsFor.current === currentRoot) return;
+    void loadProjects(currentRoot);
+  }, [connection.hasPat, currentRoot, loadProjects]);
 
   /* ── 1. the credential ─────────────────────────────────────────────────── */
   if (!connection.hasPat) {
     return (
-      <div className="my-4">
-        <div className="max-w-[420px]">
+      <div className="contents">
+        <div className="col-span-2">
           <FieldLabel>Personal access token</FieldLabel>
           <Input
             type="password"
@@ -355,7 +366,6 @@ export function AzureDevOpsSetup({
             onChange={(e) => onFieldChange("pat", e.target.value)}
             autoComplete="off"
             aria-label="Personal access token"
-            className="h-10"
           />
           {/* Deliberately does not promise the organisation list. A token
               scoped to one organisation — the Azure DevOps default — cannot read
@@ -381,7 +391,6 @@ export function AzureDevOpsSetup({
     const root = orgRoot(url);
     if (root && !orgChoices.has(root)) orgChoices.set(root, orgLabel(root));
   }
-  const currentRoot = orgRoot(baseUrl);
   if (currentRoot && !orgChoices.has(currentRoot))
     orgChoices.set(currentRoot, orgLabel(currentRoot));
 
@@ -396,7 +405,10 @@ export function AzureDevOpsSetup({
   const canPickOrg = orgItems.length > 0;
 
   return (
-    <div className="my-4 grid grid-cols-2 gap-[14px]">
+    // `contents`, so these fields join the row's own three-column grid instead
+    // of starting a second one underneath it — Label, Organisation and Project
+    // then sit on one line, with the token below.
+    <div className="contents">
       {/* ── 2. the organisation ──────────────────────────────────────────── */}
       <div>
         <FieldLabel>Organisation</FieldLabel>
@@ -419,7 +431,6 @@ export function AzureDevOpsSetup({
               }}
               autoComplete="off"
               aria-label="Organisation URL"
-              className="h-10"
             />
             {orgPhase.state === "error" ? (
               <StepNote
@@ -509,7 +520,6 @@ export function AzureDevOpsSetup({
               onChange={(e) => onFieldChange(FIELD_PROJECT, e.target.value)}
               autoComplete="off"
               aria-label="Project"
-              className="h-10"
             />
             {projectPhase.state === "error" ? (
               <StepNote
@@ -565,10 +575,9 @@ export function AzureDevOpsSetup({
                 field that had just been cleared. */}
             {!baseUrl ? (
               <StepNote>Choose an organisation first.</StepNote>
-            ) : baseUrl !== connection.savedBaseUrl ||
-              projectsFor.current !== connection.savedBaseUrl ? (
+            ) : projectsFor.current !== currentRoot ? (
               <StepNote action="Enter it manually" onAction={() => setProjectManual(true)}>
-                Save the organisation to list its projects.
+                Reading the projects…
               </StepNote>
             ) : projectPhase.state === "ready" && projects.length === 0 ? (
               <StepNote action="Enter it manually" onAction={() => setProjectManual(true)}>
@@ -576,7 +585,7 @@ export function AzureDevOpsSetup({
               </StepNote>
             ) : (
               <StepNote action="Enter it manually" onAction={() => setProjectManual(true)}>
-                Listed from the saved organisation.
+                Listed for the selected organisation.
               </StepNote>
             )}
           </>
@@ -585,7 +594,7 @@ export function AzureDevOpsSetup({
 
       {/* The credential keeps its field, so it can be rotated without starting
           again — empty means "keep the stored one", as everywhere else. */}
-      <div>
+      <div className="col-span-2">
         <FieldLabel>Personal access token</FieldLabel>
         <Input
           type="password"
@@ -594,7 +603,6 @@ export function AzureDevOpsSetup({
           onChange={(e) => onFieldChange("pat", e.target.value)}
           autoComplete="off"
           aria-label="Personal access token"
-          className="h-10"
         />
       </div>
     </div>
