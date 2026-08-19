@@ -15,6 +15,8 @@ import json
 import httpx
 import pytest
 
+from pathlib import Path
+
 from app.services.adapters import get_adapter
 from app.services.adapters.azure_devops import AzureDevOpsAdapter, parse_org_url
 from app.services.adapters.base import REDACTED, ProviderError, scrub
@@ -275,6 +277,138 @@ def test_azure_devops_takes_the_project_from_a_pasted_project_url():
     )
     assert adapter.org_url == "https://dev.azure.com/emesoft"
     assert adapter.project == "Surveyor"
+
+
+ADO_PROFILE = {"id": "1a2b3c4d-0000-4444-8888-abcdefabcdef", "displayName": "Duna Nguyen"}
+
+ADO_ACCOUNTS = {
+    "count": 3,
+    "value": [
+        # The ordinary case.
+        {"accountId": "a1", "accountName": "emesoft", "accountUri": "https://dev.azure.com/emesoft"},
+        # Some tenants answer with the profile service's own address for the
+        # account, which is not an API root any other call can use.
+        {"accountId": "a2", "accountName": "surency", "accountUri": "https://vssps.dev.azure.com/surency"},
+        # The legacy host is still live and parse_org_url reads it, so it is kept.
+        {"accountId": "a3", "accountName": "contoso", "accountUri": "https://contoso.visualstudio.com"},
+    ],
+}
+
+
+def test_azure_devops_lists_the_organizations_a_pat_can_see():
+    """Two calls: the profile identifies the member, accounts answers for them."""
+    mock = transport(
+        {
+            ("GET", "/_apis/profile/profiles/me"): ADO_PROFILE,
+            ("GET", "/_apis/accounts"): ADO_ACCOUNTS,
+        }
+    )
+    orgs = ado_adapter(mock).list_organizations()
+
+    assert [o["name"] for o in orgs] == ["contoso", "emesoft", "surency"], "sorted by name"
+    by_name = {o["name"]: o["url"] for o in orgs}
+    assert by_name["emesoft"] == "https://dev.azure.com/emesoft"
+    # The identity URI is replaced; the legacy host is not.
+    assert by_name["surency"] == "https://dev.azure.com/surency"
+    assert by_name["contoso"] == "https://contoso.visualstudio.com"
+
+    # The member id from the profile is what accounts is asked about — asking for
+    # the wrong member returns somebody else's organisations, or none.
+    accounts_call = [r for r in mock.seen if r.url.path.endswith("/_apis/accounts")][0]
+    assert accounts_call.url.params["memberId"] == ADO_PROFILE["id"]
+
+
+def test_azure_devops_discovery_runs_against_the_profile_service_not_the_org():
+    """The org URL is not merely unnecessary here — it must not be the base URL.
+
+    Accounts live on a different host from everything else the adapter calls, and
+    a request for /_apis/accounts under dev.azure.com/{org} answers 404.
+    """
+    mock = transport(
+        {
+            ("GET", "/_apis/profile/profiles/me"): ADO_PROFILE,
+            ("GET", "/_apis/accounts"): ADO_ACCOUNTS,
+        }
+    )
+    AzureDevOpsAdapter({}, {"pat": PAT}, transport=mock).list_organizations()
+
+    assert all(r.url.host == "app.vssps.visualstudio.com" for r in mock.seen), [
+        str(r.url) for r in mock.seen
+    ]
+
+
+def test_a_token_without_the_profile_scope_says_so_instead_of_answering_empty():
+    """A work-item-only PAT gets 401 from the profile service and keeps working
+    everywhere else. Reporting that as "no organisations" would read as a broken
+    credential; the UI has to be able to offer manual entry instead."""
+    mock = transport(
+        {("GET", "/_apis/profile/profiles/me"): httpx.Response(401, json={"message": "denied"})}
+    )
+    with pytest.raises(ProviderError, match="vso.profile"):
+        ado_adapter(mock).list_organizations()
+
+
+def test_organization_discovery_never_leaks_the_pat_in_its_error():
+    mock = transport({}, default_status=500)
+    with pytest.raises(ProviderError) as exc:
+        ado_adapter(mock).list_organizations()
+    assert PAT not in str(exc.value)
+    assert PAT[:12] not in str(exc.value)
+
+
+def test_organization_discovery_needs_a_pat_and_nothing_else():
+    with pytest.raises(ProviderError, match="PAT"):
+        AzureDevOpsAdapter({}, {}).list_organizations()
+
+
+def test_the_registry_still_loads_every_adapter_after_one_was_imported_directly():
+    """Regression: the loader used to run only `if not _REGISTRY`.
+
+    Importing a single adapter module — which this very test file does, and which
+    any code holding a concrete adapter reference does — registers that one kind
+    and makes the registry non-empty, so the emptiness check concluded the work
+    was done and the other providers were never imported. It surfaced much later
+    and somewhere else, as `No adapter registered for provider 'github'` on a
+    connection that was configured perfectly well.
+
+    Runs in a **subprocess** because the bug only exists on the way *into* a
+    process: `register()` is an import side effect, so it fires once and cannot be
+    replayed by clearing the registry — a test that cleared it in-process would
+    prove nothing and would strand every later test with an empty registry.
+    """
+    import subprocess
+    import sys
+
+    # The trigger is the first line: one adapter module imported directly, before
+    # anything asks the registry for another kind.
+    script = """
+from app.services.adapters.azure_devops import AzureDevOpsAdapter
+from app.services.adapters import get_adapter, registered_kinds
+
+kinds = set(registered_kinds())
+assert kinds == {"azure_devops", "github", "jira"}, kinds
+assert get_adapter("github", {}, {"pat": "x"}) is not None
+print("ok")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).resolve().parents[1]),
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
+
+
+def test_only_azure_devops_advertises_organization_discovery():
+    """The flag is what a connection form reads to choose between a picker and a
+    text field, so a provider that has not implemented discovery must not claim
+    it by inheriting a default."""
+    assert AzureDevOpsAdapter({}, {}).supports_organizations is True
+    assert GitHubAdapter({}, {}).supports_organizations is False
+    assert JiraAdapter({}, {}).supports_organizations is False
+    # And the fallback returns nothing rather than pretending.
+    assert GitHubAdapter({}, {}).list_organizations() == []
 
 
 def test_azure_devops_refuses_to_call_without_configuration():
