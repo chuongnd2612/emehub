@@ -360,6 +360,155 @@ def test_the_audit_trail_records_the_change_but_never_the_value(
     assert updated.meta == "pat"
 
 
+# ------------------------------------------------------ probing a draft (#175)
+def _stub_adapter(monkeypatch, seen: list):
+    """Record the config and secrets each probe is built with."""
+    from app.services.adapters.azure_devops import AzureDevOpsAdapter
+
+    def _capture(self, *_a, **_k):
+        seen.append({"orgUrl": self.org_url, "project": self.project, "pat": self.pat})
+        return [{"external_id": "1", "name": "Surveyor", "state": "wellFormed"}]
+
+    def _test(self):
+        seen.append({"orgUrl": self.org_url, "project": self.project, "pat": self.pat})
+        return {"ok": True, "message": "fine", "detail": {}}
+
+    monkeypatch.setattr(AzureDevOpsAdapter, "list_projects", _capture)
+    monkeypatch.setattr(AzureDevOpsAdapter, "test_connection", _test)
+
+
+def test_a_draft_probes_the_values_on_screen_not_the_stored_ones(
+    client, member, headers, monkeypatch
+):
+    """The point of the whole slice: prove a setting before committing it."""
+    seen: list = []
+    _stub_adapter(monkeypatch, seen)
+    hdrs = headers("member@emesoft.net")
+    created = _create(client, hdrs, baseUrl="https://dev.azure.com/old")
+
+    response = client.post(
+        f"/connections/{created['id']}/projects",
+        json={"baseUrl": "https://dev.azure.com/new"},
+        headers=hdrs,
+    )
+    assert response.status_code == 200
+    assert [p["name"] for p in response.json()] == ["Surveyor"]
+    assert seen[-1]["orgUrl"] == "https://dev.azure.com/new"
+    # An omitted field falls back to what is stored — a draft carrying only a URL
+    # still probes with the stored credential, which is the common case.
+    assert seen[-1]["pat"] == PAT
+
+
+def test_an_omitted_draft_leaves_every_probe_exactly_as_it_was(
+    client, member, headers, monkeypatch
+):
+    seen: list = []
+    _stub_adapter(monkeypatch, seen)
+    hdrs = headers("member@emesoft.net")
+    created = _create(client, hdrs)
+
+    assert client.post(f"/connections/{created['id']}/test", headers=hdrs).status_code == 200
+    assert seen[-1]["orgUrl"] == "https://dev.azure.com/emesoft"
+    assert seen[-1]["pat"] == PAT
+
+
+def test_a_draft_verdict_is_not_recorded_on_the_connection(
+    client, member, headers, monkeypatch
+):
+    """`connected` describes the connection. A green pill on a row whose *stored*
+    configuration has never worked is worse than no pill at all."""
+    seen: list = []
+    _stub_adapter(monkeypatch, seen)
+    hdrs = headers("member@emesoft.net")
+    created = _create(client, hdrs)
+    assert created["connected"] is False
+
+    drafted = client.post(
+        f"/connections/{created['id']}/test",
+        json={"baseUrl": "https://dev.azure.com/other"},
+        headers=hdrs,
+    )
+    assert drafted.json()["ok"] is True
+    after = client.get("/connections", headers=hdrs).json()[0]
+    assert after["connected"] is False, "a draft probe changed the stored verdict"
+    assert after["lastTestedAt"] is None
+
+    # ...while a probe of the stored values still records one.
+    client.post(f"/connections/{created['id']}/test", headers=hdrs)
+    assert client.get("/connections", headers=hdrs).json()[0]["connected"] is True
+
+
+def test_a_draft_needs_the_right_to_save_the_same_change(
+    client, admin, member, headers, monkeypatch
+):
+    """Pointing a stored credential at a URL of your choosing is not a new power —
+    anyone who can edit the connection can already save that URL and press Test.
+    So the draft is gated on exactly that, and on nothing weaker."""
+    seen: list = []
+    _stub_adapter(monkeypatch, seen)
+    admin_hdrs = headers("admin@emesoft.net")
+    shared = _create(client, admin_hdrs, shared=True, label="Shared ADO")
+
+    member_hdrs = headers("member@emesoft.net")
+    # The member can see it and probe it as stored...
+    assert client.post(
+        f"/connections/{shared['id']}/test", headers=member_hdrs
+    ).status_code == 200
+    # ...but may not aim its credential somewhere of their choosing.
+    refused = client.post(
+        f"/connections/{shared['id']}/projects",
+        json={"baseUrl": "https://attacker.example/org"},
+        headers=member_hdrs,
+    )
+    assert refused.status_code == 403
+    assert not any(
+        s["orgUrl"] == "https://attacker.example/org" for s in seen
+    ), "the credential was spent before the permission check"
+
+
+def test_a_draft_may_not_smuggle_a_credential_into_config(
+    client, member, headers, monkeypatch
+):
+    seen: list = []
+    _stub_adapter(monkeypatch, seen)
+    hdrs = headers("member@emesoft.net")
+    created = _create(client, hdrs)
+
+    refused = client.post(
+        f"/connections/{created['id']}/projects",
+        json={"config": {"apiToken": "sneaky"}},
+        headers=hdrs,
+    )
+    assert refused.status_code == 400
+
+
+def test_a_draft_probe_never_echoes_the_credential(
+    client, member, headers, monkeypatch
+):
+    seen: list = []
+    _stub_adapter(monkeypatch, seen)
+    hdrs = headers("member@emesoft.net")
+    created = _create(client, hdrs)
+    draft_pat = "typed-but-not-yet-saved-0987654321"
+
+    for path in ("test", "projects"):
+        body = client.post(
+            f"/connections/{created['id']}/{path}",
+            json={"pat": draft_pat},
+            headers=hdrs,
+        ).text
+        assert draft_pat not in body, f"POST /{path} echoed the draft credential"
+        assert PAT not in body
+
+    # And the typed one really was used, rather than silently ignored.
+    assert seen[-1]["pat"] == draft_pat
+    # ...without being stored: the connection still holds the original.
+    assert client.get("/connections", headers=hdrs).json()[0]["hasPat"] is True
+    seen.clear()
+    client.post(f"/connections/{created['id']}/test", headers=hdrs)
+    assert seen[-1]["pat"] == PAT, "the draft credential leaked into storage"
+
+
 # ------------------------------------------------- organisation discovery (#167)
 def test_organizations_are_listed_for_a_connection_holding_only_a_pat(
     client, member, headers, monkeypatch
@@ -467,6 +616,7 @@ def test_every_connection_endpoint_refuses_an_anonymous_caller(client, member):
         ("delete", "/connections/1"),
         ("post", "/connections/1/test"),
         ("get", "/connections/1/sprints"),
+        ("post", "/connections/1/projects"),
         ("get", "/connections/1/organizations"),
         ("get", "/connections/1/projects"),
         ("get", "/connections/1/work-item-metadata"),

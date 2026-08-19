@@ -80,6 +80,7 @@ from app.models.provider_connection import (
 from app.models.user import User
 from app.schemas import ApiModel, OkResponse
 from app.services import audit_service, connection_service, metadata_cache
+from app.services.adapters import get_adapter
 from app.services.adapters.base import ProviderAdapter, ProviderError
 from app.services.ownership import can_write_shared, get_owned_or_404
 
@@ -163,6 +164,30 @@ class ConnectionUpdate(ApiModel):
     config: dict[str, Any] | None = None
     pat: str | None = None
     capabilities: list[str] | None = None
+
+
+class ConnectionDraft(ApiModel):
+    """Unsaved edits to probe with, instead of what is stored.
+
+    Every field is optional and an omitted one falls back to the stored value, so
+    a draft carrying only ``baseUrl`` still probes with the stored credential —
+    the common case: pick an organisation, list its projects, decide, then save.
+
+    **Why this is not new attack surface.** Handing the hub an arbitrary base URL
+    to spend a stored credential against looks like a way to post a workspace PAT
+    to a server of the caller's choosing. It is not a *new* way: anyone who can
+    edit the connection can already do exactly that by saving the URL and pressing
+    Test. So the routes that accept a draft require ``_require_writable`` — the
+    same check ``PATCH`` and ``DELETE`` use — and for a caller who passes it this
+    removes a round trip rather than a restriction. A caller who cannot persist
+    the change cannot probe with it either.
+    """
+
+    base_url: str | None = None
+    config: dict[str, Any] | None = None
+    #: Write-only, never persisted, never echoed. Present so a credential can be
+    #: proven *before* it is committed, which is the whole point.
+    pat: str | None = None
 
 
 class ConnectionTestResult(ApiModel):
@@ -348,6 +373,51 @@ def _require_capability(conn: ProviderConnection, capability: str) -> None:
                 f"'{capability}'"
             ),
         )
+
+
+def _drafted(
+    conn: ProviderConnection, draft: ConnectionDraft | None, user: User
+) -> ProviderAdapter:
+    """An adapter for ``conn`` with ``draft``'s values layered over the stored ones.
+
+    Returns the ordinary stored-values adapter when there is nothing to layer, so
+    a caller that sends no body behaves exactly as it did before.
+    """
+    if draft is None or (
+        draft.base_url is None and draft.config is None and draft.pat is None
+    ):
+        return _adapter(conn)
+
+    # Probing with values the caller could not save is the thing to refuse.
+    _require_writable(conn, user)
+    try:
+        connection_service.reject_secret_like_config(draft.config or {})
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+
+    config = connection_service.adapter_config(conn)
+    if draft.config is not None:
+        config.update(draft.config)
+    if draft.base_url is not None:
+        # Both names, because adapter_config feeds both and a stale `orgUrl`
+        # alongside a fresh `baseUrl` would probe the old organisation while
+        # reporting the new one.
+        config["baseUrl"] = draft.base_url
+        config["orgUrl"] = draft.base_url
+
+    if draft.pat is not None:
+        pat = draft.pat
+    else:
+        pat = crypto.decrypt(conn.pat_encrypted) or ""
+        if conn.pat_encrypted and not pat:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"The stored credential for '{conn.display_name}' cannot be "
+                    "decrypted with the current encryption key"
+                ),
+            )
+    return get_adapter(conn.kind, config, {"pat": pat})
 
 
 def _adapter(conn: ProviderConnection) -> ProviderAdapter:
@@ -574,21 +644,35 @@ def delete_connection(
 @router.post("/{connection_id}/test", response_model=ConnectionTestResult)
 def test_connection(
     connection_id: int,
+    draft: ConnectionDraft | None = None,
     user: User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> ConnectionTestResult:
-    """Probe the provider with the stored credential and record the verdict."""
+    """Probe the provider and record the verdict.
+
+    With a draft body, probes the values on screen instead of the ones in the
+    database — so a credential can be proven before it is committed, rather than
+    only after. Without one, unchanged.
+    """
     conn = _load(db, connection_id, user)
+    is_draft = draft is not None and not (
+        draft.base_url is None and draft.config is None and draft.pat is None
+    )
     started = utcnow()
     try:
-        result = _adapter(conn).test_connection()
+        result = _drafted(conn, draft, user).test_connection()
     except ProviderError as exc:
         result = {"ok": False, "message": str(exc), "detail": {}}
     latency_ms = int((utcnow() - started).total_seconds() * 1000)
 
-    conn.connected = bool(result.get("ok"))
-    conn.last_tested_at = utcnow()
-    db.commit()
+    # A draft verdict is deliberately NOT recorded. `connected` and `lastTestedAt`
+    # describe the *connection*, and a probe of values that were never saved must
+    # not change what the list says about it — a green pill on a row whose stored
+    # configuration has never worked is worse than no pill at all.
+    if not is_draft:
+        conn.connected = bool(result.get("ok"))
+        conn.last_tested_at = utcnow()
+        db.commit()
 
     audit_service.record(
         category="connection",
@@ -597,7 +681,7 @@ def test_connection(
         actor=user.email,
         actor_id=user.id,
         owner_id=conn.owner_id,
-        status="success" if conn.connected else "error",
+        status="success" if result.get("ok") else "error",
         meta=str(result.get("message", "")),
         db=db,
     )
@@ -685,6 +769,42 @@ def list_projects(
     except Exception as exc:  # noqa: BLE001
         _log_unavailable("projects", conn, exc)
         return []
+    return [ConnectionProjectOut.model_validate(p) for p in projects]
+
+
+@router.post("/{connection_id}/projects", response_model=list[ConnectionProjectOut])
+def preview_projects(
+    connection_id: int,
+    draft: ConnectionDraft | None = None,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> list[ConnectionProjectOut]:
+    """Projects for the organisation **on screen**, saved or not.
+
+    The GET above answers for the stored row and is what every other caller
+    wants. This one exists so choosing an organisation can fill the project list
+    beside it straight away: requiring a save between the two picks makes the
+    second one feel broken, and nothing in the flow explains why choosing a thing
+    does not populate the thing next to it.
+
+    Unlike the GET it does **not** degrade to an empty list. There, an empty
+    picker is recoverable and an error is not; here the user just acted, and
+    "nothing happened" is the one response that cannot be interpreted. The
+    failure is raised so the caller can say why.
+    """
+    conn = _load(db, connection_id, user)
+    _require_capability(conn, WORK_ITEM)
+    try:
+        projects = _drafted(conn, draft, user).list_projects()
+    except ProviderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _log_unavailable("projects", conn, exc)
+        raise HTTPException(
+            status_code=400, detail="The provider did not answer."
+        ) from exc
     return [ConnectionProjectOut.model_validate(p) for p in projects]
 
 
