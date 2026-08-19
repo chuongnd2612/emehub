@@ -131,9 +131,18 @@ prefix:
 DAGENT_HUB_URL=https://hub.<domain>/api
 ```
 
-`http://host.docker.internal:8790` would be faster for the server side and unusable from a browser.
-A *relative* `/api` is likewise wrong here: the shim in the edge block would prefix it to
-`/dagent/api`. Splitting the variable is handoff §2's companion item.
+A *relative* `/api` is wrong here: the shim in the edge block would prefix it to `/dagent/api`.
+
+D-Agent now splits the two, so the server side no longer has to share the browser's URL:
+
+```
+DAGENT_HUB_URL_INTERNAL=http://emehub-web:5180/api
+```
+
+Empty falls back to `DAGENT_HUB_URL`, which is right for a public deployment where one URL serves
+both sides. It matters on a laptop: `DAGENT_HUB_URL` is then `http://localhost:5180/api`, and inside
+this container `localhost` is *the container*, so the browser mints a token successfully and every
+server-side read that follows fails with "EmeHub is unreachable".
 
 Because the mount puts D-Agent on the hub's own origin, that mint is now a same-origin request —
 so hub mode works when you browse the suite at `https://hub.<domain>/dagent`, and not when you
