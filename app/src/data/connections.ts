@@ -103,6 +103,12 @@ export interface Connection {
    * projects under another's name (every entry plausible, all of them wrong).
    */
   savedBaseUrl: string;
+  /**
+   * The non-secret config **as stored**, for the same reason as `savedBaseUrl`:
+   * telling a probe from a plain one is a comparison against what the hub holds,
+   * not against what the form is showing.
+   */
+  savedConfig: Record<string, string>;
 }
 
 export interface ConnectionGroup {
@@ -273,6 +279,9 @@ function toConnection(wire: ConnectionWire): Connection {
     capabilities: wire.capabilities ?? [],
     fields: fieldsFor(kind, wire),
     savedBaseUrl: wire.baseUrl ?? "",
+    savedConfig: Object.fromEntries(
+      Object.entries(wire.config ?? {}).map(([k, v]) => [k, str(v)]),
+    ),
   };
 }
 
@@ -476,13 +485,64 @@ export const saveConnection = async (
 };
 
 /**
+ * Unsaved edits to probe with (#175). Every field optional; an omitted one falls
+ * back to what the hub has stored.
+ */
+export interface ConnectionDraft {
+  baseUrl?: string;
+  config?: Record<string, unknown>;
+  /** Only when the user has typed a new one. Never persisted by a probe. */
+  pat?: string;
+}
+
+/**
+ * What this form has changed, as a draft — `{}` when it has changed nothing.
+ *
+ * Only the differences, deliberately. Sending the current fields wholesale would
+ * make every test a draft test, and a draft verdict is not recorded against the
+ * connection (#175) — so an untouched form pressing `Test connection` would stop
+ * updating the status pill, which is the one thing that button has always done.
+ */
+export function draftOf(connection: Connection): ConnectionDraft {
+  const { baseUrl, config, pat } = toPayload(connection.fields);
+  const draft: ConnectionDraft = {};
+  if (baseUrl !== undefined && baseUrl !== connection.savedBaseUrl)
+    draft.baseUrl = baseUrl;
+  const saved = connection.savedConfig ?? {};
+  const changed = Object.keys(config).some((k) => config[k] !== (saved[k] ?? ""));
+  if (changed) draft.config = config;
+  // A typed credential is always a change: the stored one is never loaded into
+  // the field, so a non-empty value cannot be the stored value unchanged.
+  if (pat) draft.pat = pat;
+  return draft;
+}
+
+/**
  * `POST /connections/{id}/test` — really calls the provider, so it is as slow
  * as the provider is and can genuinely fail. `ok: false` carries the reason.
+ *
+ * With a `draft`, tests what is on screen rather than what is stored, and the
+ * verdict is deliberately not recorded against the connection. That is what lets
+ * a credential be proven *before* it is committed instead of only after.
  */
 export const testConnection = (
   connectionId: number,
+  draft?: ConnectionDraft,
 ): Promise<ConnectionTestOutcome> =>
-  api.post<ConnectionTestOutcome>(`/connections/${connectionId}/test`);
+  api.post<ConnectionTestOutcome>(`/connections/${connectionId}/test`, draft);
+
+/**
+ * `POST /connections/{id}/projects` — the project list for the organisation on
+ * screen, saved or not, so picking one can fill the other immediately.
+ *
+ * Unlike the GET this rejects rather than returning an empty list: the user has
+ * just acted, and "nothing happened" is the one answer they cannot interpret.
+ */
+export const previewConnectionProjects = (
+  connectionId: number,
+  draft?: ConnectionDraft,
+): Promise<DiscoveredProject[]> =>
+  api.post<DiscoveredProject[]>(`/connections/${connectionId}/projects`, draft);
 
 /** `DELETE /connections/{id}` — takes the stored credential with it. */
 export const removeConnection = async (connectionId: number): Promise<void> => {

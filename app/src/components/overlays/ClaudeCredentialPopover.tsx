@@ -8,7 +8,13 @@
 // the header is a glass panel and its backdrop-filter traps z-index
 // (CLAUDE.md › Frontend conventions).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 
@@ -22,9 +28,11 @@ import {
 import {
   formatDaysLeft,
   formatExpiryIso,
+  getClaudeCredentialRevision,
   getCredentialState,
   setCredentialMode,
   statusOfCredential,
+  subscribeClaudeCredentials,
   type ClaudeCredentialState,
   type CredentialSource,
   type CredentialStatus,
@@ -96,9 +104,20 @@ export function ClaudeCredentialChip() {
     };
   }, []);
 
-  useEffect(load, [load]);
-  // Re-read whenever the popover opens: Claude Settings may have changed the
-  // credential since the shell mounted.
+  // Every credential write announces itself (`@/data/credentials`), and the chip
+  // re-reads on the signal. Opening the popover used to be the only trigger
+  // besides mount, so changing the credential in Claude Settings left the header
+  // describing the previous state until the page was reloaded — and a status
+  // that is wrong until refreshed is worse than one that is absent, because
+  // nothing about it looks stale.
+  const revision = useSyncExternalStore(
+    subscribeClaudeCredentials,
+    getClaudeCredentialRevision,
+  );
+
+  useEffect(load, [load, revision]);
+  // Still re-read on open, for a change made somewhere this signal cannot reach
+  // — another tab, or an admin replacing the shared account.
   useEffect(() => {
     if (open) load();
   }, [open, load]);
