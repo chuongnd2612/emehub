@@ -89,6 +89,24 @@ export default function IntegrationsScreen() {
     };
   }, [reloadKey]);
 
+  /**
+   * Every Azure DevOps organisation this workspace already reaches.
+   *
+   * Azure DevOps refuses to enumerate organisations for a token scoped to one of
+   * them, which is the default kind — but the hub does not need the provider to
+   * know which organisations are in use here, because it is already storing
+   * them. So the organisation field can be a picker even when discovery cannot
+   * answer, and only the first connection into a new organisation has to be
+   * typed (#173).
+   *
+   * Read from the *saved* URLs, never the editable fields: a half-typed
+   * organisation is not one this workspace uses.
+   */
+  const knownOrgUrls = groups
+    .filter((g) => g.kind === "azure_devops")
+    .flatMap((g) => g.connections.map((c) => c.savedBaseUrl))
+    .filter(Boolean);
+
   const connectionCount = groups.reduce((n, g) => n + g.connections.length, 0);
   const providerCount = groups.filter((g) => g.connections.length > 0).length;
   const verifiedCount = groups.reduce(
@@ -326,6 +344,7 @@ export default function IntegrationsScreen() {
             onSave={handleSave}
             onRemove={handleRemove}
             onAdd={() => void handleAdd(g.provider)}
+            knownOrgUrls={knownOrgUrls}
           />
         ))}
       </div>

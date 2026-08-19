@@ -38,6 +38,8 @@ export interface ConnectionRowProps {
    * alone tells you *when* it was tried, never *what it said*.
    */
   result: ConnectionTestOutcome | null;
+  /** Organisation URLs already configured elsewhere — see AzureDevOpsSetup. */
+  knownOrgUrls?: string[];
 }
 
 /** Kept alongside the row so a failure's reason stays on screen. */
@@ -64,6 +66,7 @@ export function ConnectionRow({
   onSave,
   onRemove,
   result,
+  knownOrgUrls,
 }: ConnectionRowProps) {
   // A connection with no stored credential cannot be tested — the request is
   // guaranteed to fail, so say why instead of firing it.
@@ -182,6 +185,7 @@ export function ConnectionRow({
             <AzureDevOpsSetup
               connection={connection}
               onFieldChange={onFieldChange}
+              knownOrgUrls={knownOrgUrls}
             />
           )}
 
