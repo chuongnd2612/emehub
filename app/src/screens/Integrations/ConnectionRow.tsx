@@ -229,6 +229,11 @@ export function ConnectionRow({
             </span>
           </div>
 
+          {/* One container owns the spacing below the button row. Both notices
+              were previously margin-less, so each sat flush against the buttons
+              and against the other — the block read as one run-on surface rather
+              than as separate statements. */}
+          <div className="mt-[14px] flex flex-col gap-[10px] empty:mt-0">
           {/* Why there is no stored credential to test, stated rather than left
               to a disabled button with no explanation. */}
           {untestable && connection.kind !== "azure_devops" && (
@@ -273,6 +278,7 @@ export function ConnectionRow({
               </span>
             </div>
           )}
+          </div>
         </div>
       )}
     </div>

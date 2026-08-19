@@ -250,9 +250,12 @@ class AzureDevOpsAdapter(ProviderAdapter):
                 resp.raise_for_status()
                 data = resp.json()
             count = data.get("count", len(data.get("value", [])))
+            # "1 projects visible" is the sort of thing that makes a product feel
+            # unfinished at exactly the moment it has just succeeded.
+            noun = "project" if count == 1 else "projects"
             return {
                 "ok": True,
-                "message": f"Connected to Azure DevOps ({count} projects visible)",
+                "message": f"Connected to Azure DevOps ({count} {noun} visible)",
                 "detail": {"count": count},
             }
         except ProviderError as exc:
@@ -290,12 +293,29 @@ class AzureDevOpsAdapter(ProviderAdapter):
         invalid or expired token gets a **302** to the sign-in page, because the
         profile service answers a browser-shaped request with a browser-shaped
         redirect. Both are the same thing to us and both must produce the same
-        sentence — the first version of this reported "Azure DevOps returned 302",
-        which tells the user nothing they can do anything about.
+        sentence — reporting "Azure DevOps returned 302" tells the user nothing
+        they can do anything about.
 
-        And since a refusal covers both "wrong token" and "right token, missing
-        scope", the message says both rather than asserting the one it cannot
-        distinguish.
+        **And the common case is not a broken token at all.** A PAT is scoped to
+        one organisation by default in the current Azure DevOps UI, and an
+        org-scoped token is refused by this host — measured, with a token holding
+        *full* access to its organisation:
+
+            app.vssps.visualstudio.com/_apis/profile/profiles/me   401
+            app.vssps.visualstudio.com/_apis/accounts              401
+            vssps.dev.azure.com/{org}/_apis/profile/profiles/me    200
+            vssps.dev.azure.com/{org}/_apis/accounts               404 (no such controller)
+            dev.azure.com/{org}/_apis/projects                     200
+
+        So the org-scoped host authenticates the token perfectly and does not
+        serve accounts, while the host that serves accounts will not authenticate
+        it. There is no combination that lists organisations for such a token,
+        and the chicken-and-egg is unavoidable: the endpoint that could tell you
+        which organisations exist is the one you need an organisation to reach.
+
+        Discovery therefore works only for a token created with *All accessible
+        organizations*, and the message has to say so — a user with a full-access
+        PAT being told it "may be invalid" goes and creates the same token again.
 
         On-premises collections do not host the profile service at all; they fail
         the same way and take the same fallback.
@@ -306,10 +326,12 @@ class AzureDevOpsAdapter(ProviderAdapter):
                     f"/_apis/profile/profiles/me?api-version={PROFILE_API_VERSION}"
                 )
                 if profile.status_code in (301, 302, 303, 307, 308, 401, 403):
+                    # Two short sentences on purpose. This renders under a field
+                    # in a form, and the first version — five lines explaining
+                    # scopes and hosts — buried the one instruction that matters.
                     raise ProviderError(
-                        "This token could not list organisations — it may be "
-                        "invalid, or it may lack the 'vso.profile' scope. Enter "
-                        "the organisation URL instead."
+                        "Azure DevOps only lists organisations for a token scoped "
+                        "to all of them. Paste the organisation URL instead."
                     )
                 profile.raise_for_status()
                 member_id = str(profile.json().get("id", "")).strip()

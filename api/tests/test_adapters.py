@@ -102,6 +102,16 @@ def ado_adapter(mock, **config):
     )
 
 
+def test_a_single_project_is_not_reported_as_1_projects():
+    """Trivial, and it is the sentence a user sees at the moment the thing they
+    were configuring finally works."""
+    mock = transport({("GET", "/_apis/projects"): {"count": 1, "value": [{"id": "1"}]}})
+    assert "1 project visible" in ado_adapter(mock).test_connection()["message"]
+
+    mock = transport({("GET", "/_apis/projects"): {"count": 4, "value": []}})
+    assert "4 projects visible" in ado_adapter(mock).test_connection()["message"]
+
+
 def test_azure_devops_normalizes_a_recorded_work_item():
     mock = transport(
         {
@@ -351,10 +361,15 @@ def test_azure_devops_discovery_runs_against_the_profile_service_not_the_org():
     ],
 )
 def test_a_refused_profile_read_explains_itself_whatever_the_status(status):
-    """The refusal must name what to do, and must not claim to know which of the
-    two causes it was — a 401 and a 302 are indistinguishable here, and asserting
-    "your token needs a scope" to someone whose token is simply expired sends
-    them to the wrong place."""
+    """Every refusal shape must produce the same actionable sentence.
+
+    Measured against the live service with a token holding full access to its
+    organisation: the accounts host answers 401, while `dev.azure.com/{org}` and
+    the org-scoped profile host answer 200 for the same token. An org-scoped PAT
+    simply cannot read the account list, and an invalid one is indistinguishable
+    from it here — so the message names the cause that is almost always true and
+    the token that would work, rather than implying the credential is broken.
+    """
     mock = transport(
         {("GET", "/_apis/profile/profiles/me"): httpx.Response(status, json={"m": "no"})}
     )
@@ -362,9 +377,17 @@ def test_a_refused_profile_read_explains_itself_whatever_the_status(status):
         ado_adapter(mock).list_organizations()
 
     message = str(exc.value)
-    assert "vso.profile" in message, "the scope is the actionable half"
-    assert "invalid" in message, "and it must not assert a cause it cannot know"
+    # The measured cause is a single-organisation token, which is the default in
+    # the current Azure DevOps UI — so the message must name that, not imply the
+    # credential is broken. A user with a full-access PAT told it "may be
+    # invalid" goes and creates the identical token again.
+    assert "organisations" in message
+    assert "Paste the organisation URL" in message, "the instruction that matters"
+    assert "invalid" not in message, "a scoped token is not a broken one"
     assert str(status) not in message, "a raw status code is not an explanation"
+    # It renders under a form field, so length is a correctness property here:
+    # the first version ran to five lines and buried the instruction.
+    assert len(message) < 140, f"too long to sit under a field: {len(message)}"
 
 
 def test_organization_discovery_never_leaks_the_pat_in_its_error():
