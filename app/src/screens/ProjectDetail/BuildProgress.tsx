@@ -47,8 +47,13 @@ function elapsedLabel(startedAt: string | null, now: number): string {
  *
  * This is a clock, not an animation: it reports elapsed real time and is the
  * one thing on this card that would be wrong if it stopped, so it is not gated
- * by `prefers-reduced-motion`. Everything that *is* animation — the spinner —
- * is already neutralised globally by the reduced-motion block in `theme.css`.
+ * by `prefers-reduced-motion`.
+ *
+ * Neither, as it turns out, is the spinner beside the current step. That used to
+ * say the reduced-motion block in `theme.css` neutralised it and left it at
+ * that — but a frozen spinner on a step that is genuinely running reads as a
+ * hung build, which is exactly how it was reported. A busy indicator is status,
+ * not decoration; it now keeps turning under the preference, more slowly.
  */
 function useSecondsTick(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
