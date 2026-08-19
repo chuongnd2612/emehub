@@ -70,12 +70,21 @@ services:
       # stored PAT then becomes undecryptable the day that URL changes — which,
       # for a containerised database, is the day someone renames this service.
       SETTINGS_ENC_KEY: ${DAGENT_SETTINGS_ENC_KEY:?set DAGENT_SETTINGS_ENC_KEY in dagent/.env}
-      # The hub's API, as this container reaches it: the api service publishes
-      # 8790 on the host, and host.docker.internal is how a container gets back
-      # out to it without both stacks sharing a network. Empty is valid — the
-      # Settings page then says the hub is not configured instead of failing a
-      # sync (D-Agent's .env.example § EmeHub integration).
+      # The hub's API, as a BROWSER reaches it. D-Agent hands this value to the
+      # page, which mints its hub token against it with the hub's cookie
+      # attached, so it must be an origin the user's browser can resolve and
+      # that the cookie is scoped to — including the hub's `/api` prefix. Empty
+      # is valid — the Settings page then says the hub is not configured instead
+      # of failing a sync (D-Agent's .env.example § EmeHub integration).
       DAGENT_HUB_URL: ${DAGENT_HUB_URL:-}
+      # The same hub, as *this container* reaches it. D-Agent hands
+      # DAGENT_HUB_URL to the browser and uses it for its own server-side calls,
+      # and in a container those are two different addresses: localhost:5180 is
+      # the host's loopback to a browser and this container's own loopback to the
+      # app. So the internal one is named separately and points at the hub's web
+      # service on the shared network. Empty falls back to DAGENT_HUB_URL, which
+      # is right for a public deployment where one URL serves both.
+      DAGENT_HUB_URL_INTERNAL: ${DAGENT_HUB_URL_INTERNAL:-}
       # Optional CLI knobs, passed through so they can be set without editing the
       # image. CLAUDE_BIN is unset on purpose: the image installs the CLI on PATH.
       CLAUDE_SKILLS_DIR: ${DAGENT_CLAUDE_SKILLS_DIR:-}
