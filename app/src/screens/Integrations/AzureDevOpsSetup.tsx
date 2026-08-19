@@ -10,15 +10,23 @@
 //   2. pick the organisation         -> GET /connections/{id}/organizations
 //   3. pick the project              -> GET /connections/{id}/projects
 //
-// ## Every step keeps its text field
+// ## The organisation step types by default; the project step picks
 //
-// The pickers are the fast path, never the only one. A PAT scoped without
-// `vso.profile` cannot list organisations while working perfectly for everything
-// else; an on-premises collection has no accounts API at all; and pasting a
-// project URL straight from the ADO address bar has always worked and still
-// must. Each step therefore falls back to typing — automatically when discovery
-// says it cannot help, and on request otherwise — with the reason shown rather
-// than a picker that is mysteriously empty.
+// Measured against the live service: a PAT scoped to a single organisation — the
+// default in the current Azure DevOps UI — is refused by the only host that
+// serves the account list, while authenticating perfectly everywhere else. So
+// for most tokens the organisation genuinely cannot be discovered, and showing a
+// picker that resolves into a text field a second later would be theatre.
+//
+// The organisation field therefore starts as a text field and *upgrades* to a
+// picker only if discovery actually returns something, and only while the field
+// is still empty. The project step keeps the picker: it reads
+// `dev.azure.com/{org}/_apis/projects`, which an org-scoped token can do, so it
+// works for everyone.
+//
+// Either way both steps keep their text field: an on-premises collection has no
+// accounts API at all, and pasting a project URL straight from the ADO address
+// bar has always worked and still must.
 //
 // ## Values still live on `connection.fields`
 //
@@ -45,8 +53,16 @@ type Phase =
   | { state: "ready" }
   /** Discovery cannot help — fall back silently, this is not a failure. */
   | { state: "unsupported" }
-  /** It failed, and `message` is what the user can act on. */
-  | { state: "error"; message: string };
+  /**
+   * It failed, and `message` is what the user can act on.
+   *
+   * `retryable` is the difference between "the provider answered, and the answer
+   * was no" and "we never got an answer". Offering `Try again` for the first is
+   * worse than offering nothing: a token scoped to one organisation will be
+   * refused every time, and a button that promises otherwise wastes the one
+   * moment the user was ready to read the sentence next to it.
+   */
+  | { state: "error"; message: string; retryable: boolean };
 
 const FIELD_BASE_URL = "baseUrl";
 const FIELD_PROJECT = "config.project";
@@ -135,7 +151,15 @@ function StepNote({
           <button
             type="button"
             onClick={onAction}
-            className="cursor-pointer border-0 bg-transparent p-0 text-[11.5px] font-semibold text-pl underline underline-offset-2"
+            className={cn(
+              "cursor-pointer border-0 bg-transparent p-0 text-[11.5px] font-semibold",
+              // Muted until hovered. These are secondary affordances sitting under
+              // every field; in the accent colour with a permanent underline they
+              // read as errors, and three of them turn a calm form into one that
+              // looks like it is complaining.
+              "text-muted underline decoration-transparent underline-offset-2",
+              "transition-colors duration-200 hover:text-txt2 hover:decoration-current",
+            )}
           >
             {action}
           </button>
@@ -162,7 +186,9 @@ export function AzureDevOpsSetup({
 
   const [orgs, setOrgs] = useState<ProviderOrganization[]>([]);
   const [orgPhase, setOrgPhase] = useState<Phase>({ state: "idle" });
-  const [orgManual, setOrgManual] = useState(false);
+  // Starts true: see the note above — for a single-organisation token, which is
+  // the default kind, discovery cannot answer and the field is the real path.
+  const [orgManual, setOrgManual] = useState(true);
 
   const [projects, setProjects] = useState<string[]>([]);
   const [projectPhase, setProjectPhase] = useState<Phase>({ state: "idle" });
@@ -183,20 +209,27 @@ export function AzureDevOpsSetup({
         return;
       }
       if (result.error) {
-        setOrgPhase({ state: "error", message: result.error });
+        // The hub reached Azure DevOps and relayed its refusal — a considered
+        // answer, not a hiccup.
+        setOrgPhase({ state: "error", message: result.error, retryable: false });
         setOrgManual(true);
         return;
       }
       setOrgs(result.organizations);
       setOrgPhase({ state: "ready" });
+      // Upgrade to the picker only when there is something to pick and nothing
+      // to lose: an organisation already entered is not silently replaced by a
+      // control that does not contain it.
+      if (result.organizations.length > 0 && !baseUrl) setOrgManual(false);
     } catch (err) {
       setOrgPhase({
         state: "error",
         message: messageOf(err, "The hub could not reach Azure DevOps."),
+        retryable: true,
       });
       setOrgManual(true);
     }
-  }, [connection.id]);
+  }, [connection.id, baseUrl]);
 
   const loadProjects = useCallback(
     async (forUrl: string) => {
@@ -210,6 +243,7 @@ export function AzureDevOpsSetup({
         setProjectPhase({
           state: "error",
           message: messageOf(err, "The hub could not list projects."),
+          retryable: true,
         });
         setProjectManual(true);
       }
@@ -248,9 +282,13 @@ export function AzureDevOpsSetup({
             aria-label="Personal access token"
             className="h-10"
           />
+          {/* Deliberately does not promise the organisation list. A token
+              scoped to one organisation — the Azure DevOps default — cannot read
+              it, so promising it here would set up the next step to look
+              broken. */}
           <StepNote>
-            Save the token and EmeHub will list the organisations and projects it
-            can reach, so there is nothing else to type.
+            Save the token and EmeHub will read what it can from Azure DevOps —
+            the project list, and the organisations too if the token can see them.
           </StepNote>
         </div>
       </div>
@@ -280,19 +318,26 @@ export function AzureDevOpsSetup({
               className="h-10"
             />
             {orgPhase.state === "error" ? (
-              <StepNote action="Try again" onAction={() => void loadOrgs()}>
+              <StepNote
+                action={orgPhase.retryable ? "Try again" : undefined}
+                onAction={orgPhase.retryable ? () => void loadOrgs() : undefined}
+              >
                 {orgPhase.message}
               </StepNote>
             ) : orgPhase.state === "unsupported" ? (
               <StepNote>
                 Paste the organisation or project URL — a project URL works too.
               </StepNote>
-            ) : (
+            ) : orgs.length > 0 ? (
               <StepNote
                 action="Choose from a list"
                 onAction={() => setOrgManual(false)}
               >
                 Paste the organisation or project URL.
+              </StepNote>
+            ) : (
+              <StepNote>
+                Paste the organisation or project URL — a project URL works too.
               </StepNote>
             )}
           </>
@@ -351,8 +396,12 @@ export function AzureDevOpsSetup({
             />
             {projectPhase.state === "error" ? (
               <StepNote
-                action="Try again"
-                onAction={() => void loadProjects(connection.savedBaseUrl)}
+                action={projectPhase.retryable ? "Try again" : undefined}
+                onAction={
+                  projectPhase.retryable
+                    ? () => void loadProjects(connection.savedBaseUrl)
+                    : undefined
+                }
               >
                 {projectPhase.message}
               </StepNote>
