@@ -635,6 +635,28 @@ textarea {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+
+  /* ...except a busy indicator, which is not decoration.
+  
+     The blanket rule above runs every animation once for 0.01ms, which for a
+     spinner means it renders one frame and stops. A frozen spinner does not read
+     as "motion has been reduced"; it reads as "this has hung" — reported against
+     a knowledge build that was in fact cloning happily, where the only signal
+     that anything was happening had quietly stopped moving.
+
+     The preference is about *non-essential* motion, and a busy indicator is the
+     one thing on the screen that is load-bearing: it is the difference between a
+     step in progress and a step stuck. So it keeps turning, more slowly — a
+     steady rotation has no parallax, no flashing and no direction changes, which
+     are what the preference exists to spare people.
+
+     A class selector beats `*` on specificity, so this wins wherever it lands in
+     the file. */
+  .animate-spin-upload,
+  .animate-spin-run,
+  .animate-spin-index {
+    animation: spin 1.6s linear infinite !important;
+  }
 }
 
 /* ---------------------------------------------------------------------------
