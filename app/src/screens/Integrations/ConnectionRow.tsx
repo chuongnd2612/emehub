@@ -16,6 +16,7 @@
 import { Icon, Input, Spinner, StatusPill } from "@/components/ui";
 import type { Connection } from "@/data";
 import { cn } from "@/lib/cn";
+import { AzureDevOpsSetup } from "./AzureDevOpsSetup";
 
 export interface ConnectionRowProps {
   connection: Connection;
@@ -150,25 +151,39 @@ export function ConnectionRow({
               />
             </div>
 
-            {connection.fields.map((f) => (
-              <div key={f.key}>
-                <div className="mb-[7px] text-[11.5px] font-semibold text-muted">
-                  {f.label}
+            {/* Azure DevOps is configured credential-first and discovers the
+                rest of its own settings, so it owns its fields (#166). The other
+                providers keep the plain grid: GitHub and Jira have equivalent
+                account APIs, but each with its own auth quirks, and a shared
+                abstraction guessed at from one example would be worse than two
+                honest implementations. */}
+            {connection.kind !== "azure_devops" &&
+              connection.fields.map((f) => (
+                <div key={f.key}>
+                  <div className="mb-[7px] text-[11.5px] font-semibold text-muted">
+                    {f.label}
+                  </div>
+                  {/* Secret fields stay type="password" and start empty — the hub
+                      never returns the stored value. */}
+                  <Input
+                    type={f.type}
+                    value={f.value}
+                    placeholder={f.placeholder}
+                    onChange={(e) => onFieldChange(f.key, e.target.value)}
+                    autoComplete="off"
+                    aria-label={f.label}
+                    className="h-10"
+                  />
                 </div>
-                {/* Secret fields stay type="password" and start empty — the hub
-                    never returns the stored value. */}
-                <Input
-                  type={f.type}
-                  value={f.value}
-                  placeholder={f.placeholder}
-                  onChange={(e) => onFieldChange(f.key, e.target.value)}
-                  autoComplete="off"
-                  aria-label={f.label}
-                  className="h-10"
-                />
-              </div>
-            ))}
+              ))}
           </div>
+
+          {connection.kind === "azure_devops" && (
+            <AzureDevOpsSetup
+              connection={connection}
+              onFieldChange={onFieldChange}
+            />
+          )}
 
           <div className="flex flex-wrap items-center gap-[10px]">
             <button
@@ -216,7 +231,7 @@ export function ConnectionRow({
 
           {/* Why there is no stored credential to test, stated rather than left
               to a disabled button with no explanation. */}
-          {untestable && (
+          {untestable && connection.kind !== "azure_devops" && (
             <p className="m-0 text-[12px] leading-[1.5] text-faint">
               No access token is stored for this connection yet. Add one above and
               save, then test it.

@@ -94,6 +94,15 @@ export interface Connection {
   shared: boolean;
   capabilities: string[];
   fields: ConnectionFormField[];
+  /**
+   * The base URL **as stored**, unlike the editable copy in `fields`.
+   *
+   * The two diverge the moment someone edits the field, and a provider read runs
+   * against the stored connection — so a picker that lists an organisation's
+   * projects has to key on this, or it will confidently show one organisation's
+   * projects under another's name (every entry plausible, all of them wrong).
+   */
+  savedBaseUrl: string;
 }
 
 export interface ConnectionGroup {
@@ -263,6 +272,7 @@ function toConnection(wire: ConnectionWire): Connection {
     shared: wire.shared,
     capabilities: wire.capabilities ?? [],
     fields: fieldsFor(kind, wire),
+    savedBaseUrl: wire.baseUrl ?? "",
   };
 }
 
@@ -306,6 +316,39 @@ export const getConnectionsWithCapability = async (
       })),
   );
 };
+
+/** One organisation as `GET /connections/{id}/organizations` reports it. */
+export interface ProviderOrganization {
+  name: string;
+  /** The provider's own address for the account — stored verbatim as baseUrl. */
+  url: string;
+}
+
+/**
+ * `GET /connections/{id}/organizations` — the only provider read that works on a
+ * connection holding **just a credential**, which is what lets the form ask for
+ * the token first and then offer a picker (#166).
+ *
+ * Three outcomes, and the UI has to keep them apart:
+ *
+ *   supported: false   this provider cannot enumerate accounts — offer the text
+ *                      field, and say nothing alarming; nothing is wrong
+ *   error: "…"         the call failed and this sentence is the actionable part
+ *                      (typically a PAT without the `vso.profile` scope, which
+ *                      is a working credential that cannot do this one thing)
+ *   organizations: []  it worked, and this credential genuinely sees none
+ */
+export interface OrganizationsResult {
+  provider: string;
+  supported: boolean;
+  organizations: ProviderOrganization[];
+  error: string;
+}
+
+export const getConnectionOrganizations = (
+  connectionId: number,
+): Promise<OrganizationsResult> =>
+  api.get<OrganizationsResult>(`/connections/${connectionId}/organizations`);
 
 /** One project as `GET /connections/{id}/projects` reports it. */
 export interface DiscoveredProject {

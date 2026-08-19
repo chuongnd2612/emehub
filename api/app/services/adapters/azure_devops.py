@@ -280,11 +280,22 @@ class AzureDevOpsAdapter(ProviderAdapter):
         ## The failure that matters
 
         A PAT is scoped, and a token created for work items alone has no
-        ``vso.profile`` — the profile call then answers 401 while every other
-        call this adapter makes keeps working perfectly. That is not a broken
+        ``vso.profile`` — the profile call then refuses while every other call
+        this adapter makes keeps working perfectly. That is not a broken
         credential and must not read like one, so it is translated into a
-        sentence naming the scope. The caller's job is to fall back to asking for
-        the URL, not to reject the token.
+        sentence the user can act on. The caller's job is to fall back to asking
+        for the URL, not to reject the token.
+
+        **The refusal is not always a 401.** Measured against the live service: an
+        invalid or expired token gets a **302** to the sign-in page, because the
+        profile service answers a browser-shaped request with a browser-shaped
+        redirect. Both are the same thing to us and both must produce the same
+        sentence — the first version of this reported "Azure DevOps returned 302",
+        which tells the user nothing they can do anything about.
+
+        And since a refusal covers both "wrong token" and "right token, missing
+        scope", the message says both rather than asserting the one it cannot
+        distinguish.
 
         On-premises collections do not host the profile service at all; they fail
         the same way and take the same fallback.
@@ -294,10 +305,11 @@ class AzureDevOpsAdapter(ProviderAdapter):
                 profile = client.get(
                     f"/_apis/profile/profiles/me?api-version={PROFILE_API_VERSION}"
                 )
-                if profile.status_code in (401, 403):
+                if profile.status_code in (301, 302, 303, 307, 308, 401, 403):
                     raise ProviderError(
-                        "This token cannot list organisations — it needs the "
-                        "'vso.profile' scope. Enter the organisation URL instead."
+                        "This token could not list organisations — it may be "
+                        "invalid, or it may lack the 'vso.profile' scope. Enter "
+                        "the organisation URL instead."
                     )
                 profile.raise_for_status()
                 member_id = str(profile.json().get("id", "")).strip()

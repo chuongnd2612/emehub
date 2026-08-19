@@ -337,15 +337,34 @@ def test_azure_devops_discovery_runs_against_the_profile_service_not_the_org():
     ]
 
 
-def test_a_token_without_the_profile_scope_says_so_instead_of_answering_empty():
-    """A work-item-only PAT gets 401 from the profile service and keeps working
-    everywhere else. Reporting that as "no organisations" would read as a broken
-    credential; the UI has to be able to offer manual entry instead."""
+@pytest.mark.parametrize(
+    "status",
+    [
+        # A token that lacks `vso.profile` while working everywhere else.
+        401,
+        403,
+        # And the one the live service actually returns for an invalid or expired
+        # token: a redirect to the sign-in page. Reported as a status code it read
+        # as "Azure DevOps returned 302", which is not something a user can act on.
+        302,
+        307,
+    ],
+)
+def test_a_refused_profile_read_explains_itself_whatever_the_status(status):
+    """The refusal must name what to do, and must not claim to know which of the
+    two causes it was — a 401 and a 302 are indistinguishable here, and asserting
+    "your token needs a scope" to someone whose token is simply expired sends
+    them to the wrong place."""
     mock = transport(
-        {("GET", "/_apis/profile/profiles/me"): httpx.Response(401, json={"message": "denied"})}
+        {("GET", "/_apis/profile/profiles/me"): httpx.Response(status, json={"m": "no"})}
     )
-    with pytest.raises(ProviderError, match="vso.profile"):
+    with pytest.raises(ProviderError) as exc:
         ado_adapter(mock).list_organizations()
+
+    message = str(exc.value)
+    assert "vso.profile" in message, "the scope is the actionable half"
+    assert "invalid" in message, "and it must not assert a cause it cannot know"
+    assert str(status) not in message, "a raw status code is not an explanation"
 
 
 def test_organization_discovery_never_leaks_the_pat_in_its_error():
