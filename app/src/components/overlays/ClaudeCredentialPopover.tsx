@@ -216,13 +216,18 @@ export function ClaudeCredentialChip() {
             role="dialog"
             aria-label="Claude credential"
             className={cn(
-              "fixed z-[1000] animate-scale-in rounded-card border border-bd2",
-              "bg-pop p-4 shadow-pop",
+              "fixed z-[1000] animate-scale-in overflow-x-hidden overflow-y-auto",
+              "rounded-card border border-bd2 bg-pop p-4 shadow-pop",
             )}
+            // `maxHeight` for the same reason as the dropdown's: this panel has a
+            // declared height, but a short window (or browser zoom) can still
+            // leave less room than that, and the part that falls off the bottom
+            // here is the Shared|Personal switch.
             style={{
               top: pos.top,
               left: pos.left,
               width: POPOVER_WIDTH,
+              maxHeight: pos.maxHeight,
               transformOrigin: pos.transformOrigin,
             }}
           >
