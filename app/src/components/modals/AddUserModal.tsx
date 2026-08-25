@@ -115,18 +115,19 @@ export function AddUserModal({ open, onClose, onCreated }: AddUserModalProps) {
         onChange={(e) => setEmail(e.target.value)}
       />
 
-      <div className="flex gap-2.5">
+      {/* Grid, not flex: `Input`'s `className` lands on the field box, so `flex-1`
+          never reached the row's item and the two columns sized to their label
+          text instead. Grid tracks are equal by construction (#188). */}
+      <div className="grid grid-cols-2 gap-3">
         <Input
           label="FIRST NAME"
           placeholder="Duna"
-          className="flex-1"
           value={first}
           onChange={(e) => setFirst(e.target.value)}
         />
         <Input
           label="LAST NAME"
           placeholder="Nguyen"
-          className="flex-1"
           value={last}
           onChange={(e) => setLast(e.target.value)}
         />
