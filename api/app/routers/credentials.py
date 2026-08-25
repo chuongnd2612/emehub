@@ -218,6 +218,12 @@ def _window(payload: dict, limits: dict | None) -> UsageWindowOut:
     (first call in the window + 5h), which is a decent estimate of a boundary
     Claude actually owns. When Claude states the boundary, the estimate has
     nothing to add — so it is replaced, never shown alongside.
+
+    The top-level ``week_resets_at`` is deliberately **not** overlaid. It dates
+    the hub's ISO-week aggregation — the window ``week_tokens`` counts over,
+    which really does begin Monday 00:00 — whereas Claude's ``seven_day`` limit
+    rolls on the account's own day. They are two different weeks, and the one
+    field that describes the hub's own counting should keep describing it.
     """
     overlay = limits or {}
     return UsageWindowOut(

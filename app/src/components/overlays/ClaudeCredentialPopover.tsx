@@ -26,6 +26,11 @@
 //   • the reset time is Claude's when Claude states one, and the hub's estimate
 //     (first call in the window + 5h) otherwise. One or the other, never both:
 //     two reset times on one row is a question, not an answer;
+//   • the week row therefore straddles two windows, and says so. Its tokens and
+//     cost are the hub's ISO week; its percentage and reset are Claude's own
+//     seven-day window, which rolls on the account's own day rather than
+//     Monday 00:00. So the qualifier reads `since Monday` while the row shows
+//     the hub's figures and `rolling 7d` once it shows Claude's;
 //   • the weekly *budget* bar is still absent, and for the original reason —
 //     QAgent draws it against a user-configured `weekBudget`, and the hub has
 //     no such setting. A plan limit and a self-imposed budget are different
@@ -733,10 +738,21 @@ function CredentialBlock({
 function UsageWindowRow({
   label,
   qualifier,
+  pctQualifier,
   window,
 }: {
   label: string;
   qualifier: string;
+  /**
+   * The qualifier to use once a percentage is known, when the plan's window is
+   * not the one the hub aggregates over. Only the week row needs it: Claude's
+   * seven-day limit is its own rolling window — it resets on whatever day the
+   * account's does, not Monday 00:00 — so calling that row "since Monday" while
+   * showing Claude's percentage and Claude's reset would describe the wrong
+   * period. The session row needs nothing here; both sides are the same rolling
+   * five hours, which is why #211 chose that window in the first place.
+   */
+  pctQualifier?: string;
   window: UsageWindow;
 }) {
   const hasPct = window.pctUsed >= 0;
@@ -747,7 +763,9 @@ function UsageWindowRow({
           <span className="text-[9.5px] font-bold tracking-[.11em] text-label">
             {label}
           </span>
-          <span className="truncate text-[10px] text-faint">{qualifier}</span>
+          <span className="truncate text-[10px] text-faint">
+            {(hasPct && pctQualifier) || qualifier}
+          </span>
         </div>
         <span className="shrink-0 font-mono text-[12.5px] font-bold text-txt">
           {hasPct ? `${window.pctUsed}% used` : formatCost(window.costUsd)}
@@ -823,6 +841,7 @@ function UsageBlock({
       <UsageWindowRow
         label="CURRENT WEEK"
         qualifier="since Monday"
+        pctQualifier="rolling 7d"
         window={usage.week}
       />
 
