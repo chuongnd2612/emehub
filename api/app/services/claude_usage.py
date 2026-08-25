@@ -11,8 +11,19 @@ Windows match QAgent's contract so the two dashboards agree:
 
 * ``requestsToday`` / ``avgLatencyMs`` — since 00:00 UTC today.
 * ``costMonth`` — the current calendar month.
-* ``weekTokens`` / ``breakdown`` — the current ISO week (Mon 00:00 UTC).
+* ``weekTokens`` / ``breakdown`` / ``week`` / ``byModel`` — the current ISO week
+  (Mon 00:00 UTC).
 * ``weekResetsAt`` — next Monday 00:00 UTC.
+* ``session`` — a rolling five hours; see :data:`SESSION_WINDOW`.
+
+Every timestamp this module emits is UTC in ``%Y-%m-%dT%H:%M:%SZ`` form. There is
+deliberately one convention, because two would eventually disagree by an hour and
+nobody would notice which one was wrong.
+
+What is *not* here, and will not be: a percentage of plan used. QAgent parses the
+CLI's ``/usage`` for a plan limit; the hub is told about calls after they finish
+and knows no limit to be a percentage of. Cost is the honest headline instead —
+which is the same fallback QAgent itself takes when the limit is unavailable.
 """
 
 from __future__ import annotations
@@ -78,13 +89,110 @@ def record(
         return None
 
 
-def _windows(now: datetime) -> tuple[datetime, datetime, datetime, str]:
+#: How long a "session" lasts for the hub.
+#:
+#: The hub has no session of its own — it never runs the CLI, so nothing tells it
+#: where one begins. Five hours is not a guess: it is Claude's own usage window,
+#: and it is the window QAgent reports against
+#: (``q-agent`` ``claude_usage_reader._SESSION_WINDOW``). Matching it keeps the two
+#: chips describing the same thing rather than two different five-hour-ish periods.
+SESSION_WINDOW = timedelta(hours=5)
+
+
+def _iso_z(value: datetime) -> str:
+    """UTC → ``2026-08-25T14:00:00Z``. The module's only timestamp format."""
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _windows(now: datetime) -> tuple[datetime, datetime, datetime, str, datetime]:
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     month = today.replace(day=1)
     week = today - timedelta(days=today.weekday())
     # Mon=0 → 7, so this is always the *next* Monday, never today.
-    resets = (today + timedelta(days=7 - now.weekday())).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return today, month, week, resets
+    resets = _iso_z(today + timedelta(days=7 - now.weekday()))
+    return today, month, week, resets, now - SESSION_WINDOW
+
+
+_TOKEN_COLUMNS = (
+    ClaudeUsage.input_tokens,
+    ClaudeUsage.output_tokens,
+    ClaudeUsage.cache_read_tokens,
+    ClaudeUsage.cache_write_tokens,
+)
+
+
+def _window(db: Session, user, since: datetime) -> tuple[list[int], int, float]:
+    """Token sums (in the order of :data:`_TOKEN_COLUMNS`), requests and cost."""
+    row = (
+        owned(
+            db.query(
+                *(func.sum(column) for column in _TOKEN_COLUMNS),
+                func.count(ClaudeUsage.id),
+                func.sum(ClaudeUsage.cost_usd),
+            ),
+            ClaudeUsage,
+            user,
+        )
+        .filter(ClaudeUsage.ts >= since)
+        .one()
+    )
+    return [int(value or 0) for value in row[:4]], int(row[4] or 0), float(row[5] or 0.0)
+
+
+def _session_resets_at(db: Session, user, since: datetime, now: datetime) -> str:
+    """When the current five-hour window closes.
+
+    Anchored to the *earliest call still inside the window*, not to a clock
+    boundary — the same rule QAgent applies, and the reason its reset time reads
+    as an odd number of minutes past the hour rather than on it. With no calls in
+    the window there is nothing to anchor to, so a fresh window starts now.
+    """
+    earliest = (
+        owned(db.query(func.min(ClaudeUsage.ts)), ClaudeUsage, user)
+        .filter(ClaudeUsage.ts >= since)
+        .scalar()
+    )
+    if earliest is None:
+        return _iso_z(now + SESSION_WINDOW)
+    if earliest.tzinfo is None:
+        earliest = earliest.replace(tzinfo=timezone.utc)
+    return _iso_z(earliest + SESSION_WINDOW)
+
+
+def _by_model(db: Session, user, since: datetime) -> list[dict[str, Any]]:
+    """Per-model tokens and cost across ``since``, dearest first.
+
+    ``model`` is whatever the reporting agent sent — including ``""`` when it sent
+    nothing, which SQL groups into a single bucket on its own. The empty string
+    travels as-is rather than being relabelled here: the service reports what the
+    table holds, and naming the anonymous bucket is the UI's job.
+    """
+    rows = (
+        owned(
+            db.query(
+                ClaudeUsage.model,
+                *(func.sum(column) for column in _TOKEN_COLUMNS),
+                func.sum(ClaudeUsage.cost_usd),
+            ),
+            ClaudeUsage,
+            user,
+        )
+        .filter(ClaudeUsage.ts >= since)
+        .group_by(ClaudeUsage.model)
+        .all()
+    )
+    out = [
+        {
+            "model": row[0] or "",
+            "tokens": sum(int(value or 0) for value in row[1:5]),
+            "costUsd": round(float(row[5] or 0.0), 4),
+        }
+        for row in rows
+    ]
+    # Dearest first, then by tokens so a run of zero-cost models still has a
+    # stable order rather than whatever the database happened to return.
+    out.sort(key=lambda entry: (entry["costUsd"], entry["tokens"]), reverse=True)
+    return out
 
 
 def stats(db: Session, user, now: datetime | None = None) -> dict[str, Any]:
@@ -94,7 +202,7 @@ def stats(db: Session, user, now: datetime | None = None) -> dict[str, Any]:
     sees nothing rather than everything.
     """
     reference = now or datetime.now(timezone.utc)
-    today, month, week, resets = _windows(reference)
+    today, month, week, resets, session_since = _windows(reference)
 
     requests_today, avg_latency = (
         owned(
@@ -110,21 +218,10 @@ def stats(db: Session, user, now: datetime | None = None) -> dict[str, Any]:
         .filter(ClaudeUsage.ts >= month)
         .scalar()
     )
-    totals = (
-        owned(
-            db.query(
-                func.sum(ClaudeUsage.input_tokens),
-                func.sum(ClaudeUsage.output_tokens),
-                func.sum(ClaudeUsage.cache_read_tokens),
-                func.sum(ClaudeUsage.cache_write_tokens),
-            ),
-            ClaudeUsage,
-            user,
-        )
-        .filter(ClaudeUsage.ts >= week)
-        .one()
-    )
-    inp, out, cache_read, cache_write = (int(v or 0) for v in totals)
+
+    week_tokens, week_requests, week_cost = _window(db, user, week)
+    inp, out, cache_read, cache_write = week_tokens
+    session_tokens, session_requests, session_cost = _window(db, user, session_since)
 
     return {
         "requestsToday": int(requests_today or 0),
@@ -138,4 +235,17 @@ def stats(db: Session, user, now: datetime | None = None) -> dict[str, Any]:
             "cacheRead": cache_read,
             "cacheWrite": cache_write,
         },
+        "session": {
+            "tokens": sum(session_tokens),
+            "requests": session_requests,
+            "costUsd": round(session_cost, 4),
+            "resetsAt": _session_resets_at(db, user, session_since, reference),
+        },
+        "week": {
+            "tokens": inp + out + cache_read + cache_write,
+            "requests": week_requests,
+            "costUsd": round(week_cost, 4),
+            "resetsAt": resets,
+        },
+        "byModel": _by_model(db, user, week),
     }

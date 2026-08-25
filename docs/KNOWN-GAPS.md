@@ -109,25 +109,23 @@ mọi cờ đang `false`, mỗi cờ có comment ghi chính xác điều kiện 
 Chip credential trên header của hub hiện hiển thị model thật từ `GET /me/model-preferences`,
 context window dưới dạng pill `1M ctx`, mức effort, tên file / subscription / scope / hạn dùng
 / lần refresh gần nhất của credential, nút **Test credential**, một nút refresh, skeleton lúc
-tải, tooltip trạng thái, và usage của tuần — token tuần, phân rã bốn chiều (input, output,
-cache read, cache write), `costMonth`, `requestsToday`, `avgLatencyMs`.
+tải, tooltip trạng thái, và usage: **hai cửa sổ cuốn chiếu** — `CURRENT SESSION` và
+`CURRENT WEEK`, mỗi cửa sổ một dòng `N tokens · N requests · resets …` với chi phí làm số
+chính — phân rã bốn chiều của tuần (input, output, cache read, cache write), rollup
+`BY MODEL`, `costMonth`, `requestsToday`, `avgLatencyMs`.
 
-Chip anh em ở QAgent (`ClaudeStatsButton`) hiển thị nhiều hơn thế. Bảy thứ dưới đây **cố ý
+Chip anh em ở QAgent (`ClaudeStatsButton`) vẫn hiển thị nhiều hơn thế. Bốn mục dưới đây **cố ý
 không được port sang**, và không có thứ thay thế nào được bịa ra cho chúng.
 
 ### Cần thêm backend
 
-Ba mục này khả thi — dữ liệu đã có hoặc gần có, chỉ là service chưa trả ra.
-
 | Thiếu | Vì sao chưa có |
 |---|---|
-| Rollup `by_model` | Bảng `claude_usage` có cột `model` trên từng dòng nên hoàn toàn suy ra được, nhưng service không bao giờ group theo nó và response không có khoá `byModel` |
-| Số request và chi phí theo tuần | `requestsToday` chỉ tính hôm nay và `costMonth` chỉ tính tháng, nên dòng phụ "N tokens · N requests · $N" theo tuần của QAgent không dựng được. Mỗi con số hiện tại đều mang theo cửa sổ thời gian mà nó thực sự bao phủ |
 | Email tài khoản / tổ chức | `ClaudeCredentialMeta` không có field nào trong hai field đó |
 
 ### Bất khả thi ở kiến trúc hiện tại
 
-Bốn mục này không phải chuyện thêm một endpoint. Chúng đòi hỏi hub phải chạy Claude CLI cục
+Ba mục này không phải chuyện thêm một endpoint. Chúng đòi hỏi hub phải chạy Claude CLI cục
 bộ, mà theo thiết kế thì hub không chạy. `api/app/services/claude_usage.py` nói điều đó trong
 chính docstring của nó:
 
@@ -135,15 +133,30 @@ chính docstring của nó:
 > QAgent records usage as a side effect of *running* the CLI; the hub never runs it, so here
 > the agent reports each completed call and the hub aggregates.
 
-Hàm `stats()` trả về đúng sáu khoá: `requestsToday`, `avgLatencyMs`, `costMonth`, `weekTokens`,
-`weekResetsAt`, `breakdown`.
-
 | Thiếu | Vì sao không dựng được |
 |---|---|
-| Gauge "% of plan used" | QAgent parse `/usage` của CLI để lấy `pctUsed`; đường dự phòng của nó là một setting `weekBudget` do người dùng cấu hình. Hub **không biết hạn mức nào cả** và không có setting tương ứng. Chỉ có số tuyệt đối |
+| Gauge "% of plan used" | QAgent parse `/usage` của CLI để lấy `pctUsed`; đường dự phòng của nó là một setting `weekBudget` do người dùng cấu hình. Hub **không biết hạn mức nào cả** và không có setting tương ứng. Chỉ có số tuyệt đối. Khi CLI không đưa được hạn mức thì chính QAgent cũng rơi về chi phí — nên số chính của hub là cùng một đường dự phòng đó, không phải một sự đánh đổi |
 | Thanh weekly budget | Cùng lý do — không có budget để vẽ thanh |
-| Cửa sổ "Current session" | Cửa sổ của hub là hôm nay, tuần ISO hiện tại, và tháng dương lịch hiện tại. Không có khái niệm session trong model, trong service, hay trong response |
 | Health dot ba trạng thái / "Claude CLI unavailable" | Cần `stats.operational`, tức là câu trả lời cho "CLI cục bộ có chạy được không". Hub không có probe nào và không có field tương đương, nên dot giữ nguyên bốn trạng thái suy ra từ credential và không thêm chiều sức khoẻ nào |
+
+### Đã lấp (#210)
+
+Ba mục từng nằm ở hai bảng trên đã dựng được, và **không cần migration nào** — mọi cột đều đã
+có sẵn trên bảng `claude_usage`, đây thuần tuý là aggregation:
+
+| Từng thiếu | Dựng bằng gì |
+|---|---|
+| Rollup `by_model` | `stats()` group theo cột `model` có sẵn trên từng dòng, trong cửa sổ tuần, sắp theo chi phí giảm dần. Dòng nào agent không gửi tên model thì `model` là `""` — SQL gom chúng thành đúng một nhóm, và UI gọi nhóm đó là `Unattributed` |
+| Số request và chi phí theo tuần | Cùng một `SUM`/`COUNT` như token tuần, chỉ là trước đây service không trả ra. Khoá `week` mới đứng cạnh `weekTokens`, không thay thế nó |
+| Cửa sổ "Current session" | Từng bị xếp nhầm vào bảng "bất khả thi". Hub **không** cần CLI để có cửa sổ này: mỗi dòng `claude_usage` đã có `ts`, mà đó là toàn bộ đầu vào một cửa sổ cuốn chiếu cần. Định nghĩa lấy đúng của QAgent (`claude_usage_reader._SESSION_WINDOW`) — **5 giờ cuốn chiếu, reset sau lần gọi đầu tiên trong cửa sổ đúng 5 giờ**, tức cửa sổ usage của chính Claude. Đó cũng là lý do giờ reset hiếm khi tròn. UI ghi kèm `rolling 5h` để con số tự giải thích |
+
+Chi phí là `SUM(cost_usd)`, không phải tính lại: agent gửi kèm `cost_usd` trên từng call qua
+`POST /credentials/claude/usage` và hub lưu nguyên. QAgent phải mang một bảng giá theo model
+vì nó dựng lại chi phí từ transcript vốn không ghi chi phí; hub không ở tình cảnh đó, nên
+**không thêm bảng giá nào** — một bảng giá cũ sẽ lặng lẽ báo sai tiền.
+
+Sáu khoá cũ của `stats()` giữ nguyên hình dạng, vì `screens/Claude/CredentialsTab.tsx` render
+chúng.
 
 Panel có một dòng disclaimer nói rằng chi phí là ước lượng từ token usage và các con số chỉ
 giới hạn trong những gì agent đã báo về.

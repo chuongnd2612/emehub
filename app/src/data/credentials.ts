@@ -360,6 +360,24 @@ export interface CredentialTestOutcome {
   message: string;
 }
 
+/** One rolling usage window's totals. `resetsAt` is UTC ISO, `...Z`. */
+export interface UsageWindow {
+  tokens: number;
+  requests: number;
+  costUsd: number;
+  resetsAt: string;
+}
+
+/**
+ * One model's share of a window. `model` is whatever the reporting agent sent,
+ * so it is `""` when the agent named none — see `MODEL_UNATTRIBUTED`.
+ */
+export interface ByModelUsage {
+  model: string;
+  tokens: number;
+  costUsd: number;
+}
+
 /** `GET /credentials/claude/usage` — the signed-in user's own spend. */
 export interface ClaudeUsage {
   requestsToday: number;
@@ -374,6 +392,16 @@ export interface ClaudeUsage {
     cacheRead: number;
     cacheWrite: number;
   };
+  /**
+   * A rolling five hours — Claude's own usage window, and the one QAgent reports
+   * against, so the two chips describe the same period. It resets five hours
+   * after the *first call inside it*, which is why the time is rarely round.
+   */
+  session: UsageWindow;
+  /** The current ISO week — the same window `weekTokens` covers. */
+  week: UsageWindow;
+  /** The week's spend per model, dearest first. */
+  byModel: ByModelUsage[];
 }
 
 const CREDENTIAL_PATH = "/credentials/claude";
@@ -520,6 +548,23 @@ export function formatTokens(n: number): string {
   if (!scaled) return String(n);
   const [value, unit] = scaled as [number, string];
   return `${value.toFixed(1).replace(/\.0$/, "")}${unit}`;
+}
+
+/** `4.2` -> `"$4.20"`. Two decimals always — money with one looks truncated. */
+export function formatCost(usd: number): string {
+  return `$${usd.toFixed(2)}`;
+}
+
+/**
+ * What to call spend the agent reported without a model name. The column
+ * defaults to `""`, so this is an ordinary bucket rather than an error — the
+ * backend reports the empty string as it stores it and the naming happens here.
+ */
+export const MODEL_UNATTRIBUTED = "Unattributed";
+
+/** Strip the vendor prefix so `claude-sonnet-5` reads as `sonnet-5`. */
+export function formatModel(model: string): string {
+  return model.replace(/^claude-/i, "").trim() || MODEL_UNATTRIBUTED;
 }
 
 /** `1240` -> `"1.2s"`, `840` -> `"840ms"`. The hub stores whole milliseconds. */
