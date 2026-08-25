@@ -53,7 +53,10 @@ export function Input({
   if (!label) return field;
 
   return (
-    <label htmlFor={inputId} className="flex flex-col gap-[7px]">
+    // `min-w-0` because this wrapper — not the field box `className` targets —
+    // is the flex/grid item of whatever row the caller puts it in. Without it a
+    // long value pushes past the track's share and the columns go uneven (#188).
+    <label htmlFor={inputId} className="flex min-w-0 flex-col gap-[7px]">
       <span className="text-[9.5px] font-bold tracking-[.11em] text-label">
         {label}
       </span>
