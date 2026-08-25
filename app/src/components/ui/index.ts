@@ -34,6 +34,8 @@ export type { RadioProps, RadioGroupProps } from "./Radio";
 export { Range } from "./Range";
 export type { RangeProps } from "./Range";
 
+export { SaveBar } from "./SaveBar";
+
 export { Segmented } from "./Segmented";
 export type { SegmentedOption, SegmentedProps } from "./Segmented";
 

@@ -74,7 +74,7 @@ export const ROUTE_HEADER: Record<string, HeaderContent> = {
   },
   "/app/claude": {
     title: "Claude Settings",
-    subtitle: "Credentials, models and agent behaviour",
+    subtitle: "Credentials and model selection",
   },
   "/app/auth": {
     title: "Authentication",
@@ -82,7 +82,7 @@ export const ROUTE_HEADER: Record<string, HeaderContent> = {
   },
   "/app/users": {
     title: "User Management",
-    subtitle: "Members, roles and pending invitations",
+    subtitle: "Members of this workspace",
   },
   "/app/integrations": {
     title: "Integrations",
@@ -90,7 +90,7 @@ export const ROUTE_HEADER: Record<string, HeaderContent> = {
   },
   "/app/settings": {
     title: "Settings",
-    subtitle: "Appearance, workspace defaults and notifications",
+    subtitle: "Appearance and product availability",
   },
   // Not in the handoff's nav — the account screen has no design and is reached
   // from the sidebar user chip, not the nav list. It still needs a header.
