@@ -13,9 +13,14 @@ Empty columns, and a missing row, both resolve to ``settings.claude_model`` and
 means enabled — and the reason shipping this table changed nobody's builds: a
 member's model only moves once they choose one.
 
-There is deliberately no second config key for the fast model or the effort. One
-deploy-time knob (``EMEHUB_CLAUDE_MODEL``) sets the workspace's answer; the rest
-is either a member's choice or a constant here.
+There is deliberately no second config key for the effort. One deploy-time knob
+(``EMEHUB_CLAUDE_MODEL``) sets the workspace's answer; the rest is either a
+member's choice or a constant here.
+
+There is also deliberately no *fast* model. One was stored here briefly (#190)
+and read by nothing: the hub makes exactly one kind of Claude call, a knowledge
+build, so there was no cheaper second invocation to route it to. It was removed
+(#197) rather than left as a control that decides nothing.
 
 ## The known sets are enforced here
 
@@ -54,11 +59,6 @@ EFFORT_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
 #: only Claude work is a knowledge build, which traverses a whole repository.
 DEFAULT_EFFORT = "high"
 
-#: The cheap model, for classification and summaries. A constant rather than a
-#: config key: the hub runs nothing on it itself, so there is no deployment that
-#: needs to override it — only a member choosing differently.
-DEFAULT_FAST_MODEL = "claude-haiku-4-5"
-
 
 class UnknownModelError(ValueError):
     """A preference named a model id the hub does not recognise."""
@@ -72,7 +72,6 @@ def _defaults() -> dict[str, str]:
     """What a user with no choices gets."""
     return {
         "mainModel": settings.claude_model,
-        "fastModel": DEFAULT_FAST_MODEL,
         "effort": DEFAULT_EFFORT,
     }
 
@@ -96,13 +95,9 @@ def get(db: Session, user_id: int | None) -> dict[str, object]:
     if row is not None:
         if row.main_model:
             out["mainModel"] = row.main_model
-        if row.fast_model:
-            out["fastModel"] = row.fast_model
         if row.effort:
             out["effort"] = row.effort
-    out["usingDefaults"] = row is None or not (
-        row.main_model or row.fast_model or row.effort
-    )
+    out["usingDefaults"] = row is None or not (row.main_model or row.effort)
     return out
 
 
@@ -123,16 +118,15 @@ def resolve_for_run(db: Session, owner_id: int | None) -> tuple[str, str]:
 
 
 def set_preferences(
-    db: Session, user_id: int, *, main_model: str, fast_model: str, effort: str
+    db: Session, user_id: int, *, main_model: str, effort: str
 ) -> dict[str, object]:
     """Store the whole preference and return the full new state. Caller commits.
 
     Everything is validated before anything is written, so a bad ``effort``
     cannot leave a half-applied model behind.
     """
-    for value in (main_model, fast_model):
-        if value not in KNOWN_MODELS:
-            raise UnknownModelError(value)
+    if main_model not in KNOWN_MODELS:
+        raise UnknownModelError(main_model)
     if effort not in EFFORT_LEVELS:
         raise UnknownEffortError(effort)
 
@@ -141,13 +135,11 @@ def set_preferences(
         row = UserModelPreferences(user_id=user_id)
         db.add(row)
     row.main_model = main_model
-    row.fast_model = fast_model
     row.effort = effort
     # Always False: a write IS the choice, so the caller renders the result of
     # this request without having to re-read to find out whose values they are.
     return {
         "mainModel": row.main_model,
-        "fastModel": row.fast_model,
         "effort": row.effort,
         "usingDefaults": False,
     }

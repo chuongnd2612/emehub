@@ -2,18 +2,25 @@
 // cards, thinking-level chips (Off/Low/Medium/High) with an explanatory line,
 // and a `Parallel agent runs` range (1–8)".
 //
-// **Two changes, both for the same reason** (#190): this tab's whole problem was
-// controls that could not do the thing they named.
+// **Three of those four are gone**, all for the same reason (#190, #197): this
+// tab's whole problem was controls that could not do the thing they named.
 //
 //   • `Parallel agent runs` is gone. Nothing read it — no endpoint, no agent, no
 //     config — so it was a slider that decided nothing.
 //   • The thinking-level chips became EFFORT. They encoded a fixed thinking-token
 //     budget, which is not how the current models work; `claude --effort` is the
 //     knob that actually exists, and the level picked here is passed to it.
+//   • `Fast model` is gone. #190 made it persist, which only moved the problem:
+//     the hub makes exactly one kind of Claude call — a knowledge build — so
+//     there was no second, cheaper invocation for it to choose the model of.
 //
 // Everything left is real. Each control writes through to
 // `PUT /me/model-preferences` the moment it is used, survives a reload, and is
 // read back by the hub's knowledge builds when they invoke the CLI.
+//
+// Two full-width cards stacked at the shell's 14 px gap, rather than the
+// handoff's 2-up model row with one cell empty. The dropdown keeps its 300 px
+// width inside the wider card: the card grows, the control does not.
 
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
@@ -52,28 +59,15 @@ export function ModelsTab({ s }: { s: ClaudeSettings }) {
         </Notice>
       )}
 
-      <div className="grid grid-cols-2 gap-[14px]">
-        <ModelCard
-          ddKey="claude-main-model"
-          title="Default model"
-          description="Used for planning, test generation and code changes."
-          value={s.models.mainModel}
-          onChange={s.setMainModel}
-          busy={s.savingModels}
-          dot={<span className="size-[9px] shrink-0 rounded-full bg-accent-grad" />}
-        />
-        <ModelCard
-          ddKey="claude-fast-model"
-          title="Fast model"
-          description="Used for classification, summaries and import jobs."
-          value={s.models.fastModel}
-          onChange={s.setFastModel}
-          busy={s.savingModels}
-          dot={
-            <span className="size-[9px] shrink-0 rounded-full bg-[linear-gradient(135deg,var(--txt3),var(--muted))]" />
-          }
-        />
-      </div>
+      <ModelCard
+        ddKey="claude-main-model"
+        title="Default model"
+        description="Used for planning, test generation and code changes."
+        value={s.models.mainModel}
+        onChange={s.setMainModel}
+        busy={s.savingModels}
+        dot={<span className="size-[9px] shrink-0 rounded-full bg-accent-grad" />}
+      />
 
       <EffortCard
         value={s.models.effort}
@@ -165,7 +159,7 @@ function ModelCard({
   const selected = modelOption(value);
 
   return (
-    <GlassCard radius="panel" className="p-5">
+    <GlassCard radius="panel" className="p-[22px]">
       <div className="text-[14.5px] font-extrabold tracking-[-.01em] text-txt">
         {title}
       </div>
@@ -183,7 +177,7 @@ function ModelCard({
             data-surface
             disabled={busy}
             onClick={toggle}
-            className="mt-[14px] flex w-full cursor-pointer items-center gap-2.5 rounded-button border border-bd2 bg-card3 px-[14px] py-3 hover:border-pb disabled:cursor-not-allowed"
+            className="mt-[15px] flex w-[300px] max-w-full cursor-pointer items-center gap-2.5 rounded-button border border-bd2 bg-card3 px-[14px] py-3 hover:border-pb disabled:cursor-not-allowed"
           >
             {dot}
             <span className="flex-1 text-left text-[13px] font-bold text-txt">

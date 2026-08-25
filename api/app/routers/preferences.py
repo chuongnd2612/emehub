@@ -48,7 +48,6 @@ class ModelPreferencesOut(ApiModel):
     """Model **ids**, never display labels — the SPA owns the copy."""
 
     main_model: str
-    fast_model: str
     #: A ``claude --effort`` level: low | medium | high | xhigh | max.
     effort: str
     #: True when the user has chosen nothing and these are the workspace
@@ -58,7 +57,6 @@ class ModelPreferencesOut(ApiModel):
 
 class ModelPreferencesIn(ApiModel):
     main_model: str
-    fast_model: str
     effort: str
 
 
@@ -91,7 +89,6 @@ def set_model_preferences(
             db,
             user.id,
             main_model=body.main_model,
-            fast_model=body.fast_model,
             effort=body.effort,
         )
     except UnknownModelError as exc:
