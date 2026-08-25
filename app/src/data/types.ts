@@ -492,34 +492,6 @@ export type CredentialStatus =
   | "refreshable"
   | "expired";
 
-/** Parsed from a `.credentials.json` and stored per workspace. */
-export interface SharedCredential {
-  id: string;
-  label: string;
-  email: string;
-  /** Subscription tier, e.g. "Claude Max 20×". */
-  subscription: string;
-  /** Pre-formatted expiry date, e.g. "12 Oct 2026". */
-  expiresDisplay: string;
-  /** Days until expiry; null when the token has no expiry. */
-  daysLeft: number | null;
-  /** Expiry as epoch ms — `daysLeft` rounds, the status rule must not. */
-  expiresAtEpochMs: number | null;
-  /** Whether a refresh token sits beside the access token (issue #63). */
-  hasRefreshToken: boolean;
-  /** The hub's stored status column — `expired` here is the CLI's verdict. */
-  storedStatus: string;
-  scopes: string[];
-  lastRefreshed: string;
-  /** Number of members assigned to this credential. */
-  members: number;
-  isDefault: boolean;
-  /** The OAuth access token — masked in the UI unless revealed. */
-  token: string;
-  /** Where it came from, e.g. `.claude/.credentials.json · synced`. */
-  source: string;
-}
-
 /** A member's own token, attached by dropping their `.credentials.json`. */
 export interface PersonalCredential {
   filename: string;

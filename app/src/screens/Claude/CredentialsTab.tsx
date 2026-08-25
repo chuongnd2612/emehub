@@ -33,6 +33,7 @@ import {
   formatExpiryIso,
   formatRefreshed,
   formatResetsIn,
+  formatTokens,
   type ClaudeCredentialMeta,
   type ClaudeUsage,
 } from "@/data";
@@ -59,13 +60,6 @@ import { metaStatusLabel, statusNote, type ClaudeSettings } from "./state";
  */
 const CLAUDE_BANNER_GRADIENT =
   "linear-gradient(135deg, rgba(217,119,87,.1), rgba(225,23,43,.05))";
-
-/** 18_400_000 -> "18.4M". */
-function compact(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
 
 export function CredentialsTab({ s }: { s: ClaudeSettings }) {
   if (s.load === "loading") {
@@ -494,7 +488,7 @@ function UsageBody({ usage }: { usage: ClaudeUsage }) {
     <>
       <div className="mt-3 flex items-end gap-[9px]">
         <span className="text-[30px] leading-none font-black tracking-[-.04em] text-txt">
-          {compact(usage.weekTokens)}
+          {formatTokens(usage.weekTokens)}
         </span>
         <span className="pb-1 text-[11.5px] text-faint">
           tokens this week · resets {formatResetsIn(usage.weekResetsAt)}
@@ -508,8 +502,8 @@ function UsageBody({ usage }: { usage: ClaudeUsage }) {
         />
       </div>
       <div className="mt-[9px] flex justify-between text-[11px] text-label">
-        <span>Input {compact(input)}</span>
-        <span>Output {compact(output)}</span>
+        <span>Input {formatTokens(input)}</span>
+        <span>Output {formatTokens(output)}</span>
       </div>
       <div className="mt-[11px] border-t border-bd3 pt-[11px] text-[11px] text-faint">
         ${usage.costMonth.toFixed(2)} this month · {usage.requestsToday}{" "}
