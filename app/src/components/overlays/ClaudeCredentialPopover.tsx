@@ -13,15 +13,20 @@
 // ## What the hub cannot show, and why it does not pretend to
 //
 // QAgent runs the Claude CLI locally, so its panel can show a plan-usage
-// percentage, a weekly budget gauge, a current-session window and a "Claude CLI
-// unavailable" health state. **None of those are observable here.** The hub
-// never invokes Claude for any of this: agents report each completed call and
+// percentage, a weekly budget gauge and a "Claude CLI unavailable" health
+// state. **None of those are observable here.** The hub never invokes Claude
+// for any of this: agents report each completed call and
 // `api/app/services/claude_usage.py` aggregates what arrives. So:
 //
 //   • absolute figures only — no percentage of a limit nobody told us, no
 //     budget the hub has no setting for;
 //   • the status dot keeps its four credential-derived states and gains no
 //     health dimension, because there is no probe behind one;
+//   • the session window IS shown, and is not one of the above. It needs no
+//     CLI — a rolling five hours over rows the hub already stores, resetting
+//     five hours after the window's first call, which is exactly how QAgent
+//     defines its own. The panel labels it `rolling 5h` so the figure explains
+//     itself rather than looking like a number somebody chose;
 //   • "Test credential" is a STORAGE check — present, decryptable, parseable,
 //     unexpired. Its wording is taken verbatim from Claude Settings' own, since
 //     two phrasings of a security-relevant claim drift apart.
@@ -54,9 +59,11 @@ import {
   type SegmentedOption,
 } from "@/components/ui";
 import {
+  formatCost,
   formatDaysLeft,
   formatExpiryIso,
   formatLatency,
+  formatModel,
   formatRefreshed,
   formatResetsIn,
   formatTokens,
@@ -76,6 +83,7 @@ import {
   type CredentialSource,
   type CredentialStatus,
   type ModelPreferences,
+  type UsageWindow,
 } from "@/data";
 import {
   placeBelow,
@@ -680,14 +688,53 @@ function CredentialBlock({
 /* ── Usage ───────────────────────────────────────────────────────────────── */
 
 /**
- * `GET /credentials/claude/usage`, which spans THREE windows: the token total
- * and its four-way breakdown are the current ISO week, the dollar figure is the
- * calendar month, the request count and latency are today. Every figure carries
- * the window it covers, because a heading cannot describe all three.
+ * One rolling window: a label, the window's cost as the headline, and a sub-line
+ * of what that cost is made of.
  *
- * There is no gauge here on purpose. QAgent draws one because the CLI hands it a
- * percentage of the plan limit; the hub is told about calls after they happen
- * and knows no limit to be a percentage of.
+ * QAgent puts a "% of plan used" gauge here. The hub cannot: it is told about
+ * calls after they finish and knows no limit to be a percentage of. Cost is not
+ * a consolation prize for that — it is the same figure QAgent itself falls back
+ * to whenever the CLI does not hand it a limit.
+ */
+function UsageWindowRow({
+  label,
+  qualifier,
+  window,
+}: {
+  label: string;
+  qualifier: string;
+  window: UsageWindow;
+}) {
+  return (
+    <div className="mt-[13px] first:mt-0">
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="flex min-w-0 items-baseline gap-1.5">
+          <span className="text-[9.5px] font-bold tracking-[.11em] text-label">
+            {label}
+          </span>
+          <span className="truncate text-[10px] text-faint">{qualifier}</span>
+        </div>
+        <span className="shrink-0 font-mono text-[12.5px] font-bold text-txt">
+          {formatCost(window.costUsd)}
+        </span>
+      </div>
+      <div className="mt-[5px] text-[11px] text-muted">
+        {formatTokens(window.tokens)} tokens · {window.requests}{" "}
+        {window.requests === 1 ? "request" : "requests"} · resets{" "}
+        {formatResetsIn(window.resetsAt)}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * `GET /credentials/claude/usage`. Two rolling windows (session, week), the
+ * week's four-way token breakdown, the week's spend per model, and a footer of
+ * the three figures that carry their own windows — month cost, today's requests,
+ * today's latency.
+ *
+ * Every figure states the window it covers, because no single heading describes
+ * all of them.
  */
 function UsageBlock({
   usage,
@@ -724,45 +771,62 @@ function UsageBlock({
     ["Cache read", cacheRead, "bg-ok"],
     ["Cache write", cacheWrite, "bg-warn"],
   ];
+  // One model is not a comparison, so the rollup earns its space from two up —
+  // below that the week row already says everything it would.
+  const byModel = usage.byModel.length > 1 ? usage.byModel : [];
 
   return (
     <div className="py-[13px]">
-      <div className="text-[9.5px] font-bold tracking-[.11em] text-label">
-        THIS WEEK
-      </div>
+      <UsageWindowRow
+        label="CURRENT SESSION"
+        qualifier="rolling 5h"
+        window={usage.session}
+      />
+      <UsageWindowRow
+        label="CURRENT WEEK"
+        qualifier="since Monday"
+        window={usage.week}
+      />
 
-      {usage.weekTokens > 0 ? (
-        <>
-          <div className="mt-1.5 flex items-end gap-[7px]">
-            <span className="text-[20px] leading-none font-black tracking-[-.03em] text-txt">
-              {formatTokens(usage.weekTokens)}
-            </span>
-            <span className="pb-px text-[11px] text-faint">
-              tokens · resets {formatResetsIn(usage.weekResetsAt)}
-            </span>
+      {usage.weekTokens > 0 && (
+        <div className="mt-[13px] flex flex-col gap-1.5 border-t border-bd3 pt-[11px]">
+          {rows.map(([label, value, dot]) => (
+            <div key={label} className="flex items-center gap-2">
+              <span className={cn("size-2 shrink-0 rounded-full", dot)} />
+              <span className="flex-1 text-[11px] text-muted">{label}</span>
+              <span className="font-mono text-[11px] font-semibold text-txt2">
+                {formatTokens(value)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {byModel.length > 0 && (
+        <div className="mt-[13px] border-t border-bd3 pt-[11px]">
+          <div className="text-[9.5px] font-bold tracking-[.11em] text-label">
+            BY MODEL
           </div>
-
-          <div className="mt-[11px] flex flex-col gap-1.5">
-            {rows.map(([label, value, dot]) => (
-              <div key={label} className="flex items-center gap-2">
-                <span className={cn("size-2 shrink-0 rounded-full", dot)} />
-                <span className="flex-1 text-[11px] text-muted">{label}</span>
-                <span className="font-mono text-[11px] font-semibold text-txt2">
-                  {formatTokens(value)}
+          <div className="mt-[9px] flex flex-col gap-1.5">
+            {byModel.map((entry) => (
+              <div key={entry.model} className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-[11px] text-muted">
+                  {formatModel(entry.model)}
+                </span>
+                <span className="shrink-0 text-[10.5px] text-faint">
+                  {formatTokens(entry.tokens)} tokens
+                </span>
+                <span className="shrink-0 font-mono text-[11px] font-semibold text-txt2">
+                  {formatCost(entry.costUsd)}
                 </span>
               </div>
             ))}
           </div>
-        </>
-      ) : (
-        <div className="mt-1.5 text-[11.5px] text-muted">
-          No usage reported this week · resets{" "}
-          {formatResetsIn(usage.weekResetsAt)}
         </div>
       )}
 
       <div className="mt-[11px] border-t border-bd3 pt-[9px] text-[11px] text-faint">
-        ${usage.costMonth.toFixed(2)} this month · {usage.requestsToday}{" "}
+        {formatCost(usage.costMonth)} this month · {usage.requestsToday}{" "}
         {usage.requestsToday === 1 ? "request" : "requests"} today
         {usage.avgLatencyMs > 0 && ` · ${formatLatency(usage.avgLatencyMs)} avg`}
       </div>

@@ -163,6 +163,22 @@ class UsageBreakdownOut(ApiModel):
     cache_write: int = 0
 
 
+class UsageWindowOut(ApiModel):
+    """One rolling window's totals. ``resets_at`` is UTC ISO, ``...Z``."""
+
+    tokens: int = 0
+    requests: int = 0
+    cost_usd: float = 0.0
+    resets_at: str = ""
+
+
+class ByModelUsageOut(ApiModel):
+    #: Empty when the reporting agent named no model — the UI labels that bucket.
+    model: str = ""
+    tokens: int = 0
+    cost_usd: float = 0.0
+
+
 class UsageStatsOut(ApiModel):
     requests_today: int = 0
     avg_latency_ms: int = 0
@@ -170,6 +186,21 @@ class UsageStatsOut(ApiModel):
     week_tokens: int = 0
     week_resets_at: str = ""
     breakdown: UsageBreakdownOut = Field(default_factory=UsageBreakdownOut)
+    #: A rolling five hours, resetting five hours after the window's first call.
+    session: UsageWindowOut = Field(default_factory=UsageWindowOut)
+    #: The current ISO week — the same window ``week_tokens`` covers.
+    week: UsageWindowOut = Field(default_factory=UsageWindowOut)
+    #: The week's spend per model, dearest first.
+    by_model: list[ByModelUsageOut] = Field(default_factory=list)
+
+
+def _window(payload: dict) -> UsageWindowOut:
+    return UsageWindowOut(
+        tokens=payload["tokens"],
+        requests=payload["requests"],
+        cost_usd=payload["costUsd"],
+        resets_at=payload["resetsAt"],
+    )
 
 
 def _meta(payload: dict | None) -> CredentialMetaOut | None:
@@ -462,4 +493,12 @@ def usage_stats(
             cache_read=payload["breakdown"]["cacheRead"],
             cache_write=payload["breakdown"]["cacheWrite"],
         ),
+        session=_window(payload["session"]),
+        week=_window(payload["week"]),
+        by_model=[
+            ByModelUsageOut(
+                model=entry["model"], tokens=entry["tokens"], cost_usd=entry["costUsd"]
+            )
+            for entry in payload["byModel"]
+        ],
     )
