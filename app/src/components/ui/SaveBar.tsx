@@ -9,6 +9,19 @@
 //
 // The wrapper is `pointer-events-none` so the bar never blocks clicks on the page
 // behind it; only the pill itself takes pointer events.
+//
+// **Portalled to `document.body`, and it has to be.** `position: fixed` is
+// resolved against the nearest ancestor with a `transform`, `filter` or
+// `backdrop-filter` rather than against the viewport, and every screen that
+// wants this bar sits inside one: the shell's screens open with
+// `animate-fade-in-up`, whose `both` fill-mode leaves `transform: matrix(…)`
+// applied for the lifetime of the element. Rendered in place, the bar was
+// pinned to the bottom of a 1507 px-tall screen container and never appeared on
+// screen at all — the same stacking-context trap CLAUDE.md documents for
+// dropdowns and popovers, in its `position: fixed` form. Only the mount point
+// moves; the markup below is unchanged.
+
+import { createPortal } from "react-dom";
 
 import { Icon } from "./Icon";
 import { cn } from "@/lib/cn";
@@ -27,7 +40,7 @@ export function SaveBar({
 }) {
   if (count === 0) return null;
 
-  return (
+  return createPortal(
     <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[900] flex justify-center px-4 pb-6">
       <div
         role="status"
@@ -68,6 +81,7 @@ export function SaveBar({
           {saving ? "Saving…" : "Save changes"}
         </button>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

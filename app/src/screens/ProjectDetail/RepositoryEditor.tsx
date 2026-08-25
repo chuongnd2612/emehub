@@ -86,7 +86,12 @@ export function RepositoryEditor({
 
   // The serialized list, not the config object — see the note at the top.
   const incomingKey = JSON.stringify(incoming);
+  const savedKey = JSON.stringify(saved);
   useEffect(() => {
+    // The hub agrees with the baseline we already hold — the ordinary case for
+    // the refetch after a save, which seats the baseline from the PUT's own
+    // response. See `ProjectConfigForm` for the long version.
+    if (incomingKey === savedKey) return;
     setSaved(incoming);
     setRepos(incoming);
     setDiscovered(null);

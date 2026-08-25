@@ -192,7 +192,15 @@ export function ProjectConfigForm({
    * else on the screen refreshed. See the note at the top of this file.
    */
   const incomingKey = JSON.stringify(incoming);
+  const savedKey = JSON.stringify(saved);
   useEffect(() => {
+    // The hub agrees with the baseline we already hold — which is the ordinary
+    // case for the refetch that follows a save, because `save` seats the
+    // baseline from the PUT's own response. Returning here is what closes the
+    // window between the save resolving and the refetch landing: without it,
+    // anything typed in those few hundred milliseconds would be thrown away by
+    // a "change" that was only this component catching up with itself.
+    if (incomingKey === savedKey) return;
     setSaved(incoming);
     setDraft(incoming);
     // eslint-disable-next-line react-hooks/exhaustive-deps
