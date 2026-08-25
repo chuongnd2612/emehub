@@ -14,12 +14,13 @@
 // a repository to clone, so the CTA is disabled with an explanation when the
 // project has no configured repo.
 //
-// One departure remains. **There is no source table.** Nothing in the hub models
-// the handoff's source rows (icon, title, type, size, chunks, scope, state);
-// `getKnowledgeSources` has no endpoint behind it and resolves to `[]`.
-// Rendering the fixtures would be showing invented rows as live data, so the
-// toolbar and table appear only if that call ever returns something, and a
-// notice explains the gap until it does.
+// One departure remains. **There is no source table** (#191). Nothing in the hub
+// models the handoff's source rows (icon, title, type, size, chunks, scope,
+// state), so the toolbar, the search box, the type chips, the table and the
+// "Add source" button are gone rather than dormant — they hung off a
+// `getKnowledgeSources` stub that returned `[]`, which made every one of them
+// unreachable, and the "Add source" modal behind the button posted nothing at
+// all. A notice states the gap instead.
 //
 // The accordion IS real: it is rendered from the `knowledge` blob
 // (`data/knowledge.ts › knowledgeSections`).
@@ -31,29 +32,19 @@ import {
   Button,
   GlassCard,
   Icon,
-  Input,
   Notice,
-  StatusPill,
-  Table,
-  TableCell,
-  TableEmpty,
-  TableRow,
   toast,
 } from "@/components/ui";
 import {
   buildKnowledge,
-  getKnowledgeSources,
   getRepoKnowledge,
   knowledgeSections,
   type KnowledgeMeta,
-  type KnowledgeSource,
-  type KnowledgeSourceType,
   type Project,
 } from "@/data";
 import { ApiError } from "@/lib/api";
-import { useUi } from "@/store/ui";
 import { BuildProgress } from "./BuildProgress";
-import { SOURCE_TYPE_CHIP, SOURCE_TYPES, chunkLabel, isBuilt } from "./shared";
+import { isBuilt } from "./shared";
 
 /**
  * How often an in-flight build is re-checked.
@@ -163,34 +154,6 @@ function useBuildLifecycle(project: Project, onReload: () => void) {
   return { knowledge, building, starting, start };
 }
 
-/** Handoff › source table — `34px | 2.6fr | 110 | 100 | 120 | 110 | 100`. */
-const COLUMNS = "34px minmax(0,2.6fr) 110px 100px 120px 110px 100px";
-
-function TypeChip({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      data-surface
-      onClick={onClick}
-      className={`cursor-pointer rounded-[10px] border px-[14px] py-[7px] text-[12px] font-bold ${
-        active
-          ? "border-pb bg-pt text-p-on"
-          : "border-bd bg-inset text-muted hover:bg-card3"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
 /**
  * Not indexed — the handoff's dashed empty state, with a CTA that works.
  *
@@ -271,37 +234,13 @@ export function KnowledgeTab({
   project: Project;
   onReload: () => void;
 }) {
-  const setModal = useUi((s) => s.setModal);
   const { knowledge, building, starting, start } = useBuildLifecycle(
     project,
     onReload,
   );
-  const [sources, setSources] = useState<KnowledgeSource[]>([]);
   const [openKeys, setOpenKeys] = useState<string[]>([]);
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<KnowledgeSourceType | "All">("All");
 
   const sections = useMemo(() => knowledgeSections(knowledge), [knowledge]);
-
-  useEffect(() => {
-    let live = true;
-    void getKnowledgeSources(project.id).then((rows) => {
-      if (live) setSources(rows);
-    });
-    return () => {
-      live = false;
-    };
-  }, [project.id]);
-
-  // Handoff filtering rule: type chip AND a title match on the query.
-  const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return sources.filter(
-      (k) =>
-        (filter === "All" || k.type === filter) &&
-        (!q || k.title.toLowerCase().includes(q)),
-    );
-  }, [sources, filter, query]);
 
   // A *rebuild* keeps the built view: the previous knowledge base is still the
   // truth until the new one lands, so the accordion stays and the stepper goes
@@ -388,104 +327,11 @@ export function KnowledgeTab({
         )}
       </GlassCard>
 
-      {sources.length === 0 ? (
-        <Notice tone="info">
-          EmeHub stores one knowledge record per repository, not a library of
-          individual documents. There is no source registry behind the hub yet,
-          so nothing is listed here.
-        </Notice>
-      ) : (
-        <>
-          <div className="flex flex-wrap items-center gap-[10px]">
-            <Input
-              className="h-auto max-w-[340px] flex-1 rounded-button px-[15px] py-[10px]"
-              icon={
-                <span className="text-ps-text">
-                  <Icon name="search" size={15} strokeWidth={2.2} />
-                </span>
-              }
-              placeholder="Search this project's sources"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            <div className="flex flex-wrap gap-2">
-              {SOURCE_TYPES.map((t) => (
-                <TypeChip
-                  key={t}
-                  label={t}
-                  active={filter === t}
-                  onClick={() => setFilter(t)}
-                />
-              ))}
-            </div>
-            <Button
-              variant="primary"
-              className="ml-auto h-auto rounded-button px-[18px] py-[11px] text-[13px]"
-              icon={<Icon name="plus" size={15} strokeWidth={2.6} />}
-              onClick={() => setModal("knowledge")}
-            >
-              Add source
-            </Button>
-          </div>
-
-          <Table className="rounded-[20px] p-0">
-            <TableRow columns={COLUMNS} header>
-              <span />
-              <span>SOURCE</span>
-              <span>TYPE</span>
-              <span>SIZE</span>
-              <span>CHUNKS</span>
-              <span>SCOPE</span>
-              <span className="text-right">STATE</span>
-            </TableRow>
-
-            {rows.map((k) => {
-              const chip = SOURCE_TYPE_CHIP[k.type];
-              return (
-                <TableRow
-                  key={k.id}
-                  columns={COLUMNS}
-                  interactive
-                  onClick={() => toast(k.title, "info")}
-                >
-                  <span
-                    className={`flex size-8 shrink-0 items-center justify-center rounded-[10px] border border-current/20 ${chip.className}`}
-                  >
-                    <Icon name={chip.icon} size={15} strokeWidth={2.2} />
-                  </span>
-                  <TableCell className="block truncate">
-                    <span className="block truncate text-[13px] font-bold text-txt2">
-                      {k.title}
-                    </span>
-                    <span className="mt-[3px] block font-mono text-[10px] text-label">
-                      {k.id}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-[11.5px] font-semibold text-txt4">
-                    {k.type}
-                  </TableCell>
-                  <TableCell mono className="text-muted">
-                    {k.size}
-                  </TableCell>
-                  <TableCell className="text-[11.5px] text-muted">
-                    {chunkLabel(k.chunks)}
-                  </TableCell>
-                  <TableCell className="text-[11.5px] text-muted">
-                    {k.scope}
-                  </TableCell>
-                  <TableCell align="end">
-                    <StatusPill status={k.indexed ? "Indexed" : "Pending"} />
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-
-            {rows.length === 0 && (
-              <TableEmpty message="No sources match this filter." />
-            )}
-          </Table>
-        </>
-      )}
+      <Notice tone="info">
+        EmeHub stores one knowledge record per repository, not a library of
+        individual documents. There is no source registry behind the hub yet,
+        so nothing is listed here.
+      </Notice>
     </div>
   );
 }

@@ -298,21 +298,6 @@ export interface Project {
 /** Derived from the knowledge row for the status pill. */
 export type KnowledgeStatus = "indexed" | "needs-refresh" | "not-indexed";
 
-export type KnowledgeSourceType = "Markdown" | "Document" | "URL" | "File";
-
-export interface KnowledgeSource {
-  id: string;
-  projectId: string;
-  title: string;
-  type: KnowledgeSourceType;
-  /** Human size, or an em dash for URL sources. */
-  size: string;
-  chunks: number;
-  updated: string;
-  scope: string;
-  indexed: boolean;
-}
-
 /** One accordion section of "What the agents learned". */
 export interface KnowledgeSection {
   key: string;
@@ -577,15 +562,15 @@ export interface Integration {
 /* ── People & access ─────────────────────────────────────────────────────── */
 
 /**
- * The four roles the handoff's Roles grid describes.
+ * The roles the hub stores — `admin` | `member`
+ * (`api/app/models/user.py › USER_ROLES`), and the only two
+ * `PATCH /auth/users/{id}` accepts.
  *
- * The hub only *stores* two of them (`admin` | `member` — `api/app/models/
- * user.py › USER_ROLES`), so only "Admin" and "Member" round-trip through
- * `PATCH /auth/users/{id}`. "Owner" and "Viewer" exist in the design and in the
- * (stubbed) Roles grid; `ASSIGNABLE_ROLES` in `data/people.ts` is the subset the
- * API will actually accept, and the member role picker offers only that subset.
+ * The handoff's Roles grid described four. "Owner" and "Viewer" were design
+ * vocabulary with no storage behind them, rendered from a fixture with invented
+ * member counts, so both the grid and the two extra names are gone (#191).
  */
-export type RoleName = "Owner" | "Admin" | "Member" | "Viewer";
+export type RoleName = "Admin" | "Member";
 
 export interface Member {
   /** Hub user id — the path parameter for `PATCH|DELETE /auth/users/{id}`. */
@@ -601,30 +586,13 @@ export interface Member {
   /** Live sessions for this member, from `AdminUserOut.sessionCount`. */
   sessionCount: number;
   /**
-   * Which Claude credential this member runs on.
+   * No `credential` / `credentialId`.
    *
-   * STUB (no endpoint yet): nothing in the API maps a user to a Claude
-   * credential, so this is always "none" for live rows. Kept on the type
-   * because the handoff's Members table has a CLAUDE CREDENTIAL column and the
-   * Roles fixtures still populate it.
+   * The handoff's Members table has a CLAUDE CREDENTIAL column, but nothing on
+   * the hub maps a user to a credential, so it read "Not assigned" on every
+   * live row — a column that could only ever say one thing. Both the column and
+   * the fields are gone until that mapping exists (#191).
    */
-  credential: "shared" | "personal" | "none";
-  /** SharedCredential id when `credential === 'shared'`. */
-  credentialId: string | null;
-}
-
-export interface Role {
-  name: RoleName;
-  count: number;
-  description: string;
-  permissions: string[];
-}
-
-export interface Invitation {
-  email: string;
-  role: RoleName;
-  sent: string;
-  by: string;
 }
 
 /* ── Authentication ──────────────────────────────────────────────────────── */

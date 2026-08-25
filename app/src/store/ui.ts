@@ -11,7 +11,6 @@ export type ModalKey =
   | "project"
   | "invite"
   | "addUser"
-  | "knowledge"
   | "integration"
   | "import"
   | null;

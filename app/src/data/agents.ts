@@ -19,7 +19,13 @@
 // correct rather than pessimistic: SSO genuinely cannot work there.
 
 import { api } from "@/lib/api";
-import type { AgentTarget } from "./types";
+import type { AgentKey, AgentTarget } from "./types";
+
+/** Design key → the registry id the API paths use. */
+export const AGENT_ID: Record<AgentKey, "qagent" | "dagent"> = {
+  q: "qagent",
+  d: "dagent",
+};
 
 /** LIVE: GET /agents — hub-audience only, so this is never called by an agent. */
 export async function getAgents(): Promise<AgentTarget[]> {
@@ -62,3 +68,30 @@ export async function setAgentEnabled(key: string, enabled: boolean): Promise<bo
   return body.enabled;
 }
 
+/**
+ * LIVE + PUBLIC: `GET /agents/{id}/open` (#186) — is this product open to users?
+ *
+ * The one deliberately public thing about agents, and the only availability
+ * read a signed-out visitor can make: `GET /agents` is hub-audience only, so on
+ * the landing page it always fails, and deriving availability from it there
+ * meant every product defaulted to open (#191).
+ *
+ * 200 is open, 403 is closed — the endpoint answers with the *status* because
+ * its other consumer is nginx `auth_request`, which reads status codes and
+ * cannot parse a body.
+ *
+ * **Any other failure is closed too.** This is a gate, and the failure mode it
+ * exists to prevent is exactly a switch that looks wired and is not; a hub the
+ * browser cannot reach is not permission to show a product as live and
+ * clickable. That is the opposite of how `launchUrl` / `handoffReady` degrade,
+ * and deliberately so: those describe a launch that would fail after the click,
+ * this one describes a decision somebody made.
+ */
+export async function isAgentOpen(id: "qagent" | "dagent"): Promise<boolean> {
+  try {
+    await api.get(`/agents/${id}/open`);
+    return true;
+  } catch {
+    return false;
+  }
+}

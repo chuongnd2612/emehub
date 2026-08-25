@@ -18,7 +18,6 @@
 // leaves `indexing`, then reads `lastError` on `error`. Calling it twice while a
 // build is in flight is safe and returns the same `indexing` row.
 //
-// `getKnowledgeSources` is still a stub: there is no knowledge-source resource.
 // Nothing in the hub stores the handoff's source table (icon, title, type, size,
 // chunks, scope, state). It resolves to `[]` and the tab renders a notice rather
 // than a table of fixtures pretending to be live rows.
@@ -35,7 +34,6 @@ import type {
   KnowledgeBuildStage,
   KnowledgeMeta,
   KnowledgeSection,
-  KnowledgeSource,
   KnowledgeWireStatus,
 } from "./types";
 
@@ -338,17 +336,3 @@ export const buildKnowledge = (
       {},
     )
     .then(toMeta);
-
-/* ── Stubs the hub cannot honour ─────────────────────────────────────────── */
-
-/**
- * STUB (no resource, by design): the hub has no knowledge-source registry.
- *
- * The handoff's source table — icon, title, type, size, chunks, scope, state —
- * describes a document store nothing in the API models. Resolving to `[]` keeps
- * the call site honest: the knowledge tab explains the gap with a notice
- * instead of rendering fixtures as if they were live rows.
- */
-export const getKnowledgeSources = (
-  _projectKey: string,
-): Promise<KnowledgeSource[]> => Promise.resolve([]);

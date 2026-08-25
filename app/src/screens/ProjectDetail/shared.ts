@@ -3,7 +3,7 @@
 // actual knowledge lifecycle.
 
 import type { GlyphFill } from "@/components/ui";
-import type { KnowledgeMeta, KnowledgeSourceType, ProviderKey } from "@/data";
+import type { KnowledgeMeta, ProviderKey } from "@/data";
 import type { AgentKey } from "@/data";
 
 /** Handoff › 3. Projects — the five detail tabs, in order. */
@@ -100,29 +100,3 @@ export const UNKNOWN_GLYPH: { fill: GlyphFill; letter: string } = {
   letter: "?",
 };
 
-/**
- * Knowledge source type → icon + tinted chip classes. Retained for the day the
- * hub grows a knowledge-source resource; nothing renders it today (see
- * `data/knowledge.ts › getKnowledgeSources`).
- */
-export const SOURCE_TYPE_CHIP: Record<
-  KnowledgeSourceType,
-  { icon: "doc" | "link" | "upload"; className: string }
-> = {
-  Markdown: { icon: "doc", className: "bg-qagent-tint text-brand-soft" },
-  Document: { icon: "doc", className: "bg-warn-tint text-warn" },
-  URL: { icon: "link", className: "bg-info-tint text-cyan-soft" },
-  File: { icon: "upload", className: "bg-neutral-tint text-neutral" },
-};
-
-export const SOURCE_TYPES: (KnowledgeSourceType | "All")[] = [
-  "All",
-  "Markdown",
-  "Document",
-  "URL",
-  "File",
-];
-
-/** Handoff table cell — "186 chunks" / "not chunked". */
-export const chunkLabel = (chunks: number): string =>
-  chunks ? `${chunks} chunks` : "not chunked";

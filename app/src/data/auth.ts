@@ -19,7 +19,6 @@
 
 import { api } from "@/lib/api";
 import { describeUserAgent, relativeFuture, relativeTime } from "./humanize";
-import { after, READ_DELAY_MS } from "./timing";
 import type { AuthUser, Session, TotpSetup } from "./types";
 
 /* ── The principal ───────────────────────────────────────────────────────── */

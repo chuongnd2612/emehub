@@ -7,6 +7,17 @@
 // card div), so it is a `div[role=button]` with a keyboard handler rather than
 // a `<button>` — the card contains paragraphs and a grid, which a button's
 // phrasing-only content model does not allow.
+//
+// ## A closed product is not a card you can click (#191)
+//
+// This card used to branch only on `product.live`, the *design* badge, and so
+// showed a green "Live" pill and stayed clickable for a product an admin had
+// switched off in Settings › Product availability. `getProducts` now resolves
+// `enabled` from the public `GET /agents/{id}/open`, which a signed-out visitor
+// can actually read, and a closed product loses `role="button"`, its tab stop
+// and its handlers outright rather than keeping a live-looking affordance that
+// silently does nothing. The copy is #186's, from the coming-soon page and the
+// Overview card — not new vocabulary.
 
 import type { KeyboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
@@ -21,6 +32,10 @@ export function ProductCard({ product }: { product: Product }) {
   const navigate = useNavigate();
   const visual = PRODUCT_VISUALS[product.key];
 
+  // Closed outranks everything else the card could say: an admin has decided
+  // the product is not open, so the Live/Placeholder distinction is moot.
+  const comingSoon = product.enabled === false;
+
   // The landing page is public, and `GET /agents` is hub-audience only — so this
   // card cannot know where an agent lives, and must not be given a public
   // endpoint just to find out. Sending a live product to /app is the honest
@@ -28,6 +43,7 @@ export function ProductCard({ product }: { product: Product }) {
   // the real Launch button is, or bounces to /login. One redirect, no new
   // public surface, and the URL stays the source of truth.
   const open = () => {
+    if (comingSoon) return;
     if (product.live) {
       navigate("/app");
     } else {
@@ -45,14 +61,20 @@ export function ProductCard({ product }: { product: Product }) {
   return (
     <div className="[perspective:1200px]">
       <div
-        role="button"
-        tabIndex={0}
+        {...(comingSoon
+          ? { "aria-disabled": true }
+          : {
+              role: "button",
+              tabIndex: 0,
+              onClick: open,
+              onKeyDown,
+            })}
         ref={tilt.ref}
         onMouseMove={tilt.onMouseMove}
         onMouseLeave={tilt.onMouseLeave}
-        onClick={open}
-        onKeyDown={onKeyDown}
-        className="group relative flex min-h-[330px] cursor-pointer flex-col gap-[18px] rounded-[24px] border border-bd2 bg-inset p-[26px] shadow-[0_24px_60px_-22px_var(--shadow)] transition-[transform,border-color,box-shadow] duration-300 hover:border-pb [backdrop-filter:blur(24px)] [transform-style:preserve-3d]"
+        className={`group relative flex min-h-[330px] flex-col gap-[18px] rounded-[24px] border border-bd2 bg-inset p-[26px] shadow-[0_24px_60px_-22px_var(--shadow)] transition-[transform,border-color,box-shadow] duration-300 [backdrop-filter:blur(24px)] [transform-style:preserve-3d] ${
+          comingSoon ? "cursor-default" : "cursor-pointer hover:border-pb"
+        }`}
       >
         {/* Cursor-follow wash — fades in on hover; its centre tracks
             --gx / --gy, which useCardTilt writes on every mousemove. */}
@@ -71,7 +93,11 @@ export function ProductCard({ product }: { product: Product }) {
               <span className="text-[25px] font-black tracking-[-.03em] text-txt">
                 {product.name}
               </span>
-              {product.live ? (
+              {comingSoon ? (
+                <Pill tone="neutral" size="sm">
+                  Coming soon
+                </Pill>
+              ) : product.live ? (
                 <Pill tone="ok" size="sm">
                   Live
                 </Pill>
@@ -111,12 +137,20 @@ export function ProductCard({ product }: { product: Product }) {
         <div className="relative mt-auto flex items-center justify-between gap-3 pt-1.5">
           <span
             className={
-              product.live
+              product.live && !comingSoon
                 ? `inline-flex items-center gap-2 rounded-[12px] px-[18px] py-[11px] text-[13.5px] font-bold text-white [transform:translateZ(36px)] ${visual.cta}`
                 : "inline-flex items-center gap-2 rounded-[12px] border border-bd2 bg-inset px-[18px] py-[11px] text-[13.5px] font-semibold text-muted [transform:translateZ(36px)]"
             }
           >
-            {product.live ? "Launch Q-Agent" : "In development"}
+            {/* "Launch Q-Agent" is the handoff's copy, verbatim, on both
+                cards — D-Agent's card has read it since `live` was flipped
+                true. Copy is final, so it is left alone here and raised
+                separately rather than paraphrased in a deletion PR. */}
+            {comingSoon
+              ? "Coming soon"
+              : product.live
+                ? "Launch Q-Agent"
+                : "In development"}
             <Icon name="arrowRight" size={15} strokeWidth={2.4} />
           </span>
         </div>
