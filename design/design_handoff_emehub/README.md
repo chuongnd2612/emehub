@@ -325,7 +325,6 @@ Brand/provider: Claude `#D97757`, Azure DevOps `#0078d4`, Jira `#2684ff`, GitHub
 ## Assets
 
 - `app/public/assets/eme-3d-logo-cut.png` — EMESOFT 3D logo (red infinity mark + `emesoft` wordmark + “Emerging your Business”), transparent PNG. Rendered 88 px tall on the landing header, full sidebar width in the app. **Lives in the app, not in this bundle** — it is served from the Vite public root as `/assets/eme-3d-logo-cut.png`. The prototype HTML references it as `../../app/public/assets/…`.
-- `app/public/assets/eme-3d-logo.png` — uncropped original. Same location.
 - All other iconography is inline SVG, Feather/Lucide style: `viewBox="0 0 24 24"`, `fill="none"`, `stroke="currentColor"`, `stroke-width:2–2.6`, round caps/joins, rendered 12–22 px. The Claude mark is a filled 5-point star in `#D97757`. No raster icons, no icon font, no illustrations.
 - Fonts load from `https://api.fontshare.com` (Satoshi) and Google Fonts (JetBrains Mono) — self-host in production.
 - three.js r128 is loaded from a CDN in the prototype — install it as a dependency instead.
@@ -334,7 +333,7 @@ Brand/provider: Claude `#D97757`, Azure DevOps `#0078d4`, Jira `#2684ff`, GitHub
 
 - `EmeHub.dc.html` — the full prototype (landing + all 8 app pages + overlays). Open directly in a browser.
 - `support.js` — prototype runtime (rendering harness only, **not** part of the design; do not port).
-- `../../app/public/assets/eme-3d-logo-cut.png`, `../../app/public/assets/eme-3d-logo.png` — brand mark. Kept in the app rather than duplicated here; the prototype loads it by that relative path.
+- `../../app/public/assets/eme-3d-logo-cut.png` — brand mark. Kept in the app rather than duplicated here; the prototype loads it by that relative path.
 - `Q-Agent-DESIGN_SYSTEM.md` — the written design system this UI extends (foundations, components, motion, voice).
 - `Q-Agent.ref.html` — the sibling product (Q‑Agent) whose credential, provider-connection and ticket-filter behaviour EmeHub mirrors. Useful when a detail is ambiguous.
 
