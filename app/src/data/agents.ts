@@ -46,3 +46,19 @@ export function handoffBlockerText(agent: AgentTarget): string | null {
       return null;
   }
 }
+
+/**
+ * LIVE: `PUT /agents/{key}/availability` — admin only; a member gets a 403 (#186).
+ *
+ * Turning a product off is a product decision, not configuration, which is why it
+ * is a write here rather than an environment variable: it takes effect on the
+ * next request instead of the next deploy.
+ */
+export async function setAgentEnabled(key: string, enabled: boolean): Promise<boolean> {
+  const body = await api.put<{ key: string; enabled: boolean }>(
+    `/agents/${key}/availability`,
+    { enabled },
+  );
+  return body.enabled;
+}
+

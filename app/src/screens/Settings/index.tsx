@@ -33,6 +33,7 @@ import {
 import { AppearanceCard } from "./AppearanceCard";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { NotificationsCard } from "./NotificationsCard";
+import { ProductAvailabilityCard } from "./ProductAvailabilityCard";
 import { SaveBar } from "./SaveBar";
 import { WorkspaceDefaultsCard } from "./WorkspaceDefaultsCard";
 
@@ -90,6 +91,12 @@ export default function SettingsScreen() {
         <CollapsibleSection title="WORKSPACE DEFAULTS">
           <div className={LIFT}>
             <WorkspaceDefaultsCard draft={draft} onChange={change} />
+          </div>
+        </CollapsibleSection>
+
+        <CollapsibleSection title="PRODUCT AVAILABILITY" hint="applies immediately">
+          <div className={LIFT}>
+            <ProductAvailabilityCard />
           </div>
         </CollapsibleSection>
 

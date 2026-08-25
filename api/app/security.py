@@ -36,6 +36,19 @@ from app.services import auth_service
 PUBLIC_PATHS: frozenset[str] = frozenset(
     {
         "/health",
+        # Is this agent open to users? (#186) The edge proxy asks before letting a
+        # browser through to an agent, and that browser may be a stranger's:
+        # someone following a link to a product that is not open yet has no hub
+        # session, so requiring one would mean the gate could not run for exactly
+        # the people it exists for. The answer is what the coming-soon page they
+        # are about to see says out loud.
+        #
+        # Enumerated rather than patterned because this list is matched exactly —
+        # and on a READ-ONLY path: the admin toggle lives on
+        # `/agents/{key}/availability`, which is not listed here, so no mutating
+        # route ever rides in on this entry.
+        "/agents/qagent/open",
+        "/agents/dagent/open",
         # Getting a token.
         "/auth/login",
         "/auth/login/mfa",
