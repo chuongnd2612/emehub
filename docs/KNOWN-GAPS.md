@@ -125,19 +125,49 @@ không được port sang**, và không có thứ thay thế nào được bịa
 
 ### Bất khả thi ở kiến trúc hiện tại
 
-Ba mục này không phải chuyện thêm một endpoint. Chúng đòi hỏi hub phải chạy Claude CLI cục
-bộ, mà theo thiết kế thì hub không chạy. `api/app/services/claude_usage.py` nói điều đó trong
-chính docstring của nó:
-
-> Ported from QAgent's ``ai_usage_service`` and reduced to what the hub can honestly own.
-> QAgent records usage as a side effect of *running* the CLI; the hub never runs it, so here
-> the agent reports each completed call and the hub aggregates.
-
 | Thiếu | Vì sao không dựng được |
 |---|---|
-| Gauge "% of plan used" | QAgent parse `/usage` của CLI để lấy `pctUsed`; đường dự phòng của nó là một setting `weekBudget` do người dùng cấu hình. Hub **không biết hạn mức nào cả** và không có setting tương ứng. Chỉ có số tuyệt đối. Khi CLI không đưa được hạn mức thì chính QAgent cũng rơi về chi phí — nên số chính của hub là cùng một đường dự phòng đó, không phải một sự đánh đổi |
-| Thanh weekly budget | Cùng lý do — không có budget để vẽ thanh |
 | Health dot ba trạng thái / "Claude CLI unavailable" | Cần `stats.operational`, tức là câu trả lời cho "CLI cục bộ có chạy được không". Hub không có probe nào và không có field tương đương, nên dot giữ nguyên bốn trạng thái suy ra từ credential và không thêm chiều sức khoẻ nào |
+| Thanh weekly **budget** | QAgent vẽ thanh này theo một setting `weekBudget` do người dùng tự đặt. Hub không có setting đó, nên không có ngưỡng nào để vẽ. Đây **không** phải hạn mức của gói — hạn mức gói nay đã có, xem bên dưới; budget tự đặt và hạn mức gói là hai thứ khác nhau, và chỉ thứ thứ hai là lấy được |
+
+### Đã lấp (#212) — và một mục ở trên từng ghi sai
+
+Trước #212, bảng "Bất khả thi" còn có hai dòng nữa: gauge "% of plan used" và thanh weekly
+budget, với lý do là *hub không bao giờ chạy Claude CLI nên không biết hạn mức nào cả*.
+
+**Lý do đó sai, và sai ở ngay tiền đề.** Ghi lại đầy đủ, vì một mục "bất khả thi" ghi sai
+còn tệ hơn một mục còn thiếu:
+
+1. Image của API **có** sẵn Claude CLI — `claude 2.1.197` tại `/usr/local/bin/claude` trong
+   `emesoft-emehub-api-1`, cài để chạy knowledge build (`api/app/services/claude_cli.py`).
+   Câu "hub không bao giờ chạy CLI" đơn giản là không đúng.
+2. Quan trọng hơn: **con số đó không đến từ CLI.** Màn `/usage` của CLI chỉ là bản vẽ lại của
+   một lời gọi HTTP có xác thực. Hub gọi thẳng lời gọi đó được, vì hub đang giữ chính
+   credential cần dùng và đã giải mã nó theo từng user
+   (`claude_credentials.resolve_material`). Không cần subprocess, không cần ghi plaintext ra
+   đĩa, không cần parse output của TUI.
+
+| Từng ghi là bất khả thi | Dựng bằng gì |
+|---|---|
+| Gauge "% of plan used" | `api/app/services/claude_plan_limits.py` gọi `GET https://api.anthropic.com/api/oauth/usage` với access token OAuth của credential mà user resolve tới (header beta `oauth-2025-04-20`) — cùng endpoint mà `/usage` của CLI tiêu thụ. `five_hour` → dòng session, `seven_day` → dòng tuần. Cache 180s **khoá theo id dòng credential, không phải id user**, refresh ở thread nền nên request không bao giờ chờ mạng |
+| Thời điểm reset thật | Cùng payload trả về `resets_at` do Claude công bố. Nó thắng con số hub tự suy ra (lời gọi đầu tiên trong cửa sổ + 5h). Chỉ hiện một trong hai, không bao giờ hiện cả hai |
+
+Token đi đúng một đường: Postgres (đã mã hoá) → `crypto.decrypt` trong `resolve_material` →
+một biến cục bộ → header `Authorization` của đúng một request → hết frame là mất. Nó không
+ra file, không ra log, không ra message của exception, không ra response body. Response chỉ
+mang `pctUsed`, `resetsAt` và `limitsStatus`.
+
+Mọi thất bại đều cho cùng một câu trả lời: `pctUsed = -1` (không biết) và
+`limitsStatus = "unavailable"` — không credential, token hết hạn, upstream từ chối, payload
+không parse được. Không bịa số, không ném 500. Khi không biết, headline của dòng rơi về chi
+phí như trước, đúng đường dự phòng mà chính QAgent dùng.
+
+**Không có đường dự phòng scrape CLI.** QAgent giữ một đường như vậy vì nó đọc credential từ
+đĩa và có thể đọc hụt; hub thì không, nên không có trường hợp nào scrape thành công mà lời
+gọi trên thất bại — scrape cũng chỉ đọc một bản sao của cùng token đó. Đổi lại sẽ phải ghi
+plaintext vào workspace volume (thứ ADR 0007 chỉ cho phép trong knowledge build), spawn một
+TUI ngay trên thao tác mở popover, và nuôi một parser nhắm vào output đổi hình theo từng bản
+CLI. Một chữ "không biết" trung thực đáng giá hơn.
 
 ### Đã lấp (#210)
 
