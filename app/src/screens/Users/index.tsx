@@ -42,10 +42,11 @@ export default function UsersScreen() {
   const setModal = useUi((s) => s.setModal);
 
   // `MembersTable` reads on mount, so a newly created account would not appear
-  // until the screen was left and returned to. Remount it when either account-
-  // creating modal closes — both `Add user` and `Invite member` write a real
-  // row — which is the only signal available here, because `ModalHost` owns
-  // those modals globally.
+  // until the screen was left and returned to. Tell it to re-read when either
+  // account-creating modal closes — both `Add user` and `Invite member` write a
+  // real row — which is the only signal available here, because `ModalHost`
+  // owns those modals globally. A prop rather than a `key`: remounting the
+  // table threw away rows that were already correct (#200).
   const [membersEpoch, setMembersEpoch] = useState(0);
   const wasCreating = useRef(false);
   useEffect(() => {
@@ -89,7 +90,7 @@ export default function UsersScreen() {
         }
       />
 
-      <MembersTable key={membersEpoch} />
+      <MembersTable reloadSignal={membersEpoch} />
     </div>
   );
 }

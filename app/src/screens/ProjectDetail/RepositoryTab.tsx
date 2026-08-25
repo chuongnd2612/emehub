@@ -132,6 +132,9 @@ export function RepositoryTab({
           </div>
         </div>
       )}
+
+      {/* Room so the repository editor's save bar cannot cover the last card. */}
+      <div className="h-24 shrink-0" aria-hidden />
     </div>
   );
 }
