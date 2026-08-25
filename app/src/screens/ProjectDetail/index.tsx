@@ -87,9 +87,22 @@ export default function ProjectDetailScreen() {
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState("");
 
-  const load = useCallback(() => {
+  /**
+   * Re-read the project.
+   *
+   * `silent` is what keeps a save from looking like a page reload. This screen
+   * returns early with a full-screen `LoadingState` while `status === "loading"`,
+   * so a plain refetch after a save unmounts the entire tab tree — header, tabs
+   * and the form the user just saved — and takes scroll position and every bit
+   * of tab-local state with it. A silent refetch leaves the last-known project
+   * on screen and swaps it when the answer arrives, so nothing unmounts.
+   *
+   * The visible mode is still right for the header's `Reload`: that is an
+   * explicit "go and look again", and it should say that it is looking.
+   */
+  const load = useCallback((options?: { silent?: boolean }) => {
     let live = true;
-    setStatus("loading");
+    if (!options?.silent) setStatus("loading");
     void getProject(projectId)
       .then((p) => {
         if (!live) return;
@@ -98,6 +111,12 @@ export default function ProjectDetailScreen() {
       })
       .catch((err: unknown) => {
         if (!live) return;
+        // A silent refetch that fails must not tear the screen down either —
+        // that would reintroduce the blanking through the back door. The user
+        // still has a project on screen and the action that triggered the
+        // refetch reports its own outcome, so the stale-by-seconds copy is
+        // strictly better than an error page.
+        if (options?.silent) return;
         setError(
           err instanceof ApiError ? err.message : "The hub did not respond.",
         );
@@ -108,7 +127,12 @@ export default function ProjectDetailScreen() {
     };
   }, [projectId]);
 
-  useEffect(load, [load]);
+  useEffect(() => load(), [load]);
+
+  /** The header button: shows that it is working. */
+  const reload = useCallback(() => load(), [load]);
+  /** After a save, or when a build settles: refreshes without blanking. */
+  const reloadSilently = useCallback(() => load({ silent: true }), [load]);
 
   const tabParam = searchParams.get("tab");
   const tab: ProjectTab = isProjectTab(tabParam) ? tabParam : "overview";
@@ -141,7 +165,7 @@ export default function ProjectDetailScreen() {
           <ErrorState
             title="Could not load this project"
             detail={error}
-            onRetry={load}
+            onRetry={reload}
           />
         </GlassCard>
       </div>
@@ -201,7 +225,7 @@ export default function ProjectDetailScreen() {
         <Button
           className="h-auto rounded-button px-[15px] py-[10px]"
           icon={<Icon name="refresh" size={14} strokeWidth={2.2} />}
-          onClick={load}
+          onClick={reload}
         >
           Reload
         </Button>
@@ -231,12 +255,12 @@ export default function ProjectDetailScreen() {
 
       {tab === "overview" && <OverviewTab project={project} />}
       {tab === "knowledge" && (
-        <KnowledgeTab project={project} onReload={load} />
+        <KnowledgeTab project={project} onReload={reloadSilently} />
       )}
       {tab === "repos" && (
         <RepositoryTab
           project={project}
-          onReload={load}
+          onReload={reloadSilently}
           onOpenSettings={() => setTab("settings")}
         />
       )}
@@ -246,7 +270,7 @@ export default function ProjectDetailScreen() {
           project={project}
           knowledgeStatusLabel={label}
           onOpenKnowledge={() => setTab("knowledge")}
-          onReload={load}
+          onReload={reloadSilently}
         />
       )}
     </div>

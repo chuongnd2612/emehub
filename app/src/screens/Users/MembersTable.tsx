@@ -59,7 +59,7 @@ const ROLE_TONE: Record<RoleName, PillTone> = {
   Member: "dagent",
 };
 
-export function MembersTable() {
+export function MembersTable({ reloadSignal = 0 }: { reloadSignal?: number }) {
   const [members, setMembers] = useState<Member[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
@@ -88,9 +88,14 @@ export function MembersTable() {
     }
   }, []);
 
+  // `reloadSignal` is the parent saying a row was created elsewhere. It is a
+  // dependency rather than a `key` on this component (#200): remounting threw
+  // the table away and flashed its loading state, and it was the fourth
+  // persistence idiom in the app. `load` does not clear `members`, so the rows
+  // that are already right stay on screen while the new list arrives.
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, reloadSignal]);
 
   const replaceRow = (updated: Member) =>
     setMembers(

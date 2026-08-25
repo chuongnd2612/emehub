@@ -2,10 +2,21 @@
 //
 // Both halves are now real. `GET /credentials/claude` is the source of truth for
 // what is stored and which credential a run would use, and `GET|PUT
-// /me/model-preferences` is the source of truth for which models it runs — every
-// mutation goes through `@/data`, and each one persists the moment it is made.
-// That is why the screen has no `Save changes` button: there is nothing left
-// held back to save (#190).
+// /me/model-preferences` is the source of truth for which models it runs.
+//
+// ## The two halves persist differently, and that is the point (#200)
+//
+// Every CREDENTIAL mutation below is its own request that returns fresh state —
+// attaching a token, removing one, switching which account runs. There is no
+// draft to hold: the file either uploaded or it did not, and holding "you
+// removed your token" back behind a Save button would be describing a state the
+// hub is not in. Those stay immediate.
+//
+// MODEL PREFERENCES are a form, and used to be neither: every pick fired a
+// `PUT` on change, so there was no way to try a combination before committing
+// to it and no way to change your mind. They now edit a draft and commit
+// through the shared `SaveBar`, which is the one settings-save idiom across the
+// hub. `models` is what the hub has; `draftModels` is what is on screen.
 //
 // Two shapes the prototype got wrong, corrected against the API:
 //
@@ -18,6 +29,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -225,14 +237,21 @@ export interface ClaudeSettings {
   usageError: string | null;
 
   /* models + effort — `GET|PUT /me/model-preferences` */
-  /** Null until the hub has answered; the tab renders its loading state. */
+  /** What the hub has. Null until it has answered; the tab shows a loader. */
   models: ModelPreferences | null;
+  /** What is on screen. Null alongside `models`, never on its own. */
+  draftModels: ModelPreferences | null;
   modelsError: string | null;
-  /** True while a pick is in flight. The picker stays usable — the value is
-   *  already showing — but a second pick is refused rather than raced. */
+  /** True while the save is in flight. */
   savingModels: boolean;
+  /** How many model preferences differ from what is saved. Drives `SaveBar`. */
+  modelsDirtyCount: number;
   setMainModel: (next: string) => void;
   setEffort: (next: string) => void;
+  /** Put the saved values back on screen. */
+  discardModels: () => void;
+  /** Commit the draft. */
+  saveModels: () => void;
 }
 
 export function useClaudeSettings(): ClaudeSettings {
@@ -260,6 +279,7 @@ export function useClaudeSettings(): ClaudeSettings {
   const [usageError, setUsageError] = useState<string | null>(null);
 
   const [models, setModels] = useState<ModelPreferences | null>(null);
+  const [draftModels, setDraftModels] = useState<ModelPreferences | null>(null);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [savingModels, setSavingModels] = useState(false);
 
@@ -322,7 +342,9 @@ export function useClaudeSettings(): ClaudeSettings {
     setModelsError(null);
     getModelPreferences()
       .then((next) => {
-        if (live) setModels(next);
+        if (!live) return;
+        setModels(next);
+        setDraftModels(next);
       })
       .catch((err: unknown) => {
         if (live)
@@ -512,52 +534,66 @@ export function useClaudeSettings(): ClaudeSettings {
       .finally(() => setTesting(false));
   }, []);
 
-  /**
-   * One field changes, the whole preference is sent — the hub validates it and
-   * returns the full new state, which is what lands in local state. The
-   * optimistic value goes in first so the control does not visibly lag a click;
-   * a rejection puts the previous one straight back rather than leaving it
-   * showing something the hub did not accept.
-   */
-  const saveModels = useCallback(
-    (patch: Partial<ModelPreferences>) => {
-      if (!models || savingModels) return;
-      const next = { ...models, ...patch };
-      const unchanged =
-        next.mainModel === models.mainModel && next.effort === models.effort;
-      // `usingDefaults` makes an identical-looking pick meaningful: choosing the
-      // value the workspace default already shows is how a user says "this one,
-      // deliberately", and it must reach the hub or the row is never written.
-      if (unchanged && !models.usingDefaults) return;
-
-      const previous = models;
-      // `usingDefaults` is the hub's to decide, not ours — but a write IS a
-      // choice, so it is false from this moment either way.
-      setModels({ ...next, usingDefaults: false });
-      setSavingModels(true);
-      setModelPreferences({ mainModel: next.mainModel, effort: next.effort })
-        .then(setModels)
-        .catch((err: unknown) => {
-          setModels(previous);
-          toast(
-            "Could not save the model",
-            "warn",
-            errorMessage(err, "The hub rejected the change"),
-          );
-        })
-        .finally(() => setSavingModels(false));
-    },
-    [models, savingModels],
-  );
+  const patchDraftModels = useCallback((patch: Partial<ModelPreferences>) => {
+    setDraftModels((d) => (d ? { ...d, ...patch } : d));
+  }, []);
 
   const setMainModel = useCallback(
-    (mainModel: string) => saveModels({ mainModel }),
-    [saveModels],
+    (mainModel: string) => patchDraftModels({ mainModel }),
+    [patchDraftModels],
   );
   const setEffort = useCallback(
-    (effort: string) => saveModels({ effort }),
-    [saveModels],
+    (effort: string) => patchDraftModels({ effort }),
+    [patchDraftModels],
   );
+
+  const discardModels = useCallback(() => setDraftModels(models), [models]);
+
+  /**
+   * How many preferences differ from what is saved.
+   *
+   * The `usingDefaults` clause is not a workaround for the diff — it is the
+   * case the diff cannot see. While the hub is showing workspace defaults, the
+   * user has chosen NOTHING, and choosing the very value already on screen is
+   * how they say "this one, deliberately". That pick has to be savable or the
+   * preference row is never written and the "showing the defaults" notice can
+   * never go away. So while `usingDefaults` holds, the form counts as having
+   * one change to make.
+   */
+  const modelsDirtyCount = useMemo(() => {
+    if (!models || !draftModels) return 0;
+    if (models.usingDefaults) return 1;
+    let changed = 0;
+    if (draftModels.mainModel !== models.mainModel) changed += 1;
+    if (draftModels.effort !== models.effort) changed += 1;
+    return changed;
+  }, [models, draftModels]);
+
+  /**
+   * The whole preference is sent together — the hub validates it and returns
+   * the full new state, which becomes both the saved value and the draft. A
+   * rejection leaves the draft exactly as the user left it, so the save bar
+   * keeps its count and Save is one click from a retry.
+   */
+  const saveModels = useCallback(() => {
+    if (!draftModels || savingModels) return;
+    const next = draftModels;
+    setSavingModels(true);
+    setModelPreferences({ mainModel: next.mainModel, effort: next.effort })
+      .then((stored) => {
+        setModels(stored);
+        setDraftModels(stored);
+        toast("Model preferences saved");
+      })
+      .catch((err: unknown) => {
+        toast(
+          "Could not save the model preferences",
+          "warn",
+          errorMessage(err, "The hub rejected the change"),
+        );
+      })
+      .finally(() => setSavingModels(false));
+  }, [draftModels, savingModels]);
 
   return {
     load,
@@ -583,9 +619,13 @@ export function useClaudeSettings(): ClaudeSettings {
     usage,
     usageError,
     models,
+    draftModels,
     modelsError,
     savingModels,
+    modelsDirtyCount,
     setMainModel,
     setEffort,
+    discardModels,
+    saveModels,
   };
 }

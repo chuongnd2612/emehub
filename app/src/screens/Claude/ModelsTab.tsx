@@ -14,9 +14,16 @@
 //     the hub makes exactly one kind of Claude call — a knowledge build — so
 //     there was no second, cheaper invocation for it to choose the model of.
 //
-// Everything left is real. Each control writes through to
-// `PUT /me/model-preferences` the moment it is used, survives a reload, and is
-// read back by the hub's knowledge builds when they invoke the CLI.
+// Everything left is real: what is saved here survives a reload and is read
+// back by the hub's knowledge builds when they invoke the CLI.
+//
+// **How it saves changed in #200.** Each control used to `PUT` the moment it
+// was touched, which made this the odd one out among the hub's settings screens
+// and left no way to try a combination before committing to it — or to change
+// your mind. The controls now edit a draft and the shared `SaveBar` commits it,
+// the same idiom the project Settings and Repository forms use. The credential
+// half of this screen stays immediate, because each of its mutations is a real
+// request whose result is already true (see `state.ts`).
 //
 // Two full-width cards stacked at the shell's 14 px gap, rather than the
 // handoff's 2-up model row with one cell empty. The dropdown keeps its 300 px
@@ -30,6 +37,7 @@ import {
   Icon,
   LoadingState,
   Notice,
+  SaveBar,
 } from "@/components/ui";
 import {
   EFFORT_LEVELS,
@@ -43,7 +51,7 @@ export function ModelsTab({ s }: { s: ClaudeSettings }) {
   if (s.modelsError) {
     return <Notice tone="warn">{s.modelsError}</Notice>;
   }
-  if (!s.models) {
+  if (!s.models || !s.draftModels) {
     return <LoadingState label="Loading model preferences…" />;
   }
 
@@ -55,7 +63,7 @@ export function ModelsTab({ s }: { s: ClaudeSettings }) {
       {s.models.usingDefaults && (
         <Notice tone="info">
           Showing the workspace defaults — you have not chosen yet. Pick a model
-          or an effort level to set your own.
+          or an effort level and save to set your own.
         </Notice>
       )}
 
@@ -63,16 +71,26 @@ export function ModelsTab({ s }: { s: ClaudeSettings }) {
         ddKey="claude-main-model"
         title="Default model"
         description="Used for planning, test generation and code changes."
-        value={s.models.mainModel}
+        value={s.draftModels.mainModel}
         onChange={s.setMainModel}
         busy={s.savingModels}
         dot={<span className="size-[9px] shrink-0 rounded-full bg-accent-grad" />}
       />
 
       <EffortCard
-        value={s.models.effort}
+        value={s.draftModels.effort}
         onChange={s.setEffort}
         busy={s.savingModels}
+      />
+
+      {/* Room so the fixed save bar cannot cover the last card. */}
+      <div className="h-24 shrink-0" aria-hidden />
+
+      <SaveBar
+        count={s.modelsDirtyCount}
+        saving={s.savingModels}
+        onDiscard={s.discardModels}
+        onSave={s.saveModels}
       />
     </div>
   );
