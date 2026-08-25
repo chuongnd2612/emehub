@@ -36,8 +36,10 @@ credential but cannot manage one. ``PROTECTED`` is not an option: its blanket
 
 The service layer builds every metadata response field by field from the parsed
 columns and never reads ``row.credentials``; the single decrypt lives in
-``claude_credentials.resolve_material``, whose single caller is
-:func:`resolve_credential` below. The response models here make that structural:
+``claude_credentials.resolve_material``, and :func:`resolve_credential` below is
+the only route that calls it. (``claude_plan_limits`` calls it too, to read an
+access token for a server-side request — but it returns percentages, so nothing
+it touches can reach a response.) The response models here make that structural:
 :class:`ResolvedCredentialOut` is the only schema in the module with a
 credential-bearing field, and every other endpoint is annotated with a
 ``response_model`` that has none — so even a mistake in a handler cannot
@@ -56,7 +58,12 @@ from app.db import get_db
 from app.deps_auth import require_admin, require_credential_grant, require_user
 from app.models.user import User
 from app.schemas import ApiModel, OkResponse
-from app.services import audit_service, claude_credentials, claude_usage
+from app.services import (
+    audit_service,
+    claude_credentials,
+    claude_plan_limits,
+    claude_usage,
+)
 from app.services.claude_credentials import ClaudeCredentialsError
 
 router = APIRouter(prefix="/credentials/claude", tags=["credentials"])
@@ -170,6 +177,11 @@ class UsageWindowOut(ApiModel):
     requests: int = 0
     cost_usd: float = 0.0
     resets_at: str = ""
+    #: How much of the plan's limit for this window is spent, or ``-1`` when
+    #: nobody could tell us — see :mod:`app.services.claude_plan_limits`. It is
+    #: not a share of ``cost_usd``: the hub's rows and Claude's limits count
+    #: different things, and only the second knows a denominator.
+    pct_used: int = claude_plan_limits.UNKNOWN_PCT
 
 
 class ByModelUsageOut(ApiModel):
@@ -192,14 +204,28 @@ class UsageStatsOut(ApiModel):
     week: UsageWindowOut = Field(default_factory=UsageWindowOut)
     #: The week's spend per model, dearest first.
     by_model: list[ByModelUsageOut] = Field(default_factory=list)
+    #: ``loading`` | ``ready`` | ``unavailable`` for the two ``pct_used`` figures
+    #: alone. Every other field on this model is already final when it arrives —
+    #: this says only whether a percentage is still coming, so the UI can tell a
+    #: cold cache from an account that has no percentage to give.
+    limits_status: str = claude_plan_limits.STATUS_UNAVAILABLE
 
 
-def _window(payload: dict) -> UsageWindowOut:
+def _window(payload: dict, limits: dict | None) -> UsageWindowOut:
+    """One window's aggregate, with the plan limit overlaid where it is known.
+
+    ``limits`` wins on ``resets_at``: the hub derives that time from its own rows
+    (first call in the window + 5h), which is a decent estimate of a boundary
+    Claude actually owns. When Claude states the boundary, the estimate has
+    nothing to add — so it is replaced, never shown alongside.
+    """
+    overlay = limits or {}
     return UsageWindowOut(
         tokens=payload["tokens"],
         requests=payload["requests"],
         cost_usd=payload["costUsd"],
-        resets_at=payload["resetsAt"],
+        resets_at=overlay.get("resetsAt") or payload["resetsAt"],
+        pct_used=overlay.get("pctUsed", claude_plan_limits.UNKNOWN_PCT),
     )
 
 
@@ -479,8 +505,18 @@ def append_usage(
 def usage_stats(
     user: User = Depends(require_user), db: Session = Depends(get_db)
 ) -> UsageStatsOut:
-    """The signed-in user's own Claude spend, scoped by ``owned()``."""
+    """The signed-in user's own Claude spend, scoped by ``owned()``.
+
+    Two sources, one shape. ``claude_usage`` aggregates what agents reported —
+    tokens, cost, requests, all of it the hub's own rows. ``claude_plan_limits``
+    adds the percentages behind Claude's ``/usage`` view for the credential this
+    user resolves to, which is the only part of the response that involves a
+    credential or an outbound call. It cannot fail the request: it never raises,
+    and a cold cache or a refused upstream is a ``-1`` and a status, so the rest
+    of the payload arrives regardless.
+    """
     payload = claude_usage.stats(db, user)
+    limits, limits_status = claude_plan_limits.limits_for(db, user)
     return UsageStatsOut(
         requests_today=payload["requestsToday"],
         avg_latency_ms=payload["avgLatencyMs"],
@@ -493,8 +529,9 @@ def usage_stats(
             cache_read=payload["breakdown"]["cacheRead"],
             cache_write=payload["breakdown"]["cacheWrite"],
         ),
-        session=_window(payload["session"]),
-        week=_window(payload["week"]),
+        session=_window(payload["session"], (limits or {}).get("session")),
+        week=_window(payload["week"], (limits or {}).get("week")),
+        limits_status=limits_status,
         by_model=[
             ByModelUsageOut(
                 model=entry["model"], tokens=entry["tokens"], cost_usd=entry["costUsd"]

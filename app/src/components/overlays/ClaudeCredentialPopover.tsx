@@ -10,23 +10,28 @@
 // The chip used to answer neither. It named a hardcoded model and reported only
 // which of the two credentials was selected.
 //
-// ## What the hub cannot show, and why it does not pretend to
+// ## What the hub shows, and what it still does not
 //
-// QAgent runs the Claude CLI locally, so its panel can show a plan-usage
-// percentage, a weekly budget gauge and a "Claude CLI unavailable" health
-// state. **None of those are observable here.** The hub never invokes Claude
-// for any of this: agents report each completed call and
-// `api/app/services/claude_usage.py` aggregates what arrives. So:
+// This block used to say the plan-usage percentage was unobservable here,
+// because the hub never runs the Claude CLI. That was wrong twice over. The
+// percentage does not come from the CLI at all — `/usage` renders an
+// authenticated HTTP call, and `api/app/services/claude_plan_limits.py` makes
+// that same call with the credential the hub already holds for this user. So
+// the two window rows headline `N% used`, from Claude's own account limits.
 //
-//   • absolute figures only — no percentage of a limit nobody told us, no
-//     budget the hub has no setting for;
+//   • when no percentage is available — no credential, an expired token, an
+//     upstream that would not answer — the headline falls back to the window's
+//     cost. Cost is a real figure, not a placeholder, so there is nothing here
+//     to blank out or zero;
+//   • the reset time is Claude's when Claude states one, and the hub's estimate
+//     (first call in the window + 5h) otherwise. One or the other, never both:
+//     two reset times on one row is a question, not an answer;
+//   • the weekly *budget* bar is still absent, and for the original reason —
+//     QAgent draws it against a user-configured `weekBudget`, and the hub has
+//     no such setting. A plan limit and a self-imposed budget are different
+//     things and only the first turned out to be reachable;
 //   • the status dot keeps its four credential-derived states and gains no
 //     health dimension, because there is no probe behind one;
-//   • the session window IS shown, and is not one of the above. It needs no
-//     CLI — a rolling five hours over rows the hub already stores, resetting
-//     five hours after the window's first call, which is exactly how QAgent
-//     defines its own. The panel labels it `rolling 5h` so the figure explains
-//     itself rather than looking like a number somebody chose;
 //   • "Test credential" is a STORAGE check — present, decryptable, parseable,
 //     unexpired. Its wording is taken verbatim from Claude Settings' own, since
 //     two phrasings of a security-relevant claim drift apart.
@@ -287,6 +292,26 @@ export function ClaudeCredentialChip() {
   useEffect(() => {
     if (open) load(true);
   }, [open, load]);
+
+  // The plan-limit percentages are fetched on the API's side in the background,
+  // so a cold cache answers `loading` and the panel opens on the cost fallback.
+  // Left alone the percentage would not appear until the *next* open, which
+  // reads as the feature not working. One delayed re-read covers it — and only
+  // while the answer is still `loading`, capped, so an API that never leaves
+  // that state cannot turn this into a poll.
+  const limitRetries = useRef(0);
+  useEffect(() => {
+    if (!open) {
+      limitRetries.current = 0;
+      return;
+    }
+    if (usage?.limitsStatus !== "loading" || limitRetries.current >= 3) return;
+    const timer = window.setTimeout(() => {
+      limitRetries.current += 1;
+      load(true);
+    }, 2500);
+    return () => window.clearTimeout(timer);
+  }, [open, usage, load]);
 
   const close = useCallback(() => setClaudeOpen(false), [setClaudeOpen]);
   useEscape(open, close);
@@ -695,13 +720,15 @@ function CredentialBlock({
 /* ── Usage ───────────────────────────────────────────────────────────────── */
 
 /**
- * One rolling window: a label, the window's cost as the headline, and a sub-line
- * of what that cost is made of.
+ * One rolling window: a label, how much of the plan it has used as the headline,
+ * and a sub-line of what the hub's own rows recorded inside it.
  *
- * QAgent puts a "% of plan used" gauge here. The hub cannot: it is told about
- * calls after they finish and knows no limit to be a percentage of. Cost is not
- * a consolation prize for that — it is the same figure QAgent itself falls back
- * to whenever the CLI does not hand it a limit.
+ * The headline is the window's share of Claude's limit when we know it, and the
+ * window's cost when we do not — QAgent's own rule, and the reason the fallback
+ * is a real number rather than a dash. The two are not two renderings of one
+ * figure: the percentage is Claude's account limit, the cost is what agents
+ * reported to the hub. Whichever is shown, the sub-line is unchanged, so nothing
+ * moves under the reader when a percentage arrives.
  */
 function UsageWindowRow({
   label,
@@ -712,6 +739,7 @@ function UsageWindowRow({
   qualifier: string;
   window: UsageWindow;
 }) {
+  const hasPct = window.pctUsed >= 0;
   return (
     <div className="mt-[13px] first:mt-0">
       <div className="flex items-baseline justify-between gap-2">
@@ -722,10 +750,13 @@ function UsageWindowRow({
           <span className="truncate text-[10px] text-faint">{qualifier}</span>
         </div>
         <span className="shrink-0 font-mono text-[12.5px] font-bold text-txt">
-          {formatCost(window.costUsd)}
+          {hasPct ? `${window.pctUsed}% used` : formatCost(window.costUsd)}
         </span>
       </div>
       <div className="mt-[5px] text-[11px] text-muted">
+        {/* The cost joins the sub-line exactly when the headline gave up its
+            place to a percentage, so the figure is moved rather than lost. */}
+        {hasPct && `${formatCost(window.costUsd)} · `}
         {formatTokens(window.tokens)} tokens · {window.requests}{" "}
         {window.requests === 1 ? "request" : "requests"} · resets{" "}
         {formatResetsIn(window.resetsAt)}

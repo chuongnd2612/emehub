@@ -20,10 +20,13 @@ Every timestamp this module emits is UTC in ``%Y-%m-%dT%H:%M:%SZ`` form. There i
 deliberately one convention, because two would eventually disagree by an hour and
 nobody would notice which one was wrong.
 
-What is *not* here, and will not be: a percentage of plan used. QAgent parses the
-CLI's ``/usage`` for a plan limit; the hub is told about calls after they finish
-and knows no limit to be a percentage of. Cost is the honest headline instead —
-which is the same fallback QAgent itself takes when the limit is unavailable.
+What is not here, and stays not here: a percentage of plan used. This module is
+told about calls after they finish, so it knows no limit to be a percentage of,
+and it will not invent one from a cost. The percentages the chip shows come from
+:mod:`app.services.claude_plan_limits`, which asks Claude directly using the
+credential the user resolves to, and the router overlays the two. Keeping them in
+separate modules keeps the seam visible: everything here is the hub's own rows,
+everything there is somebody else's account.
 """
 
 from __future__ import annotations

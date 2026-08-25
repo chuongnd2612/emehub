@@ -399,9 +399,20 @@ def resolve_material(db: Session, owner_id: int | None) -> dict | None:
 
     Decrypts the resolved row's ``enc::v1:`` envelope and returns the raw
     ``.credentials.json`` text alongside its metadata, or ``None`` when the user
-    has no credential at all. Its single caller is
-    ``GET /credentials/claude/resolve``, which audits every call
-    (INTEGRATION.md §4).
+    has no credential at all.
+
+    Two callers, both deliberate:
+
+    * ``GET /credentials/claude/resolve``, which hands the material to an agent
+      and audits every call (INTEGRATION.md §4);
+    * :mod:`app.services.claude_plan_limits`, which reads the OAuth access token
+      out of it to ask Claude for the account's plan-limit percentages. That one
+      never returns the material, or any part of it, to anything — the token
+      exists as a local and travels only as an ``Authorization`` header.
+
+    A second caller is preferable to a second decrypt: the invariant worth
+    holding is that exactly one function opens the envelope, not that exactly one
+    function calls it.
 
     Raises :class:`ClaudeCredentialsError` when the stored blob does not
     authenticate under the current key — an unreadable credential is an error,

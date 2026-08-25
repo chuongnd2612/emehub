@@ -365,7 +365,18 @@ export interface UsageWindow {
   tokens: number;
   requests: number;
   costUsd: number;
+  /**
+   * When the window closes. Claude's own boundary when it told us one, and the
+   * hub's estimate from its rows otherwise — never both, and the caller cannot
+   * tell which it got, because it should not act differently either way.
+   */
   resetsAt: string;
+  /**
+   * How much of the plan's limit for this window is spent, or `-1` when nobody
+   * could tell us. It is not a share of `costUsd` — the hub's rows and Claude's
+   * limits count different things, and only the second knows a denominator.
+   */
+  pctUsed: number;
 }
 
 /**
@@ -402,6 +413,12 @@ export interface ClaudeUsage {
   week: UsageWindow;
   /** The week's spend per model, dearest first. */
   byModel: ByModelUsage[];
+  /**
+   * `loading` | `ready` | `unavailable`, for the two `pctUsed` figures alone —
+   * every other field here is final on arrival. `loading` means a percentage is
+   * still coming; `unavailable` means there is none to come.
+   */
+  limitsStatus: string;
 }
 
 const CREDENTIAL_PATH = "/credentials/claude";
