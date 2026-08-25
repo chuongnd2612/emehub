@@ -28,7 +28,11 @@ export function ProductCard({ product }: { product: Product }) {
   // and still not launchable, because single sign-on additionally needs the
   // shared cookie domain (ADR 0008). Offering a launch that fails after the
   // click is worse than a disabled button that says why.
-  const canLaunch = Boolean(product.launchUrl && product.handoffReady);
+  // A closed product outranks both (#186): an admin has decided it is not open,
+  // so "why can't I launch?" has a simpler answer than any handoff blocker, and
+  // showing the configuration reason would explain the wrong thing.
+  const comingSoon = product.enabled === false;
+  const canLaunch = !comingSoon && Boolean(product.launchUrl && product.handoffReady);
   const blocker = handoffBlockerText({
     id: product.key === "q" ? "qagent" : "dagent",
     key: product.key,
@@ -37,6 +41,7 @@ export function ProductCard({ product }: { product: Product }) {
     registered: Boolean(product.launchUrl),
     handoffReady: Boolean(product.handoffReady),
     reason: product.handoffReason ?? null,
+    enabled: product.enabled ?? true,
   });
 
   // Top-level navigation, not a new tab: the agent bootstraps its own session
@@ -70,8 +75,8 @@ export function ProductCard({ product }: { product: Product }) {
               <span className="text-[19px] font-black tracking-[-.025em] text-txt">
                 {product.name}
               </span>
-              <Pill tone={product.live ? "ok" : "neutral"} size="sm">
-                {product.live ? "Live" : "Placeholder"}
+              <Pill tone={comingSoon ? "neutral" : product.live ? "ok" : "neutral"} size="sm">
+                {comingSoon ? "Coming soon" : product.live ? "Live" : "Placeholder"}
               </Pill>
             </div>
             <div className="mt-[3px] text-[12px] text-muted">{product.role}</div>
@@ -80,7 +85,7 @@ export function ProductCard({ product }: { product: Product }) {
             type="button"
             data-surface
             disabled={!canLaunch}
-            title={blocker ?? undefined}
+            title={comingSoon ? "This product is not available yet" : blocker ?? undefined}
             onClick={launch}
             className={`flex shrink-0 items-center gap-[6px] rounded-[11px] border border-bd2 bg-card2 px-[12px] py-[7px] text-[12px] font-bold transition-[background-color,border-color,transform] duration-200 ${
               canLaunch
@@ -88,7 +93,7 @@ export function ProductCard({ product }: { product: Product }) {
                 : "cursor-not-allowed text-muted opacity-60"
             }`}
           >
-            {product.live ? "Launch" : "Preview"}
+            {comingSoon ? "Coming soon" : product.live ? "Launch" : "Preview"}
             <Icon name="arrowRight" size={13} strokeWidth={2.4} />
           </button>
         </div>

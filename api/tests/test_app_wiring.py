@@ -73,6 +73,15 @@ def test_the_allowlist_is_exactly_the_expected_paths():
             "/docs",
             "/docs/oauth2-redirect",
             "/redoc",
+            # Is this product open to users? (#186) The edge proxy asks before
+            # letting a browser through to an agent, and that browser may be a
+            # stranger's — someone following a link to a product that is not open
+            # yet has no hub session, so requiring one would mean the gate could
+            # not run for the very people it exists for. Read-only, and on paths
+            # no mutating route shares: the admin toggle lives on
+            # `/agents/{key}/availability`, which is NOT public.
+            "/agents/qagent/open",
+            "/agents/dagent/open",
         }
     )
 

@@ -193,6 +193,10 @@ export async function getProducts(): Promise<Product[]> {
       launchUrl: target?.url ?? null,
       handoffReady: target?.handoffReady ?? false,
       handoffReason: target?.reason ?? null,
+      // Available unless the registry says otherwise (#186) — the same reason the
+      // cards render at all when the read fails: a hub blip must not hide a
+      // product that is open.
+      enabled: target?.enabled ?? true,
     };
   });
 }

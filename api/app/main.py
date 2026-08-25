@@ -44,6 +44,7 @@ from app.db import init_db
 from app.deps_auth import require_credential_grant, require_principal, require_user
 from app.logging import logger, setup_logging
 from app.routers import (
+    agent_open,
     agents,
     audit,
     auth,
@@ -76,6 +77,12 @@ ROUTERS = (
     # An agent has no business enumerating its siblings, so this is not in
     # the contract and an agent token is refused.
     (agents, PROTECTED),
+    # PUBLIC, and the only public thing about agents: the edge proxy asks whether
+    # a product is open BEFORE letting a browser through to it, and that browser
+    # may be a stranger's — requiring a session would mean the gate could not run
+    # for the very people it exists for (#186). Its own router so this posture
+    # covers one read-only route and nothing else.
+    (agent_open, PUBLIC),
     (me, CONTRACT),
     (audit, CONTRACT),
     # GET /connections is in the contract (INTEGRATION.md §3), so an agent's own

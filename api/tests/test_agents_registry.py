@@ -153,3 +153,91 @@ def test_readiness_does_not_depend_on_the_scheme_being_https():
         cookie_domain=".chuongnd.click", agent_qagent_url="http://qagent.chuongnd.click"
     )
     assert settings.handoff_ready(AUDIENCE_QAGENT) is True
+
+
+# --------------------------------------------------- availability toggle (#186)
+def test_an_agent_is_open_until_somebody_closes_it(client, hub_headers):
+    """#186: absent means available.
+
+    Nothing is seeded, so a fresh install must read as open. A table that had to
+    be populated before the suite worked would be a new way to come up broken.
+    """
+    agents = _by_id(client.get("/agents", headers=hub_headers).json())
+    assert agents[AUDIENCE_QAGENT]["enabled"] is True
+    assert agents[AUDIENCE_DAGENT]["enabled"] is True
+
+
+def test_an_admin_can_close_one_agent_without_touching_the_other(client, hub_headers):
+    """#186: the toggle is per agent, and it reaches the registry the cards read."""
+    response = client.put(
+        f"/agents/{AUDIENCE_QAGENT}/availability", json={"enabled": False}, headers=hub_headers
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"key": AUDIENCE_QAGENT, "enabled": False}
+
+    agents = _by_id(client.get("/agents", headers=hub_headers).json())
+    assert agents[AUDIENCE_QAGENT]["enabled"] is False
+    assert agents[AUDIENCE_DAGENT]["enabled"] is True, "closing one closed the other"
+
+    # And it is reversible — a coming-soon state that could not be undone would be
+    # a deploy-shaped decision again, which is what this replaced.
+    client.put(
+        f"/agents/{AUDIENCE_QAGENT}/availability", json={"enabled": True}, headers=hub_headers
+    )
+    agents = _by_id(client.get("/agents", headers=hub_headers).json())
+    assert agents[AUDIENCE_QAGENT]["enabled"] is True
+
+
+def test_a_member_cannot_change_availability(client, make_user, auth_headers):
+    """#186: turning a product off is an admin decision."""
+    make_user("member@emesoft.net", "password12345", role="member")
+    headers = auth_headers("member@emesoft.net", "password12345")
+
+    response = client.put(
+        f"/agents/{AUDIENCE_QAGENT}/availability", json={"enabled": False}, headers=headers
+    )
+    assert response.status_code == 403, response.text
+
+
+def test_the_edge_can_ask_without_a_session(client, hub_headers):
+    """#186: the gate has to work for the very people it exists for.
+
+    Someone following a link to a product that is not open yet has no hub session.
+    Requiring one would mean the edge could not run the check for a stranger — the
+    only case that matters — so this read is deliberately unauthenticated. It
+    reveals nothing: the answer is what the coming-soon page says out loud.
+    """
+    client.put(
+        f"/agents/{AUDIENCE_QAGENT}/availability", json={"enabled": False}, headers=hub_headers
+    )
+
+    # 403 is the answer, not an error: nginx `auth_request` reads status codes and
+    # cannot parse a body, so a 200 saying "enabled: false" would be a gate that
+    # always opens. The body is still there so a human with curl sees why.
+    closed = client.get(f"/agents/{AUDIENCE_QAGENT}/open")
+    assert closed.status_code == 403, closed.text
+    assert closed.json() == {"key": AUDIENCE_QAGENT, "enabled": False}
+
+    client.put(
+        f"/agents/{AUDIENCE_QAGENT}/availability", json={"enabled": True}, headers=hub_headers
+    )
+    opened = client.get(f"/agents/{AUDIENCE_QAGENT}/open")
+    assert opened.status_code == 200, opened.text
+    assert opened.json() == {"key": AUDIENCE_QAGENT, "enabled": True}
+
+
+def test_an_unknown_agent_reads_as_open_but_cannot_be_written(client, hub_headers):
+    """#186: be permissive where being wrong causes an outage, strict where it doesn't.
+
+    The read gates access, so a typo in a route must not take a product down. The
+    write is where a bad name should be refused, because there it is cheap and
+    immediately visible.
+    """
+    # Not allowlisted, so the guard refuses it before routing — an unknown name
+    # cannot even probe for existence, which is the stricter and better answer.
+    assert client.get("/agents/nosuchagent/open").status_code == 401
+
+    response = client.put(
+        "/agents/nosuchagent/availability", json={"enabled": False}, headers=hub_headers
+    )
+    assert response.status_code == 404, response.text

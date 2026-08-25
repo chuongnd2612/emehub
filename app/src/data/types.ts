@@ -43,6 +43,10 @@ export interface AgentTarget {
   registered: boolean;
   handoffReady: boolean;
   reason: HandoffBlocker | null;
+  /** Whether the product is open to users at all (#186) — an admin toggle, not
+   *  configuration. Distinct from `live`, which is the design's Live/Placeholder
+   *  badge and must not move when availability does. */
+  enabled: boolean;
 }
 
 export interface Product {
@@ -70,6 +74,10 @@ export interface Product {
    */
   /** Merged from `GET /agents`. Null when the agent has no URL configured. */
   launchUrl?: string | null;
+  /** Runtime availability from `GET /agents` (#186). `false` ⇒ the card reads
+   *  "Coming soon" and cannot be launched. Defaults to available so a failed
+   *  registry read never hides a product that is perfectly fine. */
+  enabled?: boolean;
   /** Merged from `GET /agents`. False means a launch would fail after the click. */
   handoffReady?: boolean;
   /** Merged from `GET /agents`. Names the missing configuration. */

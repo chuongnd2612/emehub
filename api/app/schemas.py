@@ -133,7 +133,29 @@ class AgentOut(ApiModel):
     url: str | None = None
     registered: bool = False
     handoff_ready: bool = False
+    # Whether the product is open to users at all (#186). Runtime state, unlike
+    # the `Live`/`Placeholder` badge, which is design copy — a card must be able
+    # to read "Coming soon" without a marketing badge changing underneath it.
+    enabled: bool = True
     reason: str | None = None
+
+
+class AgentAvailabilityIn(ApiModel):
+    """Body for the admin toggle — turn one agent on or off (#186)."""
+
+    enabled: bool
+
+
+class AgentAvailabilityOut(ApiModel):
+    """Whether one agent is open to users.
+
+    Served unauthenticated for the edge proxy: a visitor arriving at a disabled
+    agent's URL has no session to authorise with, and the answer is exactly what
+    the coming-soon page they are about to see says out loud.
+    """
+
+    key: str
+    enabled: bool
 
 
 class AgentListOut(ApiModel):

@@ -36,6 +36,7 @@ import ProjectDetailScreen from "./screens/ProjectDetail";
 import ProjectsScreen from "./screens/Projects";
 import ResetPasswordScreen from "./screens/Public/ResetPassword";
 import SettingsScreen from "./screens/Settings";
+import ComingSoonScreen from "./screens/Public/ComingSoon";
 import SignedOutScreen from "./screens/Public/SignedOut";
 import TicketDetailScreen from "./screens/TicketDetail";
 import TicketsScreen from "./screens/Tickets";
@@ -59,6 +60,10 @@ export const router = createBrowserRouter([
 
   // Ungated: logout lands here and finalises the sign-out on mount.
   { path: "/signed-out", element: <SignedOutScreen /> },
+
+  // Ungated: the edge sends anyone here who asks for an agent that is turned
+  // off (#186), and that visitor may have no hub session at all.
+  { path: "/coming-soon/:key", element: <ComingSoonScreen /> },
 
   // The authenticated subtree. RequireAuth gates every route below it.
   {
