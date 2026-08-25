@@ -143,12 +143,19 @@ def _window(db: Session, user, since: datetime) -> tuple[list[int], int, float]:
 
 
 def _session_resets_at(db: Session, user, since: datetime, now: datetime) -> str:
-    """When the current five-hour window closes.
+    """When the current five-hour window closes, *estimated from the hub's rows*.
 
     Anchored to the *earliest call still inside the window*, not to a clock
     boundary — the same rule QAgent applies, and the reason its reset time reads
     as an odd number of minutes past the hour rather than on it. With no calls in
     the window there is nothing to anchor to, so a fresh window starts now.
+
+    Since #212 this is the **fallback**, not the answer. Claude owns the boundary
+    and states it, and when :mod:`app.services.claude_plan_limits` gets a
+    ``resets_at`` the router replaces this value with it — so what ships is an
+    estimate of somebody else's boundary, reached for only when that somebody
+    did not say. The anchoring above still describes it exactly; it is the
+    *precedence* that changed, and callers see one time either way, never both.
     """
     earliest = (
         owned(db.query(func.min(ClaudeUsage.ts)), ClaudeUsage, user)
