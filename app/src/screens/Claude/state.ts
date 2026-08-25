@@ -280,6 +280,18 @@ export function useClaudeSettings(): ClaudeSettings {
 
   const [models, setModels] = useState<ModelPreferences | null>(null);
   const [draftModels, setDraftModels] = useState<ModelPreferences | null>(null);
+  /**
+   * Whether the user has actually PICKED a model or an effort level.
+   *
+   * Only consulted while the hub is showing workspace defaults, where a
+   * selection equal to the value already on screen is still a real change (see
+   * {@link ClaudeSettings.modelsDirtyCount}). It exists so that case does not
+   * become "the bar is up the moment you open the tab": it is set from the two
+   * setters below, which `Dropdown` calls only on an item click and the effort
+   * chips only on a press, so focus, hover and opening the dropdown without
+   * choosing anything all leave it false.
+   */
+  const [modelPicked, setModelPicked] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [savingModels, setSavingModels] = useState(false);
 
@@ -345,6 +357,7 @@ export function useClaudeSettings(): ClaudeSettings {
         if (!live) return;
         setModels(next);
         setDraftModels(next);
+        setModelPicked(false);
       })
       .catch((err: unknown) => {
         if (live)
@@ -536,6 +549,7 @@ export function useClaudeSettings(): ClaudeSettings {
 
   const patchDraftModels = useCallback((patch: Partial<ModelPreferences>) => {
     setDraftModels((d) => (d ? { ...d, ...patch } : d));
+    setModelPicked(true);
   }, []);
 
   const setMainModel = useCallback(
@@ -547,27 +561,36 @@ export function useClaudeSettings(): ClaudeSettings {
     [patchDraftModels],
   );
 
-  const discardModels = useCallback(() => setDraftModels(models), [models]);
+  const discardModels = useCallback(() => {
+    setDraftModels(models);
+    setModelPicked(false);
+  }, [models]);
 
   /**
    * How many preferences differ from what is saved.
    *
    * The `usingDefaults` clause is not a workaround for the diff — it is the
-   * case the diff cannot see. While the hub is showing workspace defaults, the
-   * user has chosen NOTHING, and choosing the very value already on screen is
-   * how they say "this one, deliberately". That pick has to be savable or the
-   * preference row is never written and the "showing the defaults" notice can
-   * never go away. So while `usingDefaults` holds, the form counts as having
-   * one change to make.
+   * case the diff cannot see. While the hub is showing workspace defaults there
+   * is no preference row at all, so selecting the very value already on screen
+   * is a real change of state, from "no preference" to "this preference". A
+   * pure value-diff scores that zero, which would leave the pick unsavable and
+   * the "showing the defaults" notice up forever.
+   *
+   * It is gated on a SELECTION, not on the tab being open (#204). Counting it
+   * from first paint put the bar on screen claiming a change nobody had made,
+   * and a bar that appears because someone looked at the screen teaches people
+   * to ignore it — which costs more than the case being protected. Focus,
+   * hover, and opening the dropdown and closing it again all leave the count
+   * at zero.
    */
   const modelsDirtyCount = useMemo(() => {
     if (!models || !draftModels) return 0;
-    if (models.usingDefaults) return 1;
+    if (models.usingDefaults) return modelPicked ? 1 : 0;
     let changed = 0;
     if (draftModels.mainModel !== models.mainModel) changed += 1;
     if (draftModels.effort !== models.effort) changed += 1;
     return changed;
-  }, [models, draftModels]);
+  }, [models, draftModels, modelPicked]);
 
   /**
    * The whole preference is sent together — the hub validates it and returns
@@ -583,6 +606,10 @@ export function useClaudeSettings(): ClaudeSettings {
       .then((stored) => {
         setModels(stored);
         setDraftModels(stored);
+        // The pick has landed, so it is no longer a pick waiting to be made.
+        // `stored.usingDefaults` is false after any write, but clearing this
+        // keeps the count honest without depending on that.
+        setModelPicked(false);
         toast("Model preferences saved");
       })
       .catch((err: unknown) => {
