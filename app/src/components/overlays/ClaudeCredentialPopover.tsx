@@ -96,14 +96,21 @@ import { useUi } from "@/store/ui";
 
 const POPOVER_WIDTH = 330;
 /**
- * What the panel wants — measured against the fullest state (a credential with
- * a subscription and scopes, plus a week of usage). `placeBelow` caps it to the
- * room available and the panel scrolls only when the window is genuinely too
- * short. Under-declaring it is not a harmless guess: the cap is
- * `min(want, room)`, so a number below the real content height makes the panel
- * scroll on a tall window with 300px of empty space beneath it.
+ * What the panel wants — measured against the fullest state: a credential with
+ * a subscription and scopes, both usage windows, the four-way token breakdown
+ * and a three-model rollup. `placeBelow` caps it to the room available and the
+ * panel scrolls only when the window is genuinely too short. Under-declaring it
+ * is not a harmless guess: the cap is `min(want, room)`, so a number below the
+ * real content height makes the panel scroll on a tall window with 300px of
+ * empty space beneath it.
+ *
+ * Measured, not estimated — `scrollHeight` of the panel in that state is 935.
+ * It was 760 before the session/week rows and BY MODEL were added, and left
+ * behind by them; re-measure this when the panel grows again. A rollup longer
+ * than three models scrolls, which is the intended fallback rather than a
+ * reason to keep inflating the number.
  */
-const POPOVER_HEIGHT = 760;
+const POPOVER_HEIGHT = 940;
 
 /**
  * The chip's four credential states plus `none` — no credential attached at
