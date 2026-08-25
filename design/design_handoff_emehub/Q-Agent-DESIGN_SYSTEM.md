@@ -211,7 +211,7 @@ Animation is core to the “alive” feel — intentional, spring-ish, never noi
 
 - **Icons:** inline SVG, `stroke="currentColor"` (or a semantic color), `stroke-width:2–2.4`, `stroke-linecap/linejoin:round`, `viewBox 0 0 24 24`, sized `13–19px`. Feather/Lucide-style line icons.
 - **No hand-drawn illustration.** Atmosphere comes from the Three.js particle field + radial blooms, not decorative SVG art.
-- **Brand mark:** `assets/eme-3d-logo-cut.png` (EMESOFT 3D logo), rendered with a mouse-reactive tilt in the sidebar.
+- **Brand mark:** `app/public/assets/eme-3d-logo-cut.png` (EMESOFT 3D logo), rendered with a mouse-reactive tilt in the sidebar.
 
 ---
 
