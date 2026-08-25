@@ -1,4 +1,4 @@
-"""Which Claude models a user's agent runs should use.
+"""Which Claude model a user's agent runs should use.
 
 ## Why this is a row and not configuration
 
@@ -47,10 +47,9 @@ class UserModelPreferences(Base):
         ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
     #: Model id (``claude-opus-5``, …), never a display label. The validated set
-    #: lives in :mod:`app.services.model_preferences`.
+    #: lives in :mod:`app.services.model_preferences`. Empty means "not chosen".
     main_model: Mapped[str] = mapped_column(String(64), default="", nullable=False)
-    fast_model: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     #: Claude CLI ``--effort`` level. Empty means "not chosen" — same convention
-    #: as the model columns, so one absent-means-default rule covers the row.
+    #: as the model column, so one absent-means-default rule covers the row.
     effort: Mapped[str] = mapped_column(String(16), default="", nullable=False)
     updated_at: Mapped[datetime] = timestamp_column(onupdate=utcnow)

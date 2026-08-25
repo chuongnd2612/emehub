@@ -232,7 +232,6 @@ export interface ClaudeSettings {
    *  already showing — but a second pick is refused rather than raced. */
   savingModels: boolean;
   setMainModel: (next: string) => void;
-  setFastModel: (next: string) => void;
   setEffort: (next: string) => void;
 }
 
@@ -525,9 +524,7 @@ export function useClaudeSettings(): ClaudeSettings {
       if (!models || savingModels) return;
       const next = { ...models, ...patch };
       const unchanged =
-        next.mainModel === models.mainModel &&
-        next.fastModel === models.fastModel &&
-        next.effort === models.effort;
+        next.mainModel === models.mainModel && next.effort === models.effort;
       // `usingDefaults` makes an identical-looking pick meaningful: choosing the
       // value the workspace default already shows is how a user says "this one,
       // deliberately", and it must reach the hub or the row is never written.
@@ -538,11 +535,7 @@ export function useClaudeSettings(): ClaudeSettings {
       // choice, so it is false from this moment either way.
       setModels({ ...next, usingDefaults: false });
       setSavingModels(true);
-      setModelPreferences({
-        mainModel: next.mainModel,
-        fastModel: next.fastModel,
-        effort: next.effort,
-      })
+      setModelPreferences({ mainModel: next.mainModel, effort: next.effort })
         .then(setModels)
         .catch((err: unknown) => {
           setModels(previous);
@@ -559,10 +552,6 @@ export function useClaudeSettings(): ClaudeSettings {
 
   const setMainModel = useCallback(
     (mainModel: string) => saveModels({ mainModel }),
-    [saveModels],
-  );
-  const setFastModel = useCallback(
-    (fastModel: string) => saveModels({ fastModel }),
     [saveModels],
   );
   const setEffort = useCallback(
@@ -597,7 +586,6 @@ export function useClaudeSettings(): ClaudeSettings {
     modelsError,
     savingModels,
     setMainModel,
-    setFastModel,
     setEffort,
   };
 }

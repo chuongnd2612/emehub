@@ -6,6 +6,10 @@
 // LIVE. This replaced four `useState`s on the Models tab of Claude Settings that
 // persisted nowhere and were read by nothing (#190).
 //
+// A `fastModel` lived here too, until it did not survive its own justification
+// (#197): the hub makes exactly one kind of Claude call, so there was no second,
+// cheaper invocation to spend it on and nothing ever read it.
+//
 // It is not a display setting: the hub's own knowledge builds resolve their
 // model and their `claude --effort` level from the row owner's preferences
 // before invoking the CLI (`api/app/services/model_preferences.py` ›
@@ -35,7 +39,6 @@ const PATH = "/me/model-preferences";
 /** Model ids and a `claude --effort` level, as stored by the hub. */
 export interface ModelPreferences {
   mainModel: string;
-  fastModel: string;
   /** `low` | `medium` | `high` | `xhigh` | `max`. */
   effort: string;
   /**
