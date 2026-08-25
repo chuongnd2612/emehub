@@ -118,8 +118,11 @@ class Settings(BaseSettings):
     #: The Claude Code CLI executable. Baked into the image; overridable for a
     #: host install at a different path.
     claude_bin: str = "claude"
-    #: Model every hub-run Claude call uses. Matches QAgent's default so the two
-    #: stacks produce comparable knowledge.
+    #: Model every hub-run Claude call uses **unless the member who owns the work
+    #: has chosen otherwise** (``app.services.model_preferences``). Matches
+    #: QAgent's default so the two stacks produce comparable knowledge, and it is
+    #: what an unset preference resolves to — so shipping the preference resource
+    #: changed nobody's builds until they picked something.
     claude_model: str = "claude-sonnet-5"
     #: Default per-call CLI budget.
     claude_timeout_s: int = 300

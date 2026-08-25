@@ -10,7 +10,8 @@
 //   timing.ts       shared `after()` + READ_DELAY_MS
 //   types.ts        the wire types
 //   auth.ts         sessions, API keys
-//   credentials.ts  real .credentials.json parsing + the credential stubs
+//   credentials.ts  LIVE — real .credentials.json parsing + the stored credential
+//   models.ts       LIVE — per-user Claude model preferences
 //   connections.ts  provider connections, integrations, PROVIDERS
 //   projects.ts     LIVE — the registry + project configuration
 //   knowledge.ts    LIVE — knowledge metadata + the learned sections
@@ -41,6 +42,7 @@ export * from "./types";
 export * from "./agents";
 export * from "./auth";
 export * from "./credentials";
+export * from "./models";
 export * from "./connections";
 export * from "./projects";
 export * from "./knowledge";

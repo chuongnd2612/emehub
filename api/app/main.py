@@ -53,6 +53,7 @@ from app.routers import (
     dagent,
     health,
     me,
+    preferences,
     projects,
     saved_queries,
     tickets,
@@ -84,6 +85,11 @@ ROUTERS = (
     # covers one read-only route and nothing else.
     (agent_open, PUBLIC),
     (me, CONTRACT),
+    # PROTECTED, and NOT folded into `me`: that router is the contract QAgent and
+    # DAgent consume, while this is a settings screen's own resource. Sharing the
+    # `/me` prefix is about whose data it is, not about who may read it — an
+    # agent token is refused here (#190).
+    (preferences, PROTECTED),
     (audit, CONTRACT),
     # GET /connections is in the contract (INTEGRATION.md §3), so an agent's own
     # token must reach it; every other route in that router adds

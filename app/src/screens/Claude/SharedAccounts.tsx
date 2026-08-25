@@ -4,8 +4,10 @@
 // The handoff drew a LIST of shared accounts with a `DEFAULT` chip and a
 // `Set as default` action. The hub holds exactly one shared workspace
 // credential (`api/app/services/claude_credentials.py` › `get_shared`), so
-// this renders one card or the upload zone, and the default action is offered
-// disabled with the reason — see `SET_DEFAULT_UNAVAILABLE`.
+// this renders one card or the upload zone — and neither the chip nor the
+// action survived. With one account there is nothing to be default *against*,
+// and a menu item shipped permanently disabled is a control that lies about
+// what the product can do. They come back with a second shared account.
 
 import {
   ClaudeMark,
@@ -16,7 +18,6 @@ import {
   StatusPill,
 } from "@/components/ui";
 import {
-  SET_DEFAULT_UNAVAILABLE,
   formatDaysLeft,
   formatExpiryIso,
   formatRefreshed,
@@ -74,8 +75,7 @@ export function SharedAccounts({ s }: { s: ClaudeSettings }) {
 
       <Notice tone="info">
         The workspace runs on a single shared account. Uploading replaces it for
-        every member who has not attached their own. Set as default is disabled:{" "}
-        {SET_DEFAULT_UNAVAILABLE}.
+        every member who has not attached their own.
       </Notice>
     </>
   );
@@ -125,9 +125,6 @@ function SharedCredentialCard({
               <span className="truncate text-[15.5px] font-extrabold tracking-[-.02em] text-txt">
                 {meta.label || "Shared Claude account"}
               </span>
-              <span className="shrink-0 rounded-pill bg-pt px-2 py-[3px] text-[9px] font-bold tracking-[.09em] text-ps-text">
-                DEFAULT
-              </span>
             </div>
             <div className="mt-[3px] font-mono text-[11.5px] text-muted">
               {meta.subscriptionType ?? "Claude account"}
@@ -142,14 +139,6 @@ function SharedCredentialCard({
             align="end"
             value={null}
             items={[
-              {
-                value: "default" as const,
-                label: "Set as default",
-                icon: <Icon name="spark" size={14} />,
-                // No endpoint sets a default, and with one shared account
-                // there is nothing to choose between.
-                disabled: true,
-              },
               {
                 value: "remove" as const,
                 label: "Remove credential",

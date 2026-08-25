@@ -537,22 +537,3 @@ export const getSharedCredentials = async (): Promise<SharedCredential[]> => {
     },
   ];
 };
-
-/* ── Not implemented by the hub ──────────────────────────────────────────── */
-
-/** Why "Set as default" is offered but disabled. Shown in the credential menu. */
-export const SET_DEFAULT_UNAVAILABLE =
-  "The hub holds a single shared account, so there is nothing to choose between";
-
-/**
- * STUB (no endpoint yet): there is no route that marks one credential the
- * default — verified against `/api/openapi.json`. The hub's model is one shared
- * credential for the workspace plus one own credential per user, resolved
- * own → shared → none, so "default" has no server-side meaning yet.
- *
- * Deliberately rejects rather than resolving: nothing may call this and appear
- * to have worked. The UI shows the action disabled with
- * {@link SET_DEFAULT_UNAVAILABLE} as the reason.
- */
-export const setDefaultCredential = (_credentialId: string): Promise<never> =>
-  Promise.reject(new Error(SET_DEFAULT_UNAVAILABLE));
