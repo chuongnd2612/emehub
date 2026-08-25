@@ -1,5 +1,5 @@
-// Handoff § 8 › Members — the credential cell is a 7px dot + label; the role
-// cell is a badge, and a changeable role opens a dropdown.
+// Handoff § 8 › Members — the role cell is a badge, and a changeable role opens
+// a dropdown.
 //
 // Live against `GET /auth/users` and `PATCH /auth/users/{id}`.
 //
@@ -7,9 +7,9 @@
 // stores (see `data/people.ts` for the reasoning):
 //   • The role picker offers Admin and Member only. Owner and Viewer are design
 //     vocabulary with no storage behind them, and PATCHing either 400s.
-//   • The CLAUDE CREDENTIAL column reads "Not assigned" on every row: nothing
-//     on the hub maps a user to a credential. It stays because the column is in
-//     the design and the mapping is coming; it does not fabricate an answer.
+//   • The CLAUDE CREDENTIAL column is gone (#191). Nothing on the hub maps a
+//     user to a credential, so it printed "Not assigned" on every row — a
+//     column that could only ever say one thing.
 //   • A DEVICES column is added, because `AdminUserOut.sessionCount` is real.
 //
 // The endpoint is admin-only. A member gets a 403, which surfaces as its own
@@ -46,7 +46,7 @@ import { RemoveMemberModal } from "./RemoveMemberModal";
 import { RenameMemberModal } from "./RenameMemberModal";
 
 const COLUMNS =
-  "36px minmax(0,1.05fr) minmax(0,1.3fr) 150px 110px 90px 130px 34px";
+  "36px minmax(0,1.15fr) minmax(0,1.6fr) 110px 90px 130px 34px";
 
 /**
  * The row action menu. `rename` and `remove` open modals; the other two are
@@ -55,10 +55,8 @@ const COLUMNS =
 type RowAction = "rename" | "deactivate" | "reactivate" | "remove";
 
 const ROLE_TONE: Record<RoleName, PillTone> = {
-  Owner: "accent",
   Admin: "qagent",
   Member: "dagent",
-  Viewer: "neutral",
 };
 
 export function MembersTable() {
@@ -200,7 +198,6 @@ export function MembersTable() {
           <span />
           <span>MEMBER</span>
           <span>EMAIL</span>
-          <span>CLAUDE CREDENTIAL</span>
           <span>LAST ACTIVE</span>
           <span>DEVICES</span>
           <span className="text-right">ROLE</span>
@@ -234,13 +231,6 @@ export function MembersTable() {
               </TableCell>
               <TableCell className="text-[12.5px] text-muted">
                 {m.email}
-              </TableCell>
-              <TableCell>
-                {/* STUB (no endpoint yet): no user → Claude credential mapping. */}
-                <span className="size-[7px] shrink-0 rounded-full bg-bd2" />
-                <span className="truncate text-[12px] text-label">
-                  Not assigned
-                </span>
               </TableCell>
               <TableCell className="text-[12px] text-label">
                 {m.lastActive}

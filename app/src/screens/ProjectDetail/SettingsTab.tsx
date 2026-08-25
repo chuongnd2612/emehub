@@ -5,8 +5,12 @@
 //    index; then a 3-up read-only meta grid (provider, repository, knowledge
 //    scope)."
 //
-// The three toggles above have no storage: `ProjectConfigIn` has no field for
-// a re-index-on-merge or block-on-stale policy. They stay local UI state.
+// **The three toggles are gone** (#191). `ProjectConfigIn` has no field for a
+// re-index-on-merge, publish-evidence or block-on-stale policy, so they were
+// local `useState` that reset on every navigation and changed nothing — a
+// notice underneath even admitted it. A switch that stores nothing is worse
+// than an absent one: it reads as configuration. They come back with the
+// fields that would store them.
 //
 // Everything BELOW that card is not in the handoff at all — it is the
 // functional core of Q-Agent's `ProjectSettingsForm.tsx`, ported because it is
@@ -14,9 +18,7 @@
 // accounts, environments) and EmeHub had no equivalent. See
 // `ProjectConfigForm.tsx` for what was and wasn't carried over, and why.
 
-import { useState } from "react";
-
-import { Button, GlassCard, Icon, Notice, Toggle } from "@/components/ui";
+import { Button, GlassCard, Icon } from "@/components/ui";
 import type { Project } from "@/data";
 import { DangerZone } from "./DangerZone";
 import { ProjectConfigForm } from "./ProjectConfigForm";
@@ -45,14 +47,7 @@ export function SettingsTab({
   /** Re-reads the project after `ProjectConfigForm` saves. */
   onReload: () => void;
 }) {
-  // Handoff › State Management › Projects: pjAutoIndex, pjEvidence,
-  // pjBlockUnindexed. UI-only, scoped to this screen — see the header comment.
-  const [autoIndex, setAutoIndex] = useState(true);
-  const [evidence, setEvidence] = useState(true);
-  const [blockStale, setBlockStale] = useState(false);
-
   const knowledge = project.knowledge;
-  const branch = project.branch || "the default branch";
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -78,39 +73,6 @@ export function SettingsTab({
             Open knowledge base
           </Button>
         </div>
-
-        <div className="mt-2 flex flex-col gap-[2px]">
-          <div className="border-t border-bd3 py-[15px]">
-            <Toggle
-              checked={autoIndex}
-              onChange={setAutoIndex}
-              label={`Re-index on every merge to ${branch}`}
-              description="Keeps the knowledge base in step with the default branch without manual runs."
-            />
-          </div>
-          <div className="border-t border-bd3 py-[15px]">
-            <Toggle
-              checked={evidence}
-              onChange={setEvidence}
-              label={`Publish evidence back to ${project.providerName}`}
-              description="Screenshots, traces and generated cases are attached to the originating work item."
-            />
-          </div>
-          <div className="border-t border-bd3 py-[15px]">
-            <Toggle
-              checked={blockStale}
-              onChange={setBlockStale}
-              label="Block runs on a stale index"
-              description="Agents refuse to start when the knowledge base is older than the current head."
-            />
-          </div>
-        </div>
-
-        <Notice tone="warn" className="mt-3">
-          These three policies are not stored yet — the hub has no field for
-          them. The project configuration below (connections, base URL, test
-          accounts, environments) is real and saves to the hub.
-        </Notice>
       </GlassCard>
 
       <div className="grid grid-cols-3 gap-[14px]">

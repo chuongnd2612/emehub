@@ -15,20 +15,14 @@
 import { useState } from "react";
 
 import { Button, Input, Modal, Notice, toast } from "@/components/ui";
-import {
-  ASSIGNABLE_ROLES,
-  invite,
-  type Invitation,
-  type RoleName,
-} from "@/data";
+import { ASSIGNABLE_ROLES, invite, type RoleName } from "@/data";
 import { ApiError } from "@/lib/api";
-import { displayName, useAuth } from "@/store/auth";
 
 export interface InviteMemberModalProps {
   open: boolean;
   onClose: () => void;
-  /** Fired once the hub confirms, with the created invitation. */
-  onInvited?: (invitation: Invitation) => void;
+  /** Fired once the hub confirms, with the invited address. */
+  onInvited?: (email: string) => void;
 }
 
 export function InviteMemberModal({
@@ -36,8 +30,6 @@ export function InviteMemberModal({
   onClose,
   onInvited,
 }: InviteMemberModalProps) {
-  const me = useAuth((s) => s.user);
-
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<RoleName>("Member");
   const [pending, setPending] = useState(false);
@@ -59,9 +51,9 @@ export function InviteMemberModal({
     setPending(true);
     setError(null);
     try {
-      const result = await invite(address, role, displayName(me) || "an admin");
-      onInvited?.(result.invitation);
-      toast(`Invitation sent to ${result.invitation.email}`);
+      const result = await invite(address, role);
+      onInvited?.(result.email);
+      toast(`Invitation sent to ${result.email}`);
       if (result.resetPath) {
         // Email delivery is a stub on this environment, so keep the modal open
         // — the link has to be handed over by hand.

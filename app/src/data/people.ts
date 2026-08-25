@@ -1,6 +1,4 @@
-// People — workspace members, roles and pending invitations.
-//
-// Members and invitations are real; roles and the invitation LIST are not.
+// People — the workspace's member accounts.
 //
 //   GET    /auth/users          getMembers
 //   POST   /auth/users          createUser     usable immediately
@@ -8,21 +6,27 @@
 //   DELETE /auth/users/{id}     removeMember   hard delete
 //   POST   /auth/users/invite   invite         usable once redeemed
 //
-// ## The role vocabulary is narrower on the wire than in the design
+// ## Two roles, and only two
 //
-// The handoff's Roles grid describes four roles. The hub stores two —
+// The handoff's Roles grid described four. The hub stores two —
 // `USER_ROLES = ("admin", "member")` in `api/app/models/user.py` — and
-// `PATCH /auth/users/{id}` 400s on anything else. So `RoleName` keeps all four
-// (the Roles grid still renders them from fixtures) but only the two in
-// `ASSIGNABLE_ROLES` round-trip, and the member role picker offers only those.
-// Owner and Viewer are design vocabulary with no storage behind them; inventing
-// a mapping (say, "the first admin is the Owner") would be inventing data.
+// `PATCH /auth/users/{id}` 400s on anything else, so `RoleName` is now exactly
+// those two (#191). Owner and Viewer were design vocabulary with no storage
+// behind them, rendered from a fixture with invented member counts; inventing a
+// mapping (say, "the first admin is the Owner") would have been inventing data.
+//
+// ## There is no invitation LIST
+//
+// `POST /auth/users/invite` creates the *user* immediately, with an unusable
+// password, and hands back a one-shot reset token. There is nothing pending to
+// list and nothing to revoke, so the Invitations tab is gone (#191) — it was
+// seeded from three fabricated people, its Revoke spliced a local array without
+// touching the account the hub had created, and its Resend only raised a toast.
+// The invite itself is real and stays.
 
 import { api } from "@/lib/api";
-import { INVITATIONS, ROLES } from "./fixtures/people";
 import { displayNameFrom, initialsFrom, relativeTime } from "./humanize";
-import { after, READ_DELAY_MS } from "./timing";
-import type { Invitation, Member, Role, RoleName } from "./types";
+import type { Member, RoleName } from "./types";
 
 /* ── Role mapping ────────────────────────────────────────────────────────── */
 
@@ -34,7 +38,7 @@ const WIRE_TO_ROLE: Record<string, RoleName> = {
   member: "Member",
 };
 
-const ROLE_TO_WIRE: Partial<Record<RoleName, string>> = {
+const ROLE_TO_WIRE: Record<RoleName, string> = {
   Admin: "admin",
   Member: "member",
 };
@@ -81,10 +85,6 @@ const toMember = (wire: UserWire, sessionCount: number): Member => ({
   initials: initialsFrom(wire.firstName, wire.lastName, wire.email),
   isActive: wire.isActive,
   sessionCount,
-  // STUB (no endpoint yet): nothing on the hub maps a user to a Claude
-  // credential, so this column reads "Not assigned" for every live row.
-  credential: "none",
-  credentialId: null,
 });
 
 /** `GET /auth/users`. Admin-only — a plain member gets a 403 here. */
@@ -178,28 +178,6 @@ export const createUser = async (input: NewUser): Promise<Member> => {
 
 /* ── Invitations ─────────────────────────────────────────────────────────── */
 
-/**
- * STUB (no endpoint yet): the hub has no invitation resource. `POST
- * /auth/users/invite` creates the *user* immediately, with an unusable
- * password, and hands back a one-shot reset token — there is nothing to list
- * and nothing to revoke. So the Invitations tab keeps a local, session-lived
- * record of what this browser has sent, seeded from fixtures, and says so.
- */
-const INVITATION_STORE: Invitation[] = [...INVITATIONS];
-
-// STUB (no endpoint yet): there is no GET /auth/invitations.
-export const getInvitations = (): Promise<Invitation[]> =>
-  after([...INVITATION_STORE], READ_DELAY_MS);
-
-// STUB (no endpoint yet): there is no DELETE /auth/invitations/{email}.
-// Dropping the local record does NOT delete the account the hub created —
-// that is `DELETE /auth/users/{id}`, from User Management.
-export const revokeInvitation = (email: string): Promise<void> => {
-  const at = INVITATION_STORE.findIndex((i) => i.email === email);
-  if (at >= 0) INVITATION_STORE.splice(at, 1);
-  return after(undefined, READ_DELAY_MS);
-};
-
 /** `POST /auth/users/invite` returns the created user plus a reset token. */
 interface InviteWire {
   user: { email: string; role: string };
@@ -207,9 +185,9 @@ interface InviteWire {
   resetToken: string | null;
 }
 
-/** The created invitation, plus the dev-only redemption link when we got one. */
+/** The invited address, plus the dev-only redemption link when we got one. */
 export interface InviteResult {
-  invitation: Invitation;
+  email: string;
   /** Relative path to the reset screen, or null in production. */
   resetPath: string | null;
 }
@@ -218,36 +196,22 @@ export interface InviteResult {
  * `POST /auth/users/invite`. Creates the account with no usable password; the
  * invitee sets one through `/reset`. 409 if the email already exists — the
  * caller surfaces `ApiError.message` verbatim rather than guessing.
+ *
+ * The account exists the moment this returns, so the caller sends the user to
+ * the Members list. Nothing is queued and nothing is pending.
  */
 export const invite = async (
   email: string,
   role: RoleName,
-  by: string,
 ): Promise<InviteResult> => {
   const res = await api.post<InviteWire>("/auth/users/invite", {
     email,
     role: roleWire(role),
   });
-  const invitation: Invitation = {
-    email: res.user.email,
-    role: roleName(res.user.role),
-    sent: "just now",
-    by,
-  };
-  INVITATION_STORE.unshift(invitation);
   return {
-    invitation,
+    email: res.user.email,
     resetPath: res.resetToken
       ? `/reset?token=${encodeURIComponent(res.resetToken)}`
       : null,
   };
 };
-
-/* ── Roles ───────────────────────────────────────────────────────────────── */
-
-/**
- * STUB (no endpoint yet): there is no roles resource. The two real roles are an
- * enum on the user row, and the permission checklists this grid renders exist
- * nowhere but the design. Fixtures, labelled as preview data on the screen.
- */
-export const getRoles = (): Promise<Role[]> => after(ROLES, READ_DELAY_MS);

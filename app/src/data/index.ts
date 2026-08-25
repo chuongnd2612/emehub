@@ -7,7 +7,6 @@
 // must import from HERE, never from a resource module or `data/fixtures/*`
 // directly.
 //
-//   timing.ts       shared `after()` + READ_DELAY_MS
 //   types.ts        the wire types
 //   auth.ts         sessions, API keys
 //   credentials.ts  LIVE — real .credentials.json parsing + the stored credential
@@ -16,7 +15,7 @@
 //   projects.ts     LIVE — the registry + project configuration
 //   knowledge.ts    LIVE — knowledge metadata + the learned sections
 //   tickets.ts      LIVE — tickets (server-side filtered), the schema, sync
-//   people.ts       members, roles, invitations
+//   people.ts       LIVE — member accounts + invite
 //   overview.ts     activity feed, KPI tiles, product cards
 //   agents.ts       LIVE — the launch registry (GET /agents)
 //
@@ -25,19 +24,19 @@
 // the rest still resolves from `data/fixtures/` behind a `// STUB:` comment
 // naming the endpoint that will replace it.
 //
-// One function is a stub that will never become an endpoint, and says so at its
-// definition: `getKnowledgeSources` — the hub has no knowledge-source resource.
-// It does not silently pretend to work.
+// `getKnowledgeSources` used to live here as a stub that would never become an
+// endpoint. It is gone with the source table it fed (#191) — the hub has no
+// knowledge-source resource and is not getting one.
 //
-// (`buildKnowledge` used to be the second. ADR 0007 made it real: the hub clones
+// (`buildKnowledge` used to be a stub too. ADR 0007 made it real: the hub clones
 // the repository and runs `project-bootstrap` itself.)
 //
 // CLAUDE.md: "Where an endpoint does not exist, stub it behind the typed data
 // layer — and say so in your response. Never invent an API route silently."
 
-// `timing.ts` is deliberately NOT re-exported: `after()` and READ_DELAY_MS are
-// scaffolding for the stubs, not public API, and they disappear when the last
-// stub becomes a real call.
+// `timing.ts` is gone (#191). Its `after()` / READ_DELAY_MS were scaffolding
+// that made a fixture read feel like a request; the last stubs using them went
+// with the screens that rendered them.
 export * from "./types";
 export * from "./agents";
 export * from "./auth";

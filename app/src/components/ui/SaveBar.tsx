@@ -10,7 +10,7 @@
 // The wrapper is `pointer-events-none` so the bar never blocks clicks on the page
 // behind it; only the pill itself takes pointer events.
 
-import { Icon } from "@/components/ui";
+import { Icon } from "./Icon";
 import { cn } from "@/lib/cn";
 
 export function SaveBar({

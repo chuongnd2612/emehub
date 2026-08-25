@@ -60,7 +60,6 @@ export function GreetingRow({
       icon: "download",
       run: onImport,
     },
-    { label: "Add knowledge", icon: "book", run: () => setModal("knowledge") },
     { label: "Invite member", icon: "users", run: () => setModal("invite") },
     { label: "New project", icon: "plus", run: () => setModal("project") },
   ];

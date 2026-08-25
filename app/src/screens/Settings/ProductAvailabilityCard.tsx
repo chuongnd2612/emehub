@@ -3,11 +3,12 @@
 // Built from the existing Settings vocabulary — `GlassCard` + `ToggleRow` — so it
 // reads as part of the screen rather than as something bolted on (#186).
 //
-// It does NOT join the save-bar draft the other cards use. Those settings are
-// per-browser preferences that save in bulk; this one is workspace state that
-// takes effect for everybody the moment it is flipped, and burying that behind a
-// Save button would let an admin believe a product was closed while it was still
-// open. It writes immediately and says so.
+// It writes immediately and says so. When the screen still had a save-bar draft
+// this card deliberately stayed out of it: those were per-browser preferences
+// saved in bulk, while this is workspace state that takes effect for everybody
+// the moment it is flipped, and burying that behind a Save button would let an
+// admin believe a product was closed while it was still open. The draft is gone
+// now (#191); this card's behaviour is unchanged.
 //
 // Admin-only is enforced by the server (403), not by hiding the card: that is the
 // hub's existing pattern — see `Users/MembersTable` — and it means a member sees

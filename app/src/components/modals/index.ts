@@ -2,9 +2,6 @@
 // only ever raise them through `useUi().setModal(key)`; `ModalHost` renders
 // them.
 
-export { AddKnowledgeModal } from "./AddKnowledgeModal";
-export type { AddKnowledgeModalProps } from "./AddKnowledgeModal";
-
 export { InviteMemberModal } from "./InviteMemberModal";
 export type { InviteMemberModalProps } from "./InviteMemberModal";
 

@@ -27,7 +27,6 @@ interface ActionEntry {
 /** The Overview quick actions, reachable from anywhere. Copy is final. */
 const ACTIONS: ActionEntry[] = [
   { label: "Import tickets", icon: "download", to: "/app/tickets", modal: "import" },
-  { label: "Add knowledge", icon: "book", to: "/app/projects", modal: "knowledge" },
   { label: "Invite member", icon: "users", to: "/app/users", modal: "invite" },
   { label: "New project", icon: "plus", to: "/app/projects", modal: "project" },
 ];

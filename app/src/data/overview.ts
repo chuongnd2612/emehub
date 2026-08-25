@@ -13,6 +13,7 @@
 //   GET /auth/users    ┘ (admin only)
 //   GET /audit/events    the activity feed
 //   GET /agents          the product cards' launch state
+//   GET /agents/{id}/open  the product cards' availability (public)
 //
 // ## Why two tiles are gone rather than zeroed
 //
@@ -23,7 +24,7 @@
 // than faked; if the hub ever records a time series they come back with it.
 
 import { api } from "@/lib/api";
-import { getAgents } from "./agents";
+import { AGENT_ID, getAgents, isAgentOpen } from "./agents";
 import { getConnections } from "./connections";
 import { PRODUCTS } from "./fixtures/providers";
 import { relativeTime } from "./humanize";
@@ -165,38 +166,45 @@ export async function getActivity(): Promise<ActivityEvent[]> {
 /* ── Product cards ───────────────────────────────────────────────────────── */
 
 /**
- * Product cards — static copy joined to the live launch registry.
+ * Product cards — static copy joined to live launch state and live availability.
  *
- * The copy (name, role, description, tags, metrics, and `live`) stays in
+ * The copy (name, role, description, tags, and `live`) stays in
  * `fixtures/providers.ts` because it is binding design content, not runtime
  * state: D-Agent's "Placeholder" pill is a product decision and must not start
  * reading "Live" the moment somebody sets a URL for it.
  *
- * What *is* runtime state is whether a session can be handed over, so only
- * `launchUrl` / `handoffReady` / `handoffReason` come from `GET /agents`.
+ * Two different runtime questions are asked, from two different endpoints, and
+ * they degrade in opposite directions on purpose:
  *
- * If the registry read fails the cards still render with launching disabled — a
- * dead Launch button beats a blank Overview.
+ *   **Can a session be handed over?** `launchUrl` / `handoffReady` /
+ *   `handoffReason`, from `GET /agents`. A failed read disables launching but
+ *   keeps the cards — a dead Launch button beats a blank Overview.
+ *
+ *   **Is the product open at all?** `enabled`, from the public
+ *   `GET /agents/{id}/open`. A failed read means CLOSED. Never `?? true`: this
+ *   used to come from the registry with an available-by-default fallback, and
+ *   because `GET /agents` is hub-audience only, the signed-out landing page
+ *   failed that read on every visit and showed a switched-off product as a
+ *   green "Live" card anybody could click (#191).
+ *
+ * Reading availability from the public route rather than the registry also
+ * means the landing page and the Overview agree, instead of one of them being
+ * a special case.
  */
 export async function getProducts(): Promise<Product[]> {
-  let registry: AgentTarget[] = [];
-  try {
-    registry = await getAgents();
-  } catch {
-    // Deliberately swallowed: see above. The cards degrade, they don't vanish.
-  }
+  const [registry, open] = await Promise.all([
+    getAgents().catch(() => [] as AgentTarget[]),
+    Promise.all(PRODUCTS.map((product) => isAgentOpen(AGENT_ID[product.key]))),
+  ]);
 
-  return PRODUCTS.map((product) => {
+  return PRODUCTS.map((product, at) => {
     const target = registry.find((agent) => agent.key === product.key);
     return {
       ...product,
       launchUrl: target?.url ?? null,
       handoffReady: target?.handoffReady ?? false,
       handoffReason: target?.reason ?? null,
-      // Available unless the registry says otherwise (#186) — the same reason the
-      // cards render at all when the read fails: a hub blip must not hide a
-      // product that is open.
-      enabled: target?.enabled ?? true,
+      enabled: open[at],
     };
   });
 }

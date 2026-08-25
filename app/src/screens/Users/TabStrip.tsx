@@ -2,6 +2,9 @@
 // Invitations, right-aligned `Invite member` primary") and the prototype's
 // `tabStyle`: active = var(--pt) + var(--pb) + var(--pOn), inactive =
 // transparent on transparent, `background/color .18s`.
+//
+// Only Members survives (#191) — the other two rendered fabricated data. The
+// strip stays because it is what carries the right-aligned action slot.
 
 import { cn } from "@/lib/cn";
 

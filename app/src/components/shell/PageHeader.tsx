@@ -4,7 +4,10 @@
 //   3. 1px x 26px divider
 //   4. Claude credential chip (opens the credential popover)
 //   5. dark/light toggle — 38px square
-//   6. bell — 38px square with a 6px accent dot
+//
+// The prototype had a sixth child, a notifications bell. It is gone: it toasted
+// a hardcoded "3 notifications" and there is no notification system anywhere in
+// the hub for it to count (#191).
 //
 // ⚠️ The TITLE is the flexible item and MUST truncate first, or it overlaps the
 // search field at narrow widths. The handoff calls this out explicitly; it is
@@ -12,7 +15,7 @@
 // `flex-[0_1_320px]` rather than the other way round.
 
 import { ClaudeCredentialChip } from "@/components/overlays";
-import { Icon, toast } from "@/components/ui";
+import { Icon } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { useAppearance } from "@/store/appearance";
 import { useUi } from "@/store/ui";
@@ -101,20 +104,6 @@ export function PageHeader() {
           size={16}
           strokeWidth={2.1}
         />
-      </button>
-
-      {/* 6. Bell. */}
-      <button
-        type="button"
-        data-surface
-        aria-label="Notifications"
-        onClick={() =>
-          toast("3 notifications", "info")
-        }
-        className={cn(SQUARE, "text-txt3")}
-      >
-        <Icon name="bell" size={16} strokeWidth={2.1} />
-        <span className="absolute top-2 right-[9px] size-1.5 rounded-full bg-pl shadow-[0_0_7px_var(--pl)]" />
       </button>
     </header>
   );

@@ -69,30 +69,3 @@ export function Hairline() {
   return <div className="h-px bg-bd3" />;
 }
 
-/** A chip in a Workspace-defaults chip group. */
-export function OptionChip({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={cn(
-        "cursor-pointer rounded-control border px-[14px] py-[7px] text-[12px] font-bold",
-        "transition-[background-color,border-color,color] duration-200",
-        active
-          ? "border-pb bg-pt text-p-on"
-          : "border-bd bg-inset text-muted hover:bg-card3 hover:text-txt3",
-      )}
-    >
-      {label}
-    </button>
-  );
-}
