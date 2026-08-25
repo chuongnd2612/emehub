@@ -3,11 +3,17 @@
 ADR 0007 lets the hub build the shared artefacts it already owns the inputs for.
 That is one job (``project-bootstrap``) and one invocation shape::
 
-    claude -p "<prompt>" --output-format json --model <model>
+    claude -p "<prompt>" --output-format json --model <model> --effort <level>
            --append-system-prompt "<SKILL.md>"
 
 run in the repository clone's directory, under a ``CLAUDE_CONFIG_DIR`` holding
 the materialised credential.
+
+``--model`` and ``--effort`` are resolved per *owner*, not per deployment (#190):
+:func:`_resolve_model` asks :mod:`app.services.model_preferences` what the owner
+of the work chose in Claude Settings, falling back to ``settings.claude_model``
+and the default effort when they have chosen nothing — or when the work has no
+owner at all.
 
 ## The streaming variant (issue #68)
 
@@ -113,14 +119,24 @@ _DETAIL_LIMIT = 600
 
 
 # ----------------------------------------------------------------- helpers
-def _resolve_model(skill: str | None = None) -> str:
-    """The model a call runs on.
+def _resolve_model(
+    db: Session, owner_id: int | None, skill: str | None = None
+) -> tuple[str, str]:
+    """``(model, effort)`` for one call, resolved against whoever owns the work.
+
+    ``owner_id`` is the owner of the thing being built, not the caller — the same
+    id that already decides which credential the call authenticates with — so a
+    build spends the model its owner picked in Claude Settings. Nobody's choice,
+    or no owner at all, falls back to ``settings.claude_model`` and the default
+    effort (:mod:`app.services.model_preferences`).
 
     ``skill`` is accepted so the signature matches QAgent's and a per-skill map
     can be added without touching call sites — the hub runs exactly one skill
     today, so there is nothing to map.
     """
-    return settings.claude_model
+    from app.services import model_preferences
+
+    return model_preferences.resolve_for_run(db, owner_id)
 
 
 def _extract_json(text: str) -> Any:
@@ -581,25 +597,38 @@ def run_prompt(
             non-zero. Every message is safe to store on a knowledge row.
     """
     system = _compose_system(system, skill, include_template)
-    model = _resolve_model(skill)
+    model, effort = _resolve_model(db, owner_id, skill)
     budget = timeout or settings.claude_timeout_s
     streaming = on_event is not None
     output_format = ["--output-format", "stream-json", "--verbose"] if streaming else [
         "--output-format",
         "json",
     ]
-    cmd = [settings.claude_bin, "-p", prompt, *output_format, "--model", model]
+    cmd = [
+        settings.claude_bin,
+        "-p",
+        prompt,
+        *output_format,
+        "--model",
+        model,
+        "--effort",
+        effort,
+    ]
     if system:
         cmd += ["--append-system-prompt", system]
 
     env, credential_source = _resolve_env(db, owner_id)
     resolved_cwd = _resolve_cwd(cwd)
-    # Lengths and the model only — never the prompt, which embeds project config.
+    # Lengths and the resolved settings only — never the prompt, which embeds
+    # project config. The model and effort are logged because they are now a
+    # per-user resolution rather than a constant: this line is how you tell which
+    # preference a build actually ran under.
     logger.info(
-        "Claude CLI: %s (%d-char prompt, model=%s, timeout=%ss, %s)",
+        "Claude CLI: %s (%d-char prompt, model=%s, effort=%s, timeout=%ss, %s)",
         label or skill or "call",
         len(prompt),
         model,
+        effort,
         budget,
         "streaming" if streaming else "blocking",
     )

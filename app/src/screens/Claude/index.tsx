@@ -1,6 +1,12 @@
 // Handoff › 6. Claude Settings — "Tabs: Credentials · Models · Agent
 // preferences, with a right-aligned `Save changes` primary."
 //
+// **Two of those three are gone.** `Agent preferences` was three toggles held in
+// `useState` and two override cards that rendered no data and had no action —
+// nothing behind it, nothing to save. And with both surviving tabs persisting
+// each change as it is made, `Save changes` had nothing left to mean; it had
+// been shipped permanently disabled for exactly that reason.
+//
 // Renders inside the app shell's scroll region: the page root is
 // `display:flex; flex-direction:column; gap:14px` + `fadeInUp .38s ease both`.
 //
@@ -8,9 +14,7 @@
 // query param, never in the store (CLAUDE.md › Routing & navigation).
 
 import { useSearchParams } from "react-router-dom";
-import { Button } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { AgentPreferencesTab } from "./AgentPreferencesTab";
 import { CredentialsTab } from "./CredentialsTab";
 import { ModelsTab } from "./ModelsTab";
 import { useClaudeSettings } from "./state";
@@ -18,7 +22,6 @@ import { useClaudeSettings } from "./state";
 const TABS = [
   { key: "credentials", label: "Credentials" },
   { key: "models", label: "Models" },
-  { key: "agents", label: "Agent preferences" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -30,6 +33,7 @@ function isTabKey(value: string | null): value is TabKey {
 export default function ClaudeScreen() {
   const [params, setParams] = useSearchParams();
   const raw = params.get("tab");
+  // A bookmarked `?tab=agents` lands on Credentials rather than blank.
   const tab: TabKey = isTabKey(raw) ? raw : "credentials";
 
   const settings = useClaudeSettings();
@@ -64,24 +68,10 @@ export default function ClaudeScreen() {
             </button>
           );
         })}
-
-        {/* Credentials persist the moment they change — every mutation on the
-            Credentials tab is its own request. Models and agent preferences
-            have no endpoint, so there is nothing this button could save; it is
-            disabled rather than left to fake a success toast. */}
-        <Button
-          variant="primary"
-          disabled
-          title="Credentials save as you change them. Model and agent preferences have no endpoint yet."
-          className="ml-auto h-auto px-5 py-[11px] text-[13px]"
-        >
-          Save changes
-        </Button>
       </div>
 
       {tab === "credentials" && <CredentialsTab s={settings} />}
       {tab === "models" && <ModelsTab s={settings} />}
-      {tab === "agents" && <AgentPreferencesTab s={settings} />}
     </div>
   );
 }

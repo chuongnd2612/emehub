@@ -268,25 +268,6 @@ export function CredentialsTab({ s }: { s: ClaudeSettings }) {
         <div className="flex flex-col gap-[14px]">
           <HealthCard s={s} />
           <UsageCard usage={s.usage} error={s.usageError} />
-
-          <div
-            data-surface
-            className="rounded-panel border border-bd3 bg-inset p-5"
-          >
-            <div className="text-[13.5px] font-extrabold tracking-[-.01em] text-txt">
-              API key fallback
-            </div>
-            <div className="mt-1 text-[12px] leading-[1.5] text-muted">
-              Used by headless CI runners that have no Claude account attached.
-            </div>
-            {/* No endpoint stores an API key fallback, so there is no key to
-                show — and a plausible-looking fake one is the worst thing this
-                panel could render. */}
-            <Notice tone="info" className="mt-[13px]">
-              Preview data. The hub stores no API key fallback yet, so there is
-              nothing to show here.
-            </Notice>
-          </div>
         </div>
       </div>
 
@@ -468,6 +449,16 @@ function HealthCard({ s }: { s: ClaudeSettings }) {
 
 /* ── Usage ───────────────────────────────────────────────────────────────── */
 
+/**
+ * Real aggregates from `GET /credentials/claude/usage`
+ * (`app/services/claude_usage.py` › `stats`), and they span THREE different
+ * windows: the token total and its input/output split are the ISO week, the
+ * dollar figure is the calendar month, the request count is today.
+ *
+ * The heading used to read "Usage this month", which described exactly one of
+ * the three — and not the big number directly beneath it. It is now scope-free,
+ * and every figure carries the window it actually covers in its own label.
+ */
 function UsageCard({
   usage,
   error,
@@ -478,7 +469,7 @@ function UsageCard({
   return (
     <GlassCard radius="panel" className="p-5">
       <div className="text-[14.5px] font-extrabold tracking-[-.01em] text-txt">
-        Usage this month
+        Claude usage
       </div>
 
       {error && (
