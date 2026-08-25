@@ -35,7 +35,7 @@ Two prototype-only details to be aware of and to replace with real implementatio
   3. `z-index:1` — bloom A: 660×660 circle, `top:-16%; left:-8%`, `radial-gradient(circle, var(--pt), transparent 62%)`, `filter:blur(34px)`, `animation:glowPulse 9s ease-in-out infinite`, `opacity` = ambient setting.
   4. `z-index:1` — bloom B: 740×740 circle, `bottom:-22%; right:-6%`, `radial-gradient(circle, var(--bloom2), transparent 62%)`, `blur(34px)`, `animation:glowPulse 11s ease-in-out infinite 1s`.
 - **Sidebar** (`aside`): width 268 px, `flex-shrink:0`, column, `overflow-y:auto`, `background:var(--panel)`, `backdrop-filter:blur(28px)`, `border:1px solid var(--bd)`, `border-radius:22px`, `padding:18px 14px`, `box-shadow:0 24px 60px -20px var(--shadow)`. Contents top→bottom:
-  1. **Logo button** → returns to the landing view. `assets/eme-3d-logo-cut.png`, `width:100%`, wrapped in a tilt layer (see *Motion*), `filter:drop-shadow(0 12px 20px var(--shadow))`.
+  1. **Logo button** → returns to the landing view. `app/public/assets/eme-3d-logo-cut.png`, `width:100%`, wrapped in a tilt layer (see *Motion*), `filter:drop-shadow(0 12px 20px var(--shadow))`.
   2. **Product lockup**: 36 px rounded-square (`var(--pg)` gradient, star glyph, `box-shadow:0 6px 18px -4px var(--pglow)`) + `Eme` in `var(--txt)` and `Hub` filled with the `--silver` metal gradient (`background-clip:text`), 17 px/900/-.03em; sub-label `AI OPERATING CENTER` 9 px/700/.12em `var(--muted)`.
   3. **Nav** — one flat list; group headings `WORKSPACE` and `PLATFORM` are 10 px/700/.12em `var(--label)`, `padding:12px 6px 7px`. Items: `display:flex; gap:10px; width:100%; padding:9px 10px; border-radius:11px; font-size:13px; font-weight:600`, 18 px icon slot, label, optional mono badge (`10px/700`, `padding:2px 7px`, pill).
      - idle: `background:transparent; border:1px solid transparent; color:var(--muted)`; badge `background:var(--bd); color:var(--muted)`
@@ -324,8 +324,8 @@ Brand/provider: Claude `#D97757`, Azure DevOps `#0078d4`, Jira `#2684ff`, GitHub
 
 ## Assets
 
-- `assets/eme-3d-logo-cut.png` — EMESOFT 3D logo (red infinity mark + `emesoft` wordmark + “Emerging your Business”), transparent PNG. Rendered 88 px tall on the landing header, full sidebar width in the app. **Included in this bundle.**
-- `assets/eme-3d-logo.png` — uncropped original. Included.
+- `app/public/assets/eme-3d-logo-cut.png` — EMESOFT 3D logo (red infinity mark + `emesoft` wordmark + “Emerging your Business”), transparent PNG. Rendered 88 px tall on the landing header, full sidebar width in the app. **Lives in the app, not in this bundle** — it is served from the Vite public root as `/assets/eme-3d-logo-cut.png`. The prototype HTML references it as `../../app/public/assets/…`.
+- `app/public/assets/eme-3d-logo.png` — uncropped original. Same location.
 - All other iconography is inline SVG, Feather/Lucide style: `viewBox="0 0 24 24"`, `fill="none"`, `stroke="currentColor"`, `stroke-width:2–2.6`, round caps/joins, rendered 12–22 px. The Claude mark is a filled 5-point star in `#D97757`. No raster icons, no icon font, no illustrations.
 - Fonts load from `https://api.fontshare.com` (Satoshi) and Google Fonts (JetBrains Mono) — self-host in production.
 - three.js r128 is loaded from a CDN in the prototype — install it as a dependency instead.
@@ -334,7 +334,7 @@ Brand/provider: Claude `#D97757`, Azure DevOps `#0078d4`, Jira `#2684ff`, GitHub
 
 - `EmeHub.dc.html` — the full prototype (landing + all 8 app pages + overlays). Open directly in a browser.
 - `support.js` — prototype runtime (rendering harness only, **not** part of the design; do not port).
-- `assets/eme-3d-logo-cut.png`, `assets/eme-3d-logo.png` — brand mark.
+- `../../app/public/assets/eme-3d-logo-cut.png`, `../../app/public/assets/eme-3d-logo.png` — brand mark. Kept in the app rather than duplicated here; the prototype loads it by that relative path.
 - `Q-Agent-DESIGN_SYSTEM.md` — the written design system this UI extends (foundations, components, motion, voice).
 - `Q-Agent.ref.html` — the sibling product (Q‑Agent) whose credential, provider-connection and ticket-filter behaviour EmeHub mirrors. Useful when a detail is ambiguous.
 

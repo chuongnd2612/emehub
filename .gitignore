@@ -29,6 +29,9 @@ workspace/
 api/workspace/
 downloads/
 
+# --- demo & recording artefacts ---------------------------------------------
+docs/demo/
+
 # --- test / verification output ---------------------------------------------
 playwright-report/
 test-results/
