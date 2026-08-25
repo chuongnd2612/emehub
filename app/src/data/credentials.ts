@@ -28,16 +28,15 @@
 // deliberately not called from this module.
 //
 // The hub stores **one** own credential per user and **one** shared workspace
-// credential — not a list. `getSharedCredentials()` survives as a thin adapter
-// for the header popover, which was written against the list shape.
+// credential — not a list. A `getSharedCredentials()` adapter used to translate
+// that into the list shape the header popover was first written against; the
+// popover has read `getCredentialState()` directly for some time, and the
+// adapter went with the `SharedCredential` type it built, having had no caller
+// left to serve.
 
 import { api } from "@/lib/api";
 import { relativeFuture, relativeTime } from "./humanize";
-import type {
-  CredentialStatus,
-  PersonalCredential,
-  SharedCredential,
-} from "./types";
+import type { CredentialStatus, PersonalCredential } from "./types";
 
 /** Toast copy for an unparseable file. Copy is final — do not paraphrase. */
 export const INVALID_CREDENTIAL_TOAST = {
@@ -506,34 +505,25 @@ export const formatResetsIn = (iso: string | null): string =>
   relativeFuture(iso);
 
 /**
- * The shared credential in the list shape `components/overlays/
- * ClaudeCredentialPopover` was written against. The hub holds at most one, so
- * this is a zero- or one-element list.
- *
- * `token` is the empty string on purpose: the hub returns no credential
- * material to the SPA, and the popover does not render it.
+ * `18_400_000` -> `"18.4M"`, `342_000` -> `"342K"`. Token counts run to eight
+ * digits, and every place one is rendered is a narrow one (a popover row, a card
+ * figure), so they are always shown compact. A whole number drops its `.0`
+ * rather than rendering as `342.0K`, which reads as spurious precision.
  */
-export const getSharedCredentials = async (): Promise<SharedCredential[]> => {
-  const state = await getCredentialState();
-  const meta = state.shared;
-  if (!meta) return [];
-  return [
-    {
-      id: "shared",
-      label: meta.label || "Shared Claude account",
-      email: "—",
-      subscription: meta.subscriptionType ?? "Claude account",
-      expiresDisplay: formatExpiryIso(meta.expiresAt),
-      daysLeft: meta.daysLeft,
-      expiresAtEpochMs: meta.expiresAt ? Date.parse(meta.expiresAt) : null,
-      hasRefreshToken: meta.hasRefreshToken,
-      storedStatus: meta.storedStatus,
-      scopes: meta.scopes,
-      lastRefreshed: relativeTime(meta.lastRefreshed),
-      members: meta.assignedUsers ?? 0,
-      isDefault: true,
-      token: "",
-      source: meta.label || ".credentials.json",
-    },
-  ];
-};
+export function formatTokens(n: number): string {
+  const scaled =
+    n >= 1_000_000
+      ? [n / 1_000_000, "M"]
+      : n >= 1_000
+        ? [n / 1_000, "K"]
+        : null;
+  if (!scaled) return String(n);
+  const [value, unit] = scaled as [number, string];
+  return `${value.toFixed(1).replace(/\.0$/, "")}${unit}`;
+}
+
+/** `1240` -> `"1.2s"`, `840` -> `"840ms"`. The hub stores whole milliseconds. */
+export function formatLatency(ms: number): string {
+  if (ms <= 0) return "—";
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+}
