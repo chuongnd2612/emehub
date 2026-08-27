@@ -87,6 +87,11 @@ class ProjectSummaryOut(ApiModel):
     knowledge_status: str = "not_indexed"
     knowledge_confidence: int = 0
     ticket_count: int = 0
+    #: Newest ``Ticket.synced_at`` among this project's mirrored rows — the
+    #: Overview comparison table's *last sync* column (#218). ``None`` means the
+    #: project has never synced, which is a different fact from a figure the
+    #: client could not read, and it is rendered differently.
+    last_synced_at: datetime | None = None
 
 
 class TicketCountsOut(ApiModel):
