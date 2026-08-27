@@ -11,7 +11,26 @@ that travels.
 
 They are seeded idempotently on every read rather than in the migration, so a
 preset can be corrected in code without a data migration chasing it. Keyed by
-`(destination, name)` in the shared namespace.
+`(destination, name)` in the shared namespace, **with no project** — a preset
+belongs to a provider, never to one container, so the key names
+`project_id IS NULL` explicitly rather than relying on there being nothing else
+to collide with.
+
+## The project axis (#222)
+
+`project_id` is NULL for workspace-wide and a project's id for one container.
+`list_queries(project_id=…)` offers a project **its own rows plus the
+workspace-wide ones**, and nothing belonging to another project. Omitting
+`project_id` is the *management* view — everything the caller may see, so a
+project-bound query can still be listed and deleted from outside its project, and
+so an agent reading `GET /ticket-queries` sees what it always did.
+
+**Where the name-clash rule really lives.** `uq_saved_query_name` covers
+`(owner_id, project_id, destination, name)` but both engines treat NULLs as
+distinct in a unique index, so it does not bite on shared (`owner_id IS NULL`) or
+workspace-wide (`project_id IS NULL`) rows. `create_query` compares both columns
+with `IS NULL` and is therefore the check that actually holds; the constraint is a
+backstop for the fully-specified case.
 
 ## Why the ADO and mirror presets differ
 
@@ -25,6 +44,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Query, Session
 
 from app.db import utcnow
@@ -126,6 +146,17 @@ def _visible(db: Session, user: User | None) -> Query[SavedTicketQuery]:
     return owned(db.query(SavedTicketQuery), SavedTicketQuery, user)
 
 
+def _in_scope(column, value: int | None):  # noqa: ANN001, ANN202
+    """``column = value``, but matching NULL with ``IS NULL``.
+
+    ``column == None`` renders as ``= NULL``, which is never true. Getting this
+    wrong on either nullable axis silently stops the clash check from seeing the
+    shared namespace or the workspace-wide scope at all, and the unique index
+    cannot catch what it misses (both engines treat NULLs as distinct).
+    """
+    return column.is_(None) if value is None else column == value
+
+
 def _describe(query: dict) -> str:
     """The stored description, re-derived so it cannot disagree with the clauses."""
     return ticket_query.describe(ticket_query.query_from_wire(query))[:400]
@@ -134,8 +165,10 @@ def _describe(query: dict) -> str:
 def seed_built_ins(db: Session) -> int:
     """Ensure every shipped preset exists in the shared namespace. Idempotent.
 
-    Keyed on `(destination, name)`, so correcting a preset's clauses in code
-    updates the row on the next read rather than needing a data migration.
+    Keyed on `(destination, name)` with `project_id IS NULL`, so correcting a
+    preset's clauses in code updates the row on the next read rather than needing a
+    data migration — and a *project-bound* shared query that happens to carry a
+    preset's name is a different row, not a preset to be rewritten.
     """
     written = 0
     for position, (destination, name, query) in enumerate(PRESETS):
@@ -143,6 +176,7 @@ def seed_built_ins(db: Session) -> int:
             db.query(SavedTicketQuery)
             .filter(
                 SavedTicketQuery.owner_id.is_(None),
+                SavedTicketQuery.project_id.is_(None),
                 SavedTicketQuery.destination == destination,
                 SavedTicketQuery.name == name,
             )
@@ -158,6 +192,7 @@ def seed_built_ins(db: Session) -> int:
                     built_in=True,
                     position=position,
                     owner_id=None,
+                    project_id=None,
                 )
             )
             written += 1
@@ -174,13 +209,33 @@ def seed_built_ins(db: Session) -> int:
 
 
 def list_queries(
-    db: Session, user: User | None, *, destination: str | None = None
+    db: Session,
+    user: User | None,
+    *,
+    destination: str | None = None,
+    project_id: int | None = None,
 ) -> list[SavedTicketQuery]:
-    """Presets first in their own order, then the caller's own by name."""
+    """Presets first in their own order, then the caller's own by name.
+
+    ``project_id`` narrows to what may be offered *inside* that project: its own
+    rows plus the workspace-wide ones (``project_id IS NULL``, which includes every
+    preset). Another project's rows are excluded — that exclusion is the whole
+    point of the axis, and a stored column nothing filters on would not be one.
+
+    Omitting it lists everything the caller may see, project-bound rows included:
+    the management view, and what an agent reading this endpoint has always got.
+    """
     seed_built_ins(db)
     query = _visible(db, user)
     if destination:
         query = query.filter(SavedTicketQuery.destination == destination)
+    if project_id is not None:
+        query = query.filter(
+            or_(
+                SavedTicketQuery.project_id.is_(None),
+                SavedTicketQuery.project_id == project_id,
+            )
+        )
     return query.order_by(
         SavedTicketQuery.built_in.desc(),
         SavedTicketQuery.position,
@@ -202,16 +257,27 @@ def create_query(
     destination: str,
     query: dict,
     shared: bool = False,
+    project_id: int | None = None,
 ) -> SavedTicketQuery:
+    """Save one query. ``project_id`` binds it to a project; None is workspace-wide.
+
+    The clash check is per *scope*, and the scope is both nullable axes: the same
+    name may exist once per (owner, project, destination). It has to be done here
+    rather than left to `uq_saved_query_name`, because a unique index treats NULLs
+    as distinct on both engines and so never sees the shared or workspace-wide
+    cases. `.first()`, not `.one_or_none()`: a pre-existing duplicate the index
+    could not have caught must still be reported as a clash, not raise.
+    """
     owner_id = None if shared else (user.id if user else None)
     clash = (
         db.query(SavedTicketQuery)
         .filter(
-            SavedTicketQuery.owner_id.is_(None) if owner_id is None else SavedTicketQuery.owner_id == owner_id,
+            _in_scope(SavedTicketQuery.owner_id, owner_id),
+            _in_scope(SavedTicketQuery.project_id, project_id),
             SavedTicketQuery.destination == destination,
             SavedTicketQuery.name == name,
         )
-        .one_or_none()
+        .first()
     )
     if clash is not None:
         raise DuplicateName(f"“{name}” is already saved here.")
@@ -224,6 +290,7 @@ def create_query(
         built_in=False,
         position=0,
         owner_id=owner_id,
+        project_id=project_id,
     )
     db.add(row)
     db.commit()
@@ -260,13 +327,25 @@ def delete_query(db: Session, row: SavedTicketQuery) -> None:
 
 
 def duplicate_query(
-    db: Session, user: User | None, row: SavedTicketQuery, *, name: str | None = None
+    db: Session,
+    user: User | None,
+    row: SavedTicketQuery,
+    *,
+    name: str | None = None,
+    project_id: int | None = None,
 ) -> SavedTicketQuery:
     """A copy the caller owns — **always** editable, even from a built-in.
 
     This is what makes read-only presets tolerable rather than a dead end: the
     answer to "I want this but slightly different" is one click.
+
+    A duplicate is a save, so it lands in the scope it was made from:
+    ``project_id`` when the caller was inside a project, otherwise the source's own
+    scope. Copying a workspace-wide preset from inside a project is exactly how a
+    project gets its first query, and the copy is the caller's own — a built-in is
+    never rewritten.
     """
+    target_project_id = project_id if project_id is not None else row.project_id
     wanted = name or f"{row.name} copy"
     # Nudge past an existing copy rather than refusing, since duplicating twice is
     # a normal thing to do.
@@ -274,11 +353,12 @@ def duplicate_query(
     while (
         db.query(SavedTicketQuery)
         .filter(
-            SavedTicketQuery.owner_id == (user.id if user else None),
+            _in_scope(SavedTicketQuery.owner_id, user.id if user else None),
+            _in_scope(SavedTicketQuery.project_id, target_project_id),
             SavedTicketQuery.destination == row.destination,
             SavedTicketQuery.name == wanted,
         )
-        .one_or_none()
+        .first()
         is not None
     ):
         wanted = f"{name or row.name} copy {suffix}"
@@ -290,4 +370,5 @@ def duplicate_query(
         name=wanted,
         destination=row.destination,
         query=dict(row.query or {}),
+        project_id=target_project_id,
     )
