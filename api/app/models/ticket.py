@@ -15,6 +15,27 @@ Two deliberate differences from QAgent's table:
   NULL means the workspace-wide shared namespace), the same convention every
   scoped table in the hub follows — see ``app.services.ownership``.
 
+## ``project_id`` — a real foreign key, and why ``SET NULL``
+
+``project_id`` is a declared ``ForeignKey("projects.id")`` (migration ``0016``).
+Three ``ondelete`` behaviours were possible and only one of them is safe here:
+
+* **CASCADE** silently destroys mirrored work items as a side effect of tidying
+  the project registry. A ticket is the only hub-side record that a work item
+  was ever synced, and a re-sync needs the connection that was bound to the
+  project being deleted — so the destruction is not undoable from the hub.
+* **RESTRICT** looks right, because ``project_service.delete_project`` already
+  refuses (``ProjectHasTickets``) when tickets still point at the row. But
+  ``projects.owner_id`` is ``ON DELETE CASCADE`` from ``users``, so deleting a
+  member cascades their projects — and a database-level RESTRICT would abort
+  that unrelated delete with an ``IntegrityError`` the caller cannot act on.
+* **SET NULL** is what ships. The ordinary delete path is still refused at the
+  service layer with a countable, actionable error, so SET NULL is only ever
+  reached by a cascade. When it is, the rows land in the **Unassigned bucket** —
+  which since this slice has an explicit selector (``GET /tickets?unassigned=true``)
+  and a count of its own (``GET /projects/ticket-counts``), so they are visible
+  rather than orphaned or gone.
+
 ``connection_id`` points at the work-item connection a ticket was synced from,
 so downstream work routes back to the same origin. It is a **plain nullable
 integer**, not a declared ``ForeignKey``, because the ``provider_connections``
@@ -55,7 +76,11 @@ class Ticket(Base):
     #: their own copy of the same work item.
     external_id: Mapped[str] = mapped_column(String(64), index=True)
     provider_kind: Mapped[str] = mapped_column(String(16), index=True)
-    project_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    #: The project this work item belongs to. A real FK since 0016 — see the
+    #: module docstring for why ``ondelete="SET NULL"`` and not RESTRICT/CASCADE.
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), index=True, nullable=True
+    )
     #: References ``provider_connections.id``. Unconstrained until that table
     #: exists — see the module docstring.
     connection_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)

@@ -89,6 +89,24 @@ class ProjectSummaryOut(ApiModel):
     ticket_count: int = 0
 
 
+class TicketCountsOut(ApiModel):
+    """Every ticket count one screen needs, from one query (#217).
+
+    ``byProject`` is keyed by the project's numeric ``id`` (JSON object keys are
+    strings on the wire). A project with no tickets is **absent**, not ``0`` —
+    the sidebar's rule is that a count it does not have renders no badge rather
+    than a fabricated zero, and an absent key is how it can tell.
+
+    ``unassigned`` is the Unassigned bucket: rows with no project at all. It is
+    read-only — tickets are a mirror of provider work items, so there is no
+    endpoint that moves one into a project (epic #223, decision 3).
+    """
+
+    by_project: dict[int, int] = Field(default_factory=dict)
+    unassigned: int = 0
+    total: int = 0
+
+
 class ProjectOut(ApiModel):
     id: int
     #: Stable external identity (#150). Prefer this over `id` (internal, and
@@ -346,6 +364,31 @@ def list_projects(
     rows = project_service.list_projects(db, principal)
     summaries = project_service.summaries_for(db, rows, principal)
     return [_project_out(p, summaries.get(p.key)) for p in rows]
+
+
+# Registered **before** ``/{key}``: FastAPI matches in declaration order, and
+# ``/{key}`` would otherwise swallow this path as a project named
+# "ticket-counts".
+@router.get("/ticket-counts", response_model=TicketCountsOut)
+def project_ticket_counts(
+    principal: User = Depends(require_principal), db: Session = Depends(get_db)
+) -> TicketCountsOut:
+    """Ticket counts per project, plus the Unassigned bucket (#217).
+
+    Scoped like every other read: the caller's own rows plus the shared
+    namespace, never another member's. It exists so the sidebar tree, the
+    Overview comparison table and the Unassigned bucket all read **one**
+    number — ``project_service.ticket_counts`` — instead of each computing its
+    own and drifting apart (``docs/PROJECT-CONTAINMENT-HANDOFF.md`` §3).
+
+    The bucket's rows are listable with ``GET /tickets?unassigned=true``, and
+    that list and this count come from the same visibility filter, so they
+    agree by construction.
+    """
+    counts = project_service.ticket_counts(db, principal)
+    return TicketCountsOut(
+        by_project=counts.by_project, unassigned=counts.unassigned, total=counts.total
+    )
 
 
 @router.get("/{key}", response_model=ProjectOut)

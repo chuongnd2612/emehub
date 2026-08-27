@@ -40,6 +40,24 @@ def make_ticket(db_session):
 
 
 @pytest.fixture
+def make_project(db_session):
+    """A real ``projects`` row. ``tickets.project_id`` is a FK since #217, so a
+    made-up id is no longer insertable — the constraint is the point."""
+    from app.models.project import Project
+
+    def _make(key: str, *, owner=None, name: str = ""):
+        row = Project(
+            key=key, name=name or key, owner_id=(owner.id if owner is not None else None)
+        )
+        db_session.add(row)
+        db_session.commit()
+        db_session.refresh(row)
+        return row
+
+    return _make
+
+
+@pytest.fixture
 def member(client, make_user, auth_headers):
     user = make_user("member@emesoft.net", "password12345")
     return user, auth_headers("member@emesoft.net", "password12345")
@@ -130,13 +148,15 @@ def test_paging_beyond_the_end_is_an_empty_page_not_an_error(client, member, mak
     assert body["items"] == [] and body["total"] == 1
 
 
-def test_filter_by_project(client, member, make_ticket):
+def test_filter_by_project(client, member, make_ticket, make_project):
     user, headers = member
-    make_ticket("SUR-1", owner=user, project_id=1)
-    make_ticket("SUR-2", owner=user, project_id=2)
+    shop = make_project("shop", owner=user)
+    depot = make_project("depot", owner=user)
+    make_ticket("SUR-1", owner=user, project_id=shop.id)
+    make_ticket("SUR-2", owner=user, project_id=depot.id)
     make_ticket("SUR-3", owner=user)  # unattributed
 
-    body = client.get("/tickets?projectId=1", headers=headers).json()
+    body = client.get(f"/tickets?projectId={shop.id}", headers=headers).json()
     assert [t["externalId"] for t in body["items"]] == ["SUR-1"]
     assert body["total"] == 1
 
@@ -357,13 +377,16 @@ def test_an_admin_is_not_a_way_around_per_owner_isolation(
     assert client.get("/tickets/ALICE-3", headers=headers).status_code == 404
 
 
-def test_a_filter_cannot_widen_the_scope(client, make_user, auth_headers, make_ticket):
+def test_a_filter_cannot_widen_the_scope(
+    client, make_user, auth_headers, make_ticket, make_project
+):
     alice = make_user("alice4@emesoft.net", "password12345")
     make_user("bob4@emesoft.net", "password12345")
-    make_ticket("ALICE-4", owner=alice, provider_kind="jira", project_id=3)
+    project = make_project("alice-shop", owner=alice)
+    make_ticket("ALICE-4", owner=alice, provider_kind="jira", project_id=project.id)
 
     headers = auth_headers("bob4@emesoft.net", "password12345")
-    for query in ("providerKind=jira", "projectId=3", "q=ALICE"):
+    for query in ("providerKind=jira", f"projectId={project.id}", "q=ALICE"):
         body = client.get(f"/tickets?{query}", headers=headers).json()
         assert body["items"] == [] and body["total"] == 0
 

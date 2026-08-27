@@ -165,13 +165,14 @@ noted.
 | `GET` | `/connections/{id}/secret` | **The connection's PAT**, plus the base URL and config that go beside it. Agent audiences only — a hub token is refused. The one place a provider secret crosses; see §4 and [ADR 0010](adr/0010-a-provider-secret-may-cross-to-an-agent.md). |
 | `POST` | `/connections/{id}/proxy` | *(never)* A generic forwarder, abandoned rather than deferred. See §4. |
 | `GET` | `/projects` | Project registry. Each row carries a `summary` of non-secret card figures (repo, branch, counts, knowledge status) so a list screen costs one request, not 3N+1. **No test-account material, not even `hasPassword`.** |
+| `GET` | `/projects/ticket-counts` | Ticket counts for the whole workspace in one query: `{byProject: {"<projectId>": n}, unassigned, total}`. A project with no tickets is **absent**, not `0`, so a caller can tell "none" from "not answered" and render no badge rather than a fabricated zero. `unassigned` is the Unassigned bucket, listable with `GET /tickets?unassigned=true`; the two come from the same visibility filter, so they agree by construction. |
 | `GET` | `/projects/{key}` | One project, same shape as a list row. |
 | `GET` | `/projects/{key}/config` | Full project configuration including repositories. Test-account passwords are returned **only to the owning user** — a shared config (`owner_id IS NULL`) is owned by nobody, so its accounts stay masked even for an admin. |
 | `GET` | `/projects/{key}/knowledge` | Project-level knowledge. 404 when the project has no knowledge row. |
 | `GET` | `/projects/{key}/repos/{repo}/knowledge` | Per-repository knowledge base; falls back to the project-level row. |
 | `PATCH` | `/projects/{key}/repos/{repo}/knowledge` | **Write.** Contribute discovered entries (QAgent's runtime selector discovery). Must not clobber existing `verified_at_runtime` entries. |
 | `PUT` | `/projects/{key}/repos/{repo}/knowledge` | **Write.** Report the result of a build the agent ran on its own host — status, blob, confidence, and `docPath` (an opaque agent-host path the hub stores and never resolves). |
-| `GET` | `/tickets` | Synced tickets, paged and filterable by project, provider, connection, state, assignee, sprint and free text. |
+| `GET` | `/tickets` | Synced tickets, paged and filterable by project, provider, connection, state, assignee, sprint and free text. `?unassigned=true` selects the **Unassigned bucket** — rows with no project at all — and is mutually exclusive with `?projectId=` (`400`); omitting `projectId` still means workspace-wide. |
 | `GET` | `/tickets/{external_id}` | One ticket, normalised. Optional `?providerKind=` disambiguates the same id across providers. Carries `url` — see *The work item's own URL* below. |
 | `GET` | `/tickets/{external_id}/comments` | The work item's comment thread, read **live** from the provider through the hub's own PAT. `{items, supported}`. |
 | `GET` | `/tickets/{external_id}/test-cases` | Provider-side test cases, for continuing existing numbering when generating. `{items, supported, projectWide}`. |

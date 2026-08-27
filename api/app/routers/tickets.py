@@ -355,6 +355,11 @@ def list_tickets(
     # Multi-word query params are camelCase on the wire, matching the rest of the
     # API; FastAPI needs the explicit alias to bind the snake_case handler args.
     project_id: int | None = Query(None, alias="projectId"),
+    #: The Unassigned bucket (#217): rows with no project at all. Explicit,
+    #: because *omitting* ``projectId`` means workspace-wide — a different
+    #: question — and a bucket that has to be inferred from a missing parameter
+    #: is one nobody renders. Mutually exclusive with ``projectId``.
+    unassigned: bool = Query(False),
     provider_kind: str | None = Query(None, alias="providerKind"),
     connection_id: int | None = Query(None, alias="connectionId"),
     status: str | None = None,
@@ -371,10 +376,16 @@ def list_tickets(
     principal: User = Depends(require_principal),
     db: Session = Depends(get_db),
 ) -> TicketPageOut:
+    if unassigned and project_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="projectId and unassigned are mutually exclusive",
+        )
     items, total = ticket_service.list_tickets(
         db,
         principal,
         project_id=project_id,
+        unassigned=unassigned,
         provider_kind=provider_kind,
         connection_id=connection_id,
         status=status,
