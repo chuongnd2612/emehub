@@ -16,6 +16,7 @@ import { useEscape } from "@/hooks/useAnchoredPosition";
 import { cn } from "@/lib/cn";
 import { ROUTE_HEADER } from "@/components/shell/nav";
 import { projectPath } from "@/screens/ProjectDetail/shared";
+import { ticketPath } from "@/screens/TicketDetail/shared";
 import { useUi, type ModalKey } from "@/store/ui";
 
 interface ActionEntry {
@@ -25,9 +26,19 @@ interface ActionEntry {
   modal: ModalKey;
 }
 
-/** The Overview quick actions, reachable from anywhere. Copy is final. */
+/**
+ * The Overview quick actions, reachable from anywhere. Copy is final.
+ *
+ * "Import tickets" lands on **Overview** since #220 removed the standalone
+ * `/app/tickets` page: the Import dialog is provider-scoped and each caller
+ * mounts its own (`components/modals/ModalHost.tsx` explains why it is not
+ * global), and Overview is the one that survives containment —
+ * `screens/Overview/index.tsx` renders `<ImportDialog open={modal === "import"}>`.
+ * Without this the action navigated to a redirect and raised a modal nothing
+ * was left to host.
+ */
 const ACTIONS: ActionEntry[] = [
-  { label: "Import tickets", icon: "download", to: "/app/tickets", modal: "import" },
+  { label: "Import tickets", icon: "download", to: "/app", modal: "import" },
   { label: "Invite member", icon: "users", to: "/app/users", modal: "invite" },
   { label: "New project", icon: "plus", to: "/app/projects", modal: "project" },
 ];
@@ -184,7 +195,10 @@ export function CommandPalette() {
                 <Command.Item
                   key={t.id}
                   value={`ticket ${t.id} ${t.title}`}
-                  onSelect={() => go("/app/tickets")}
+                  // The ticket's own detail page. `/app/tickets` is a redirect
+                  // to the projects list since #220 — a ticket result that
+                  // landed there showed everything except the ticket asked for.
+                  onSelect={() => go(ticketPath(t.id, t.provider))}
                   className={ROW_CLASS}
                 >
                   <span className="flex w-[18px] shrink-0 justify-center text-ps-text">
