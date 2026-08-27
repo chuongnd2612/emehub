@@ -50,6 +50,7 @@ import {
 import {
   knowledgeStatusLabelFor,
   knowledgeStatusTone,
+  projectPath,
 } from "@/screens/ProjectDetail/shared";
 
 /**
@@ -242,7 +243,7 @@ export function ProjectComparison({
                 columns={COLUMNS}
                 interactive
                 onClick={() =>
-                  navigate(`/app/projects/${encodeURIComponent(p.guid || p.id)}`)
+                  navigate(projectPath(p.guid || p.id))
                 }
               >
                 <TableCell>

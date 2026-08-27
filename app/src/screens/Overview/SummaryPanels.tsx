@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 
 import { GlassCard, Glyph, StatusPill, type StatusName } from "@/components/ui";
 import { PROVIDERS, type AgentKey, type Integration, type Project } from "@/data";
+import { projectPath } from "@/screens/ProjectDetail/shared";
 
 const AGENT_DOT: Record<AgentKey, string> = {
   q: "bg-qagent",
@@ -95,7 +96,7 @@ export function TopProjects({ projects }: { projects: Project[] }) {
             key={p.id}
             type="button"
             data-surface
-            onClick={() => navigate(`/app/projects/${encodeURIComponent(p.guid || p.id)}`)}
+            onClick={() => navigate(projectPath(p.guid || p.id))}
             className="flex w-full cursor-pointer items-center gap-[11px] rounded-[13px] border border-bd3 bg-inset px-3 py-[11px] text-left hover:bg-bd3"
           >
             <Glyph size={30} gradient={p.gradient} label={p.initials} />

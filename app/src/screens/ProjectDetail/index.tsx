@@ -5,8 +5,12 @@
 //    pill … Tab row: Overview · Project knowledge · Repository · Agents ·
 //    Settings."
 //
-// The active tab lives in the `?tab=` QUERY PARAM — never in Zustand and never
-// in the path (CLAUDE.md › "Intra-screen selection goes in query params").
+// The active tab is a PATH SEGMENT — `/app/projects/:projectId/:tab` — never in
+// Zustand and, since #219, no longer in `?tab=` either: a tab is a distinct view
+// of a distinct resource, and the URL is the source of truth (CLAUDE.md ›
+// Frontend conventions; ADR 0011 §1). Switching tabs is therefore a NAVIGATION
+// and it PUSHES, so Back returns to the tab you came from. Old `?tab=` links are
+// absorbed by `TabRedirect` on the bare project URL.
 // `:projectId` is the project's GUID (#150), read from the URL via useParams and
 // passed straight to the API, which accepts a GUID anywhere it accepts a key. A
 // key-shaped param therefore still resolves, so older links keep working.
@@ -23,7 +27,7 @@
 // knowledge tab explains who does the building.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 
 import {
   Button,
@@ -44,6 +48,7 @@ import { RepositoryTab } from "./RepositoryTab";
 import { SettingsTab } from "./SettingsTab";
 import {
   AGENT_LABEL,
+  DEFAULT_PROJECT_TAB,
   PROJECT_TABS,
   PROVIDER_GLYPH,
   UNKNOWN_GLYPH,
@@ -51,6 +56,7 @@ import {
   isProjectTab,
   knowledgeStatus,
   knowledgeStatusTone,
+  projectPath,
   type ProjectTab,
 } from "./shared";
 
@@ -78,9 +84,8 @@ function useResetScrollOnMount() {
 }
 
 export default function ProjectDetailScreen() {
-  const { projectId = "" } = useParams();
+  const { projectId = "", tab: tabParam } = useParams();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
   const rootRef = useResetScrollOnMount();
 
   const [project, setProject] = useState<Project | null>(null);
@@ -134,13 +139,17 @@ export default function ProjectDetailScreen() {
   /** After a save, or when a build settles: refreshes without blanking. */
   const reloadSilently = useCallback(() => load({ silent: true }), [load]);
 
-  const tabParam = searchParams.get("tab");
-  const tab: ProjectTab = isProjectTab(tabParam) ? tabParam : "overview";
+  const tab: ProjectTab = isProjectTab(tabParam)
+    ? tabParam
+    : DEFAULT_PROJECT_TAB;
 
+  /**
+   * A tab switch is a navigation, and it PUSHES on purpose: the tabs are five
+   * views of the project, and Back must return to the previous one rather than
+   * leaving the project. (`replace` here is the trap the issue calls out.)
+   */
   const setTab = (next: ProjectTab) => {
-    const params = new URLSearchParams(searchParams);
-    params.set("tab", next);
-    setSearchParams(params, { replace: true });
+    navigate(projectPath(projectId, next));
   };
 
   // An unknown :projectId falls back to the list — never guess a project.
@@ -149,6 +158,15 @@ export default function ProjectDetailScreen() {
       navigate("/app/projects", { replace: true });
     }
   }, [status, project, navigate]);
+
+  // A segment that is not a tab — a typo, or `tickets` before #221 renders it —
+  // resolves to the default tab rather than 404ing or silently showing Overview
+  // under a URL that claims otherwise.
+  if (!isProjectTab(tabParam)) {
+    return (
+      <Navigate to={projectPath(projectId, DEFAULT_PROJECT_TAB)} replace />
+    );
+  }
 
   if (status === "loading") {
     return (

@@ -15,6 +15,7 @@ import { getProjects, getTickets, type Project, type Ticket } from "@/data";
 import { useEscape } from "@/hooks/useAnchoredPosition";
 import { cn } from "@/lib/cn";
 import { ROUTE_HEADER } from "@/components/shell/nav";
+import { projectPath } from "@/screens/ProjectDetail/shared";
 import { useUi, type ModalKey } from "@/store/ui";
 
 interface ActionEntry {
@@ -162,7 +163,7 @@ export function CommandPalette() {
                 <Command.Item
                   key={p.id}
                   value={`project ${p.name} ${p.repo}`}
-                  onSelect={() => go(`/app/projects/${encodeURIComponent(p.guid || p.id)}`)}
+                  onSelect={() => go(projectPath(p.guid || p.id))}
                   className={ROW_CLASS}
                 >
                   <span className="flex w-[18px] shrink-0 justify-center text-ps-text">
