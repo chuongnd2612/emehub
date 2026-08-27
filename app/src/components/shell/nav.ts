@@ -100,14 +100,34 @@ export const ROUTE_HEADER: Record<string, HeaderContent> = {
   },
 };
 
-/** Resolve the fallback header for a pathname (`/app/projects/:id` → Projects). */
+/**
+ * Anything ticket-shaped, in either address it can now have (#219).
+ *
+ *   /app/tickets/1234                          the legacy flat link (a redirect)
+ *   /app/projects/<id>/tickets[/1234]          nested under its project
+ *   /app/unassigned/tickets[/1234]             the Unassigned bucket (#217)
+ *
+ * Kept as one expression so a new ticket address cannot be added without the
+ * header following it — the failure mode this guards is a ticket page silently
+ * wearing the Overview header while the nav says otherwise.
+ */
+const TICKET_ROUTE =
+  /^\/app\/(tickets(\/|$)|(projects\/[^/]+|unassigned)\/tickets(\/|$))/;
+
+/**
+ * Resolve the fallback header for a pathname.
+ *
+ * `/app/projects/:id/:tab` → Projects; anything ticket-shaped → Tickets. A
+ * ticket page keeps the Tickets header wherever it is addressed from: without
+ * this it fell all the way through to Overview, which reads as having navigated
+ * away from the section.
+ */
 export function routeHeader(pathname: string): HeaderContent {
   const clean = pathname.replace(/\/+$/, "") || "/app";
   if (ROUTE_HEADER[clean]) return ROUTE_HEADER[clean];
+  // Before the projects fallback: a project's ticket routes are Tickets pages,
+  // not project pages, and `startsWith("/app/projects/")` would swallow them.
+  if (TICKET_ROUTE.test(clean)) return ROUTE_HEADER["/app/tickets"];
   if (clean.startsWith("/app/projects/")) return ROUTE_HEADER["/app/projects"];
-  // A ticket's detail page keeps the Tickets header. Without this it fell all
-  // the way through to Overview, which reads as having navigated away from the
-  // section — and the sidebar's Tickets item stays active, so the two disagreed.
-  if (clean.startsWith("/app/tickets/")) return ROUTE_HEADER["/app/tickets"];
   return ROUTE_HEADER["/app"];
 }

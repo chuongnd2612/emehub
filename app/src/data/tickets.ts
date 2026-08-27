@@ -380,6 +380,35 @@ export const getTicket = async (
 };
 
 /**
+ * Which project a ticket belongs to, as the handle its URL uses (#219).
+ *
+ * `GET /tickets/{externalId}` already returns `projectId` — the registry ROW id
+ * (`Ticket.project_id`, a real FK since #217) — but the project routes are keyed
+ * by GUID (#150), so the row id is mapped through `GET /projects`. Nothing new
+ * is asked of the API: both endpoints already exist and already return these
+ * fields.
+ *
+ * Returns `null` for a ticket whose `project_id` is NULL — the Unassigned
+ * bucket — and for a `project_id` that resolves to no project visible to this
+ * caller, which is the same answer: it belongs to no project *here*, so it is
+ * never guessed into one.
+ */
+export const resolveTicketProject = async (
+  externalId: string,
+  provider?: ProviderKey | null,
+): Promise<string | null> => {
+  const [wire, projects] = await Promise.all([
+    api.get<TicketWire>(`/tickets/${encodeURIComponent(externalId)}`, {
+      query: providerQuery(provider),
+    }),
+    api.get<{ id: number; key: string; guid?: string }[]>("/projects"),
+  ]);
+  if (!wire.projectId) return null;
+  const row = projects.find((p) => p.id === wire.projectId);
+  return row ? row.guid || row.key : null;
+};
+
+/**
  * `GET /tickets/{externalId}` — the full detail, for the detail screen.
  *
  * Same endpoint as `getTicket`; a separate function because the two want

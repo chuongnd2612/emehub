@@ -35,6 +35,7 @@ import {
 import { getProjects, type AgentKey, type Project } from "@/data";
 import { ApiError } from "@/lib/api";
 import { useUi } from "@/store/ui";
+import { projectPath } from "@/screens/ProjectDetail/shared";
 
 /** Agent display names — Handoff › "Agent tag pills (Q-Agent, D-Agent)". */
 const AGENT_LABEL: Record<AgentKey, string> = {
@@ -130,7 +131,7 @@ function ProjectCard({ project }: { project: Project }) {
         <Button
           className="flex-1"
           onClick={() =>
-            navigate(`/app/projects/${encodeURIComponent(project.guid || project.id)}`)
+            navigate(projectPath(project.guid || project.id))
           }
         >
           Configure

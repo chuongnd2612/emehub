@@ -4,10 +4,33 @@
 //
 // The URL is the source of truth for navigation (CLAUDE.md › Frontend
 // conventions). Nothing about "which page am I on" belongs in Zustand;
-// intra-screen selection (active tab, ticket source, expanded row) goes in
-// query params — `?tab=`, `?source=` — not here and not in the store. That
-// holds for auth too: `RequireAuth` and `RedirectIfAuthed` express their
-// decisions as `<Navigate>`, never as an imperative redirect.
+// intra-screen selection (a filter, an expanded row) goes in query params — not
+// here and not in the store. That holds for auth too: `RequireAuth` and
+// `RedirectIfAuthed` express their decisions as `<Navigate>`, never as an
+// imperative redirect.
+//
+// ## Project containment (#219, ADR 0011 §1)
+//
+// The project is the container, so the ticket routes nest inside it and the
+// project's tab is a PATH SEGMENT rather than `?tab=`:
+//
+//   /app/projects/:projectId/(overview|knowledge|repos|agents|settings)
+//   /app/projects/:projectId/tickets/:externalId
+//   /app/unassigned/tickets/:externalId      — the Unassigned bucket (#217)
+//
+// `?tab=` was right while a tab was intra-screen selection; once a tab is a
+// distinct view of a distinct resource, it is a path. The tab route is `:tab`
+// and not a list of literals on purpose: `PROJECT_TABS` in
+// `screens/ProjectDetail/shared.ts` stays the single source for the vocabulary,
+// so a new tab there needs no change here. `tickets` is reserved in that same
+// table for #221's project-scoped list.
+//
+// The flat `/app/tickets` and `/app/tickets/:externalId` are kept as REDIRECTS
+// so saved links and bookmarks survive, and both still accept `?source=` —
+// which is load-bearing on a ticket link, since identity is
+// `(providerKind, externalId)`. The list redirect lands on `/app/projects`: with
+// containment there is no workspace-wide ticket list to send it to any more, and
+// choosing the container is the step that replaced it.
 //
 // Three tiers:
 //   • `/` and `/signed-out` — public and ungated. `/signed-out` is ungated on
@@ -33,13 +56,14 @@ import LoginScreen from "./screens/Public/Login";
 import OverviewScreen from "./screens/Overview";
 import ProfileScreen from "./screens/Profile";
 import ProjectDetailScreen from "./screens/ProjectDetail";
+import ProjectTabRedirect from "./screens/ProjectDetail/TabRedirect";
 import ProjectsScreen from "./screens/Projects";
 import ResetPasswordScreen from "./screens/Public/ResetPassword";
 import SettingsScreen from "./screens/Settings";
 import ComingSoonScreen from "./screens/Public/ComingSoon";
 import SignedOutScreen from "./screens/Public/SignedOut";
 import TicketDetailScreen from "./screens/TicketDetail";
-import TicketsScreen from "./screens/Tickets";
+import LegacyTicketRedirect from "./screens/TicketDetail/LegacyTicketRedirect";
 import UsersScreen from "./screens/Users";
 import { RedirectIfAuthed } from "./screens/RedirectIfAuthed";
 import { RequireAuth } from "./screens/RequireAuth";
@@ -75,15 +99,38 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <OverviewScreen /> },
           { path: "projects", element: <ProjectsScreen /> },
-          { path: "projects/:projectId", element: <ProjectDetailScreen /> },
-          { path: "tickets", element: <TicketsScreen /> },
-          // The provider is NOT a path segment: ticket identity is
-          // `(providerKind, externalId)`, and putting the kind in the path would
-          // make `/app/tickets/ado/1234` the canonical URL for a row whose
-          // provider the caller may not know. It rides in `?source=` instead —
-          // the same param the list uses — so the id stays the only path part
-          // and an unqualified link still resolves.
-          { path: "tickets/:externalId", element: <TicketDetailScreen /> },
+          {
+            path: "projects/:projectId",
+            children: [
+              // A bare project URL is not a view — it resolves once to the
+              // default tab, and absorbs a legacy `?tab=` on the way.
+              { index: true, element: <ProjectTabRedirect /> },
+              { path: ":tab", element: <ProjectDetailScreen /> },
+              // The provider is NOT a path segment: ticket identity is
+              // `(providerKind, externalId)`, and putting the kind in the path
+              // would make `…/tickets/ado/1234` the canonical URL for a row
+              // whose provider the caller may not know. It rides in `?source=`
+              // instead, so the id stays the only path part and an unqualified
+              // link still resolves.
+              {
+                path: "tickets/:externalId",
+                element: <TicketDetailScreen />,
+              },
+            ],
+          },
+
+          // The Unassigned bucket (#217) — tickets that belong to no project.
+          // Not inside any project, so it has its own workspace-level address
+          // rather than a fake project id. #221 renders the list here, backed by
+          // `GET /tickets?unassigned=true`.
+          {
+            path: "unassigned/tickets/:externalId",
+            element: <TicketDetailScreen />,
+          },
+
+          // Legacy, redirect-only. See the header comment.
+          { path: "tickets", element: <Navigate to="/app/projects" replace /> },
+          { path: "tickets/:externalId", element: <LegacyTicketRedirect /> },
           { path: "claude", element: <ClaudeScreen /> },
           { path: "auth", element: <AuthScreen /> },
           { path: "users", element: <UsersScreen /> },

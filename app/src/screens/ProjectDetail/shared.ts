@@ -6,7 +6,20 @@ import type { GlyphFill } from "@/components/ui";
 import type { KnowledgeMeta, ProviderKey } from "@/data";
 import type { AgentKey } from "@/data";
 
-/** Handoff › 3. Projects — the five detail tabs, in order. */
+/**
+ * Handoff › 3. Projects — the five detail tabs, in order.
+ *
+ * This table is the SINGLE SOURCE for the tab vocabulary: since #219 the tab is
+ * a path segment (`/app/projects/:projectId/<key>`), so the first element of
+ * each pair is simultaneously the tab key and the URL segment. The router does
+ * not hardcode the slugs — it takes `:tab` and validates it through
+ * `isProjectTab` — so adding a tab here adds its route.
+ *
+ * The route segment for Repository is therefore `repos`, the existing key,
+ * rather than the handoff's word "repository": the handoff's copy is final for
+ * the *label* (second element, unchanged), and keeping key === segment avoids a
+ * second slug↔key map that can drift. ADR 0011's own route table writes `repos`.
+ */
 export const PROJECT_TABS = [
   ["overview", "Overview"],
   ["knowledge", "Project knowledge"],
@@ -17,8 +30,47 @@ export const PROJECT_TABS = [
 
 export type ProjectTab = (typeof PROJECT_TABS)[number][0];
 
-export const isProjectTab = (v: string | null): v is ProjectTab =>
+export const isProjectTab = (v: string | null | undefined): v is ProjectTab =>
   PROJECT_TABS.some(([key]) => key === v);
+
+/** The tab a project opens on when the URL names none. */
+export const DEFAULT_PROJECT_TAB: ProjectTab = "overview";
+
+/**
+ * Segments the project route accepts that are NOT yet tabs.
+ *
+ * `tickets` is **reserved** (#221): `/app/projects/:projectId/tickets` is where
+ * the project-scoped ticket list will live, and
+ * `/app/projects/:projectId/tickets/:externalId` already resolves to the ticket
+ * detail. #221 adds `["tickets", "Tickets"]` to `PROJECT_TABS` and drops it from
+ * here — no router change needed.
+ */
+export const RESERVED_PROJECT_SEGMENTS = ["tickets"] as const;
+
+export const isReservedProjectSegment = (v: string | null | undefined): boolean =>
+  RESERVED_PROJECT_SEGMENTS.some((s) => s === v);
+
+/**
+ * The canonical URL of a project, or of one of its tabs.
+ *
+ * `projectId` is the project's GUID (#150); a key-shaped value still resolves
+ * server-side, so older links keep working.
+ */
+export const projectPath = (
+  projectId: string,
+  tab: ProjectTab = DEFAULT_PROJECT_TAB,
+): string => `/app/projects/${encodeURIComponent(projectId)}/${tab}`;
+
+/**
+ * Where a ticket that belongs to no project lives — the Unassigned bucket
+ * (#217, ADR 0011 §4). It is not inside any project, so it gets its own
+ * address at workspace level rather than a fake project id.
+ *
+ * `/app/unassigned/tickets` is the list (#221 renders it, backed by
+ * `GET /tickets?unassigned=true`); `/app/unassigned/tickets/:externalId` is a
+ * ticket's detail and resolves today.
+ */
+export const UNASSIGNED_TICKETS_PATH = "/app/unassigned/tickets";
 
 /** Handoff › "Agent tag pills (Q-Agent, D-Agent)". */
 export const AGENT_LABEL: Record<AgentKey, string> = {
