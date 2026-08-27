@@ -184,13 +184,21 @@ def test_a_legacy_selection_field_is_refused_rather_than_ignored(client, member)
 
 # ---------------------------------------------------------------- upsert
 def test_sync_stores_every_normalised_field(client, member, db_session):
+    from app.models.project import Project
     from app.models.ticket import Ticket
 
     user, headers = member
+    # ``project_id`` is a FK since #217, so the project has to exist before a
+    # sync can stamp it.
+    project = Project(key="surency", name="Surency", owner_id=user.id)
+    db_session.add(project)
+    db_session.commit()
     source = FakeSource([[ITEM]])
     with ticket_service.use_ticket_source_resolver(resolver_for(source)):
         body = client.post(
-            "/tickets/sync", json={"connectionId": 7, "projectId": 5, **PULL}, headers=headers
+            "/tickets/sync",
+            json={"connectionId": 7, "projectId": project.id, **PULL},
+            headers=headers,
         ).json()
 
     assert body["synced"] == 1
@@ -198,7 +206,7 @@ def test_sync_stores_every_normalised_field(client, member, db_session):
     assert ticket.external_id == "SUR-1428"
     assert ticket.provider_kind == "ado"
     assert ticket.connection_id == 7  # stamped with its origin
-    assert ticket.project_id == 5
+    assert ticket.project_id == project.id
     assert ticket.owner_id == user.id  # and with its owner
     assert ticket.work_item_type == "Bug"
     assert ticket.acceptance_criteria == ["Given a file", "Then it imports"]

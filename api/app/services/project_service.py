@@ -21,7 +21,7 @@ from __future__ import annotations
 import shutil
 import uuid
 from pathlib import Path
-from typing import TypeVar
+from typing import NamedTuple, TypeVar
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -105,6 +105,58 @@ def get_project(db: Session, key: str, user: User | None) -> Project | None:
     return own_then_shared(db, Project, user, Project.key == key)
 
 
+class TicketCounts(NamedTuple):
+    """How many tickets belong to each project, and how many to none.
+
+    ``by_project`` is keyed by ``projects.id``; a project with no tickets is
+    absent rather than zero, so a caller can distinguish "none" from "not asked
+    about". ``unassigned`` is the count of visible rows with
+    ``project_id IS NULL`` — the Unassigned bucket (#217).
+    """
+
+    by_project: dict[int, int]
+    unassigned: int
+
+    @property
+    def total(self) -> int:
+        return sum(self.by_project.values()) + self.unassigned
+
+
+def ticket_counts(
+    db: Session, user: User | None, project_ids: list[int] | None = None
+) -> TicketCounts:
+    """**The** ticket count. One query, one grouping, one answer.
+
+    Every screen that shows a ticket number reads this: the project cards
+    (``summaries_for``), the sidebar badges and the Unassigned bucket. It is a
+    single ``GROUP BY project_id`` over the rows ``user`` can see, so a count
+    can never disagree with the list it links to — which is exactly what
+    happens the moment a second counting path exists
+    (``docs/PROJECT-CONTAINMENT-HANDOFF.md`` §3).
+
+    ``project_ids=None`` counts every visible project; a list narrows the
+    ``by_project`` half to those ids. ``unassigned`` is **never** narrowed — it
+    is not a project and no id list can include it.
+    """
+    from app.models.ticket import Ticket
+    from app.services.ownership import owned
+
+    by_project: dict[int, int] = {}
+    unassigned = 0
+    query = owned(db.query(Ticket.project_id, func.count(Ticket.id)), Ticket, user)
+    if project_ids is not None:
+        # NULL is not `IN (...)`, so the bucket has to be re-admitted explicitly.
+        query = query.filter(
+            Ticket.project_id.in_(project_ids) | Ticket.project_id.is_(None)
+        )
+    for project_id, total in query.group_by(Ticket.project_id).all():
+        if project_id is None:
+            unassigned = total
+        else:
+            by_project[project_id] = total
+    return TicketCounts(by_project=by_project, unassigned=unassigned)
+
+
 def summaries_for(
     db: Session, rows: list[Project], user: User | None
 ) -> dict[str, dict]:
@@ -121,7 +173,6 @@ def summaries_for(
     """
     from app.models.knowledge import ProjectKnowledge
     from app.models.project_config import ProjectConfig
-    from app.models.ticket import Ticket
     from app.services.ownership import owned
 
     if not rows:
@@ -156,14 +207,8 @@ def summaries_for(
         lambda k: k.project_key,
     )
 
-    counts: dict[int, int] = {}
-    for project_id, total in (
-        owned(db.query(Ticket.project_id, func.count(Ticket.id)), Ticket, user)
-        .filter(Ticket.project_id.in_(ids))
-        .group_by(Ticket.project_id)
-        .all()
-    ):
-        counts[project_id] = total
+    # The one counting path (#217) — never a second GROUP BY of its own.
+    counts = ticket_counts(db, user, ids).by_project
 
     summaries: dict[str, dict] = {}
     for row in rows:

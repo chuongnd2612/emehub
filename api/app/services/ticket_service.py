@@ -291,6 +291,7 @@ def list_tickets(
     user: User | None,
     *,
     project_id: int | None = None,
+    unassigned: bool = False,
     provider_kind: str | None = None,
     connection_id: int | None = None,
     status: str | None = None,
@@ -312,6 +313,13 @@ def list_tickets(
     with the individual kwargs rather than replacing them: the kwargs are the
     existing pill filters and the `GET /tickets` contract that agents already call,
     and both narrow the same visible set. Callers validate ``spec`` first.
+
+    ``unassigned=True`` is the **Unassigned bucket** — rows with no project at
+    all (#217). It is a separate argument from ``project_id`` on purpose:
+    omitting ``project_id`` means "every project, workspace-wide", which is a
+    different question, and overloading the absence of a filter to mean "the
+    ones with nothing" is how tickets end up in neither answer. The two are
+    mutually exclusive; the router refuses the combination with a 400.
     """
     query = _visible(db, user)
     if spec is not None:
@@ -321,6 +329,8 @@ def list_tickets(
         query = apply_query(query, spec, viewer)
     if project_id is not None:
         query = query.filter(Ticket.project_id == project_id)
+    if unassigned:
+        query = query.filter(Ticket.project_id.is_(None))
     if provider_kind:
         query = query.filter(Ticket.provider_kind == provider_kind)
     if connection_id is not None:
