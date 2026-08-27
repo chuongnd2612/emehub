@@ -11,6 +11,19 @@
 //
 // Loading a query only fills the **draft** — it does not run. Same rule as the rest
 // of the builder: nothing queries until Apply.
+//
+// ## Inside a project, a saved query belongs to that project (#221/#222)
+//
+// `projectId` is passed straight through to `POST /ticket-queries`, so a query
+// named inside a project is bound to it and never offered in another. The list
+// the caller hands us is already that project's rows plus the workspace-wide
+// ones, which is why both kinds appear here at once — a `Workspace` pill tells
+// them apart, because "this query is wider than the screen you are on" is
+// exactly the fact a user needs before loading it.
+//
+// A query's project is **immutable** (`PATCH` forbids the field), so there is no
+// re-home control. Duplicate is the way across, and inside a project it copies
+// *into* the project.
 
 import { useState } from "react";
 
@@ -35,6 +48,14 @@ export interface SavedQueriesProps {
   onChanged: () => void;
   /** False while the draft is invalid, so an unsaveable query cannot be saved. */
   canSave: boolean;
+  /**
+   * The project this strip is being shown inside, if any (#221).
+   *
+   * Present: a save binds the new query to the project and a duplicate copies
+   * into it. Absent: everything written here is workspace-wide, which is the
+   * only honest scope outside a container.
+   */
+  projectId?: number;
 }
 
 export function SavedQueries({
@@ -44,6 +65,7 @@ export function SavedQueries({
   onLoad,
   onChanged,
   canSave,
+  projectId,
 }: SavedQueriesProps) {
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
@@ -54,7 +76,7 @@ export function SavedQueries({
     if (!trimmed) return;
     setBusy(true);
     try {
-      await saveQuery({ name: trimmed, destination, query: draft });
+      await saveQuery({ name: trimmed, destination, query: draft, projectId });
       setNaming(false);
       setName("");
       onChanged();
@@ -78,6 +100,9 @@ export function SavedQueries({
       await run();
       onChanged();
     } catch (err) {
+      // Includes the hub's 409 on a built-in — surfaced verbatim, because its
+      // sentence ("Duplicate it and edit the copy") is the way forward and a
+      // generic "could not" would throw that away.
       toast(failure, "warn", err instanceof Error ? err.message : undefined);
     } finally {
       setBusy(false);
@@ -178,16 +203,36 @@ export function SavedQueries({
                 </Pill>
               ) : null}
 
+              {/* Only inside a project, and only for a row that is not this
+                  project's: the list mixes the two on purpose, and an unlabelled
+                  workspace-wide query would read as belonging to the project. */}
+              {projectId !== undefined &&
+                !saved.builtIn &&
+                saved.projectId === null && (
+                  <Pill tone="neutral" size="sm">
+                    Workspace
+                  </Pill>
+                )}
+
               {/* A preset offers Duplicate; anything else offers Delete. The hub
                   refuses to edit or delete a built-in (409), so offering either
                   here would be a control that cannot work. */}
               {saved.builtIn ? (
                 <button
                   type="button"
-                  onClick={() => void act(() => duplicateQuery(saved.id), "Could not duplicate")}
+                  onClick={() =>
+                    void act(
+                      () => duplicateQuery(saved.id, { projectId }),
+                      "Could not duplicate",
+                    )
+                  }
                   disabled={busy}
                   aria-label={`Duplicate ${saved.name}`}
-                  title="Duplicate it and edit the copy"
+                  title={
+                    projectId === undefined
+                      ? "Duplicate it and edit the copy"
+                      : "Duplicate it into this project and edit the copy"
+                  }
                   className="cursor-pointer bg-transparent p-1 text-txt4 hover:text-ps-text disabled:opacity-50"
                 >
                   <Icon name="copy" size={12} strokeWidth={2.3} />

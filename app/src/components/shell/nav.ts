@@ -45,6 +45,23 @@ export interface NavGroup {
  * instead — `screens/Overview/ProjectComparison.tsx` (#218), which is the guard
  * on this removal rather than decoration. Do not delete one without the other.
  *
+ * ## …and then `Unassigned`, which is not a contradiction (#221)
+ *
+ * The last WORKSPACE row is the **Unassigned bucket** —
+ * `/app/unassigned/tickets`, the work items whose `project_id` is NULL (#217,
+ * ADR 0011 §4). Ticket-shaped data at workspace level looks like the very thing
+ * containment removed, and it is the opposite: these rows belong to no project,
+ * so a project-only information architecture is exactly what would make them
+ * invisible. ADR 0011 §4 requires the bucket to be "explicit, visible, never
+ * hidden, never guessed at", and an address nothing links to is hidden.
+ *
+ * It is **not** a row in the project tree, because the tree lists projects and
+ * the bucket is not one. It is **not** conditional on holding something either:
+ * a `0` here is an honest, useful answer — "nothing is unattributed" — and it can
+ * only be read from a row that is there to read. The badge still follows
+ * `useSidebarStats()`' rule: a count that could not be read renders no badge at
+ * all, never a fabricated zero.
+ *
  * `All projects` is the label the containment spec gives this row
  * (`docs/PROJECT-CONTAINMENT-HANDOFF.md` §1, ADR 0011 §1, #220) now that the
  * projects themselves are listed above it in the tree; the page's own header
@@ -67,6 +84,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/app", label: "Overview", icon: "grid", end: true },
       { to: "/app/projects", label: "All projects", icon: "folder" },
+      { to: "/app/unassigned/tickets", label: "Unassigned", icon: "ticket" },
     ],
   },
   {
@@ -94,7 +112,9 @@ export interface HeaderContent {
  * Every key here is a **nav-addressable page**: the command palette lists this
  * table as its PAGES group. `/app/tickets` was removed from it with the nav
  * entry (#220) — there is no workspace-wide ticket page to jump to any more.
- * The header ticket pages still need is `TICKET_HEADER`, below.
+ * `/app/unassigned/tickets` is here for the opposite reason (#221): it has a nav
+ * row of its own, so it is somewhere a user can genuinely jump to. Every other
+ * ticket address wears `TICKET_HEADER`, below.
  */
 export const ROUTE_HEADER: Record<string, HeaderContent> = {
   "/app": {
@@ -104,6 +124,16 @@ export const ROUTE_HEADER: Record<string, HeaderContent> = {
   "/app/projects": {
     title: "Projects & Repositories",
     subtitle: "Repositories, connected agents and per-project defaults",
+  },
+  // The Unassigned bucket (#221). It IS in this table — unlike `/app/tickets`,
+  // which #220 removed — because it is a real, nav-addressable page again, and
+  // the command palette's PAGES group should be able to reach it. The exact-path
+  // lookup in `routeHeader` runs before the `TICKET_ROUTE` test, so the list
+  // wears this header while `…/tickets/:externalId` beneath it still wears
+  // `TICKET_HEADER`, which is the right answer for a ticket detail.
+  "/app/unassigned/tickets": {
+    title: "Unassigned work items",
+    subtitle: "Work items that belong to no project",
   },
   "/app/claude": {
     title: "Claude Settings",

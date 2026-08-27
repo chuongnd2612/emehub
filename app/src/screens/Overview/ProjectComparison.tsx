@@ -51,6 +51,7 @@ import {
   knowledgeStatusLabelFor,
   knowledgeStatusTone,
   projectPath,
+  UNASSIGNED_TICKETS_PATH,
 } from "@/screens/ProjectDetail/shared";
 
 /**
@@ -284,7 +285,14 @@ export function ProjectComparison({
                 zero bucket is furniture — and never omitted when it does,
                 because those work items exist and belong to no row above. */}
             {counts !== null && counts.unassigned > 0 && (
-              <TableRow columns={COLUMNS} className="bg-inset">
+              <TableRow
+                columns={COLUMNS}
+                className="bg-inset"
+                interactive
+                // The bucket is a real screen as of #221, so this row is a way
+                // in rather than a dead statistic.
+                onClick={() => navigate(UNASSIGNED_TICKETS_PATH)}
+              >
                 <TableCell>
                   <span className="flex size-[26px] shrink-0 items-center justify-center rounded-glyph border border-bd2 bg-bd3 text-txt4">
                     <Icon name="ticket" size={13} strokeWidth={2.2} />

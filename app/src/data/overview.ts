@@ -28,8 +28,7 @@ import { AGENT_ID, getAgents, isAgentOpen } from "./agents";
 import { getConnections } from "./connections";
 import { PRODUCTS } from "./fixtures/providers";
 import { relativeTime } from "./humanize";
-import { getProjects } from "./projects";
-import { countTickets } from "./tickets";
+import { getProjects, getTicketCounts } from "./projects";
 import type {
   ActivityEvent,
   ActivityKind,
@@ -59,8 +58,13 @@ const countOr = async (load: () => Promise<number>): Promise<number | null> => {
 export async function getKpis(): Promise<Kpi[]> {
   const [projects, tickets, connections, members] = await Promise.all([
     countOr(async () => (await getProjects()).length),
-    // `countTickets` asks for pageSize=1 — it wants `total`, not a page of rows.
-    countOr(() => countTickets()),
+    // `getTicketCounts()` — the ONE counting path in the app (#217/#218/#221).
+    // This tile used to call `countTickets()`, an unscoped `GET /tickets` with
+    // `pageSize=1`, which was both a second way to count and the last ticket
+    // LIST read in the app that carried no scope at all. `total` is the same
+    // figure from the endpoint the sidebar, the project tabs and the comparison
+    // table already read, so Overview can no longer disagree with them.
+    countOr(async () => (await getTicketCounts()).total),
     countOr(async () => {
       const groups = await getConnections();
       return groups.reduce((n, g) => n + g.connections.length, 0);

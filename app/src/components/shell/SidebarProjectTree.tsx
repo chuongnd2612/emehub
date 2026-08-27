@@ -12,6 +12,10 @@
 // cross-project question that entry answered now lives on Overview
 // (`screens/Overview/ProjectComparison.tsx`, #218).
 //
+// The Unassigned bucket is deliberately NOT a row here — the tree lists projects
+// and the bucket is not one. It has its own workspace-level nav row instead
+// (#221, `nav.ts`).
+//
 // ## Counts have exactly one source, and are never invented
 //
 // `ticketCountFor(counts, rowId)` over `getTicketCounts()` — the one counting
@@ -70,9 +74,11 @@ function useRouteProject() {
   const segment = pathname.match(/^\/app\/projects\/([^/]+)/)?.[1];
   return {
     routeKey: segment ? decodeURIComponent(segment) : null,
-    // `tickets` lands here too, from `/app/projects/:id/tickets/:externalId`.
-    // It is not a tab yet (#221 adds it to `PROJECT_TABS`), so no tab lights up
-    // — but the project row does, which is the honest answer to "where am I".
+    // `tickets` lands here from both `/app/projects/:id/tickets` and
+    // `/app/projects/:id/tickets/:externalId`. Since #221 it IS a tab, so the
+    // Tickets row lights up on the list and stays lit on a work item's detail —
+    // which is the honest answer to "where am I": still inside this project's
+    // work items.
     routeTab: pathname.match(/^\/app\/projects\/[^/]+\/([^/]+)/)?.[1] ?? null,
   };
 }

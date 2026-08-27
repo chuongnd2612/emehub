@@ -78,6 +78,12 @@ export interface QueryBuilderProps {
   trailing?: React.ReactNode;
   /** Saved queries for this destination. Omit to hide the strip entirely. */
   saved?: import("@/data").SavedQuery[];
+  /**
+   * The project this builder is running inside (#221). A query saved or copied
+   * from here binds to that project; omitted, everything saved is
+   * workspace-wide.
+   */
+  savedProjectId?: number;
   /** Re-read the saved list after one is added, copied or removed. */
   onSavedChanged?: () => void;
 }
@@ -93,6 +99,7 @@ export function QueryBuilder({
   busy = false,
   trailing,
   saved,
+  savedProjectId,
   onSavedChanged,
 }: QueryBuilderProps) {
   const problems = useMemo(
@@ -144,6 +151,7 @@ export function QueryBuilder({
           onLoad={onDraftChange}
           onChanged={onSavedChanged}
           canSave={valid}
+          projectId={savedProjectId}
         />
       )}
 
