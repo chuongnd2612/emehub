@@ -7,5 +7,6 @@ export { BackgroundStack } from "./BackgroundStack";
 export { HeaderProvider, useHeader, useHeaderContent } from "./HeaderContext";
 export { PageHeader } from "./PageHeader";
 export { Sidebar } from "./Sidebar";
-export { NAV_GROUPS, ROUTE_HEADER, routeHeader } from "./nav";
+export { NAV_GROUPS, ROUTE_HEADER, TICKET_HEADER, routeHeader } from "./nav";
+export { SidebarProjectTree } from "./SidebarProjectTree";
 export type { HeaderContent, NavGroup, NavItem } from "./nav";

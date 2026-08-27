@@ -19,10 +19,42 @@ export interface NavGroup {
   /** 10px/700/.12em tracked heading. */
   label: string;
   items: NavItem[];
+  /**
+   * Render the project tree inside this group, immediately after the item at
+   * this index (#220). Only `WORKSPACE` has one, and it sits between Overview
+   * and All projects — the order ADR 0011 §1 specifies.
+   *
+   * The tree is not a `NavItem`: its rows come from `GET /projects` at runtime,
+   * so it cannot be a static entry in this table.
+   */
+  treeAfterIndex?: number;
 }
 
 /**
- * One flat list under two group headings. Order is the handoff's.
+ * Two group headings. Order is the handoff's, as amended by containment.
+ *
+ * ## WORKSPACE is Overview → project tree → All projects (#220, ADR 0011 §1)
+ *
+ * The standalone `Tickets` entry is **gone**. A ticket belongs to a project and
+ * arrives through the connection configured on that project, so presenting
+ * Tickets as a sibling of Projects was a claim the domain does not make, and
+ * clicking it threw a user out of the project they were in. Ticket-shaped data
+ * now lives only inside its container.
+ *
+ * The workspace-wide question that entry used to answer is asked on Overview
+ * instead — `screens/Overview/ProjectComparison.tsx` (#218), which is the guard
+ * on this removal rather than decoration. Do not delete one without the other.
+ *
+ * `All projects` is the label the containment spec gives this row
+ * (`docs/PROJECT-CONTAINMENT-HANDOFF.md` §1, ADR 0011 §1, #220) now that the
+ * projects themselves are listed above it in the tree; the page's own header
+ * copy stays "Projects & Repositories" (`ROUTE_HEADER`).
+ *
+ * ## PLATFORM is untouched
+ *
+ * Claude Settings, Authentication, User Management, Integrations and Settings
+ * are workspace-level and correctly flat. Containment applies to ticket-shaped
+ * data, not to platform administration (ADR 0011, "What we do not adopt").
  *
  * Badges are NOT declared here — the prototype hardcoded "6" / "128" / "3",
  * which drifts from reality the moment a project or ticket is added. They're
@@ -31,10 +63,10 @@ export interface NavGroup {
 export const NAV_GROUPS: NavGroup[] = [
   {
     label: "WORKSPACE",
+    treeAfterIndex: 0,
     items: [
       { to: "/app", label: "Overview", icon: "grid", end: true },
-      { to: "/app/projects", label: "Projects & Repositories", icon: "folder" },
-      { to: "/app/tickets", label: "Tickets", icon: "ticket" },
+      { to: "/app/projects", label: "All projects", icon: "folder" },
     ],
   },
   {
@@ -58,6 +90,11 @@ export interface HeaderContent {
  * The prototype's `META` table, keyed by route instead of by `page`. This is
  * the FALLBACK only — a screen that calls `useHeader()` overrides it.
  * Copy is final (CLAUDE.md › Design › Rules).
+ *
+ * Every key here is a **nav-addressable page**: the command palette lists this
+ * table as its PAGES group. `/app/tickets` was removed from it with the nav
+ * entry (#220) — there is no workspace-wide ticket page to jump to any more.
+ * The header ticket pages still need is `TICKET_HEADER`, below.
  */
 export const ROUTE_HEADER: Record<string, HeaderContent> = {
   "/app": {
@@ -67,10 +104,6 @@ export const ROUTE_HEADER: Record<string, HeaderContent> = {
   "/app/projects": {
     title: "Projects & Repositories",
     subtitle: "Repositories, connected agents and per-project defaults",
-  },
-  "/app/tickets": {
-    title: "Tickets",
-    subtitle: "Read-only mirror of Azure DevOps and Jira work items",
   },
   "/app/claude": {
     title: "Claude Settings",
@@ -115,6 +148,19 @@ const TICKET_ROUTE =
   /^\/app\/(tickets(\/|$)|(projects\/[^/]+|unassigned)\/tickets(\/|$))/;
 
 /**
+ * The header a ticket page wears, wherever it is addressed from.
+ *
+ * Deliberately NOT a `ROUTE_HEADER` entry: since #220 there is no
+ * `/app/tickets` page to navigate to, and anything in that table shows up in
+ * the command palette's PAGES group. The copy is unchanged — it is the
+ * handoff's, and copy is final.
+ */
+export const TICKET_HEADER: HeaderContent = {
+  title: "Tickets",
+  subtitle: "Read-only mirror of Azure DevOps and Jira work items",
+};
+
+/**
  * Resolve the fallback header for a pathname.
  *
  * `/app/projects/:id/:tab` → Projects; anything ticket-shaped → Tickets. A
@@ -127,7 +173,7 @@ export function routeHeader(pathname: string): HeaderContent {
   if (ROUTE_HEADER[clean]) return ROUTE_HEADER[clean];
   // Before the projects fallback: a project's ticket routes are Tickets pages,
   // not project pages, and `startsWith("/app/projects/")` would swallow them.
-  if (TICKET_ROUTE.test(clean)) return ROUTE_HEADER["/app/tickets"];
+  if (TICKET_ROUTE.test(clean)) return TICKET_HEADER;
   if (clean.startsWith("/app/projects/")) return ROUTE_HEADER["/app/projects"];
   return ROUTE_HEADER["/app"];
 }

@@ -1,10 +1,16 @@
 // Handoff § 0. App shell › Sidebar — 268px glass panel, top→bottom:
 //   1. 3D logo button (tilt) → the landing view
 //   2. product lockup (accent tile + Eme/Hub + AI OPERATING CENTER)
-//   3. nav, one flat list under WORKSPACE / PLATFORM headings
+//   3. nav, under WORKSPACE / PLATFORM headings
 //   4. footer: status card + user chip
 //
 // Nav uses <NavLink>: the URL is the source of truth (CLAUDE.md).
+//
+// WORKSPACE is no longer flat (#220, ADR 0011 §1): Overview, then the
+// **project tree**, then All projects. The standalone `Tickets` entry is gone —
+// nothing ticket-shaped exists at workspace level, and the cross-project view
+// that replaces it is Overview's comparison table (#218). `PLATFORM` is
+// untouched: it is genuinely workspace-level and correctly flat.
 
 import { NavLink, useNavigate } from "react-router-dom";
 
@@ -12,7 +18,8 @@ import { Icon } from "@/components/ui";
 import { useLogoTilt } from "@/hooks/useTilt";
 import { cn } from "@/lib/cn";
 import { displayName, useAuth, userInitials, userRole } from "@/store/auth";
-import { NAV_GROUPS } from "./nav";
+import { NAV_GROUPS, type NavItem } from "./nav";
+import { SidebarProjectTree } from "./SidebarProjectTree";
 import { useSidebarStats } from "./useSidebarStats";
 
 export interface SidebarProps {
@@ -28,7 +35,6 @@ export function Sidebar({ onNavigate }: SidebarProps) {
   const stats = useSidebarStats();
   const badgeFor: Record<string, number | null> = {
     "/app/projects": stats.projectCount,
-    "/app/tickets": stats.ticketCount,
     "/app/integrations": stats.connectionCount,
   };
 
@@ -94,65 +100,27 @@ export function Sidebar({ onNavigate }: SidebarProps) {
         </div>
       </div>
 
-      {/* 3. Nav. */}
+      {/* 3. Nav. The project tree is spliced into WORKSPACE at
+          `treeAfterIndex` — after Overview, before All projects. */}
       <nav className="-mx-1 mb-0.5 flex flex-col gap-0.5 px-1">
         {NAV_GROUPS.map((group) => (
           <div key={group.label} className="contents">
             <div className="px-1.5 pt-3 pb-[7px] text-[10px] font-bold tracking-[.12em] text-label">
               {group.label}
             </div>
-            {group.items.map((item) => {
-              // Badges are live counts (useSidebarStats), never the
-              // hardcoded fixture values the handoff shipped. A count that
-              // hasn't loaded yet (or failed) renders no badge at all rather
-              // than a stale or invented number.
-              const liveCount = badgeFor[item.to];
-              const badge =
-                liveCount !== undefined && liveCount !== null
-                  ? String(liveCount)
-                  : undefined;
-              return (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.end}
-                  onClick={onNavigate}
-                  data-surface
-                  className={({ isActive }) =>
-                    cn(
-                      "flex w-full items-center gap-2.5 rounded-[11px] border px-2.5 py-[9px]",
-                      "text-left text-[13px] font-semibold",
-                      isActive
-                        ? "border-pb bg-pt text-p-on"
-                        : "border-transparent bg-transparent text-muted hover:bg-bd3",
-                    )
-                  }
-                >
-                  {({ isActive }) => (
-                    <>
-                      <span className="flex w-[18px] shrink-0 justify-center">
-                        <Icon name={item.icon} size={16} strokeWidth={2.1} />
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-left">
-                        {item.label}
-                      </span>
-                      {badge && (
-                        <span
-                          className={cn(
-                            "rounded-pill px-[7px] py-0.5 font-mono text-[10px] font-bold",
-                            isActive
-                              ? "bg-accent-grad text-white"
-                              : "bg-bd text-muted",
-                          )}
-                        >
-                          {badge}
-                        </span>
-                      )}
-                    </>
-                  )}
-                </NavLink>
-              );
-            })}
+            {group.items.map((item, index) => (
+              <div key={item.to} className="contents">
+                <NavRow item={item} badge={badgeFor[item.to]} onNavigate={onNavigate} />
+                {group.treeAfterIndex === index && (
+                  <SidebarProjectTree
+                    projects={stats.projects}
+                    counts={stats.ticketCounts}
+                    loading={stats.loading}
+                    onNavigate={onNavigate}
+                  />
+                )}
+              </div>
+            ))}
           </div>
         ))}
       </nav>
@@ -215,5 +183,62 @@ export function Sidebar({ onNavigate }: SidebarProps) {
         </button>
       </div>
     </aside>
+  );
+}
+
+/**
+ * One nav row.
+ *
+ * Badges are live counts (`useSidebarStats`), never the hardcoded fixture
+ * values the handoff shipped. A count that has not loaded yet — or whose fetch
+ * failed — renders no badge at all rather than a stale or invented number.
+ * `undefined` here means "this row has no badge concept" and `null` means
+ * "unavailable"; neither becomes a `0`.
+ */
+function NavRow({
+  item,
+  badge,
+  onNavigate,
+}: {
+  item: NavItem;
+  badge: number | null | undefined;
+  onNavigate: () => void;
+}) {
+  const label = badge !== undefined && badge !== null ? String(badge) : undefined;
+  return (
+    <NavLink
+      to={item.to}
+      end={item.end}
+      onClick={onNavigate}
+      data-surface
+      className={({ isActive }) =>
+        cn(
+          "flex w-full items-center gap-2.5 rounded-[11px] border px-2.5 py-[9px]",
+          "text-left text-[13px] font-semibold",
+          isActive
+            ? "border-pb bg-pt text-p-on"
+            : "border-transparent bg-transparent text-muted hover:bg-bd3",
+        )
+      }
+    >
+      {({ isActive }) => (
+        <>
+          <span className="flex w-[18px] shrink-0 justify-center">
+            <Icon name={item.icon} size={16} strokeWidth={2.1} />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-left">{item.label}</span>
+          {label && (
+            <span
+              className={cn(
+                "rounded-pill px-[7px] py-0.5 font-mono text-[10px] font-bold",
+                isActive ? "bg-accent-grad text-white" : "bg-bd text-muted",
+              )}
+            >
+              {label}
+            </span>
+          )}
+        </>
+      )}
+    </NavLink>
   );
 }
