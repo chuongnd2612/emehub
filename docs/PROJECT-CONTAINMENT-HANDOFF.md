@@ -219,13 +219,24 @@ Verification that actually proves something, rather than a green-looking run:
 
 ---
 
-## Open questions for whoever picks this up
+## Open questions — answered
 
-1. **Saved ticket queries** (`ticket_query_saved`) — migrate to project scope, or leave them
-   workspace-wide and allow them to cross projects? §2 flags it; the call is not made here.
-2. **A project tree, or a project switcher?** Q-Agent chose a tree with deliberately no quick
-   switcher. The hub shows one project today; if real workspaces hold dozens, listing them
-   all in the sidebar may be the wrong shape, and a switcher plus the All-projects list may
-   be better. Decide before slice 4.
-3. **Does the Unassigned bucket need write access** — can a user assign such a ticket to a
-   project from the UI, or is backfill-only sufficient for now?
+All three were decided in
+[ADR 0011 — Project containment in the hub](adr/0011-project-containment-in-the-hub.md),
+which is the record to read for the reasoning. Summarised here so this document no longer
+reads as undecided:
+
+1. **Saved ticket queries** (`ticket_query_saved`) — they **gain a project scope and are
+   migrated** (#222). The model is `owner_id` + `destination` scoped today with no project
+   axis, and its module docstring argues deliberately *against* project scoping; ADR 0011
+   reverses that written decision, because a workspace-wide saved query applied inside a
+   project either crosses the project boundary or is silently narrowed, and both break what
+   the query's name promises. `destination` stays — it answers a different question.
+2. **A project tree, not a switcher** (#220), matching ADR 0015 §1. Movement between projects
+   goes through the tree or the All-projects list. The tree is also the only shape with
+   somewhere to hang a per-project count. Revisit if real workspaces hold dozens of projects —
+   that is a sidebar change, not a data-model one.
+3. **The Unassigned bucket is read-only for now** (#217) — backfill and display, no
+   assign-to-project write. Tickets are billed throughout the hub as a read-only mirror, and a
+   hub-side re-pointing of one mirrored row would be the first write to a mirror's own shape.
+   The migration still has to log the rows it could not backfill.
