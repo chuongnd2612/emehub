@@ -14,16 +14,22 @@
 // The project is the container, so the ticket routes nest inside it and the
 // project's tab is a PATH SEGMENT rather than `?tab=`:
 //
-//   /app/projects/:projectId/(overview|knowledge|repos|agents|settings)
+//   /app/projects/:projectId/(overview|knowledge|repos|agents|tickets|settings)
 //   /app/projects/:projectId/tickets/:externalId
-//   /app/unassigned/tickets/:externalId      — the Unassigned bucket (#217)
+//   /app/unassigned/tickets[/:externalId]    — the Unassigned bucket (#217/#221)
 //
 // `?tab=` was right while a tab was intra-screen selection; once a tab is a
 // distinct view of a distinct resource, it is a path. The tab route is `:tab`
 // and not a list of literals on purpose: `PROJECT_TABS` in
 // `screens/ProjectDetail/shared.ts` stays the single source for the vocabulary,
-// so a new tab there needs no change here. `tickets` is reserved in that same
-// table for #221's project-scoped list.
+// so a new tab there needs no change here — which is exactly how #221's
+// project-scoped ticket list arrived: `tickets` became the sixth entry in
+// `PROJECT_TABS` and the `:tab` route picked it up untouched.
+//
+// There is no `?source=` on any ticket LIST route (#221, ADR 0011 §3): the
+// provider is derived from the project's configured connection, not selected. It
+// survives on a ticket DETAIL link, where it disambiguates one row's identity
+// `(providerKind, externalId)` rather than switching a list's provider.
 //
 // The flat `/app/tickets` and `/app/tickets/:externalId` are kept as REDIRECTS
 // so saved links and bookmarks survive, and both still accept `?source=` —
@@ -63,6 +69,7 @@ import SettingsScreen from "./screens/Settings";
 import ComingSoonScreen from "./screens/Public/ComingSoon";
 import SignedOutScreen from "./screens/Public/SignedOut";
 import TicketDetailScreen from "./screens/TicketDetail";
+import UnassignedTicketsScreen from "./screens/Unassigned";
 import LegacyTicketRedirect from "./screens/TicketDetail/LegacyTicketRedirect";
 import UsersScreen from "./screens/Users";
 import { RedirectIfAuthed } from "./screens/RedirectIfAuthed";
@@ -121,11 +128,18 @@ export const router = createBrowserRouter([
 
           // The Unassigned bucket (#217) — tickets that belong to no project.
           // Not inside any project, so it has its own workspace-level address
-          // rather than a fake project id. #221 renders the list here, backed by
-          // `GET /tickets?unassigned=true`.
+          // rather than a fake project id. The LIST is mounted here as of #221,
+          // backed by `GET /tickets?unassigned=true`; the detail already was.
+          //
+          // It is the one ticket list that is not inside a project, and it is not
+          // an exception to containment but the thing that makes containment
+          // safe: rows with no project would otherwise appear nowhere at all.
           {
-            path: "unassigned/tickets/:externalId",
-            element: <TicketDetailScreen />,
+            path: "unassigned/tickets",
+            children: [
+              { index: true, element: <UnassignedTicketsScreen /> },
+              { path: ":externalId", element: <TicketDetailScreen /> },
+            ],
           },
 
           // Legacy, redirect-only. See the header comment.

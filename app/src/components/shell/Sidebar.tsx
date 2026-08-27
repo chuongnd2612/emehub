@@ -7,10 +7,13 @@
 // Nav uses <NavLink>: the URL is the source of truth (CLAUDE.md).
 //
 // WORKSPACE is no longer flat (#220, ADR 0011 §1): Overview, then the
-// **project tree**, then All projects. The standalone `Tickets` entry is gone —
-// nothing ticket-shaped exists at workspace level, and the cross-project view
-// that replaces it is Overview's comparison table (#218). `PLATFORM` is
-// untouched: it is genuinely workspace-level and correctly flat.
+// **project tree**, then All projects, then the Unassigned bucket (#221). The
+// standalone `Tickets` entry is gone — nothing ticket-shaped exists at workspace
+// level *except* the rows that belong to no project, which is the one case a
+// project-only architecture would make invisible (see `nav.ts`). The
+// cross-project view that replaced the removed entry is Overview's comparison
+// table (#218). `PLATFORM` is untouched: it is genuinely workspace-level and
+// correctly flat.
 
 import { NavLink, useNavigate } from "react-router-dom";
 
@@ -35,6 +38,12 @@ export function Sidebar({ onNavigate }: SidebarProps) {
   const stats = useSidebarStats();
   const badgeFor: Record<string, number | null> = {
     "/app/projects": stats.projectCount,
+    // The Unassigned bucket's own count, from the one counting path (#217/#221).
+    // `null` while the read is out or has failed, which renders no badge — an
+    // invented `0` here would claim nothing is unattributed.
+    "/app/unassigned/tickets": stats.ticketCounts
+      ? stats.ticketCounts.unassigned
+      : null,
     "/app/integrations": stats.connectionCount,
   };
 

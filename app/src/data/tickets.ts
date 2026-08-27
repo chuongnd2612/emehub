@@ -286,6 +286,16 @@ export interface TicketQuery {
   pageSize?: number;
   /** Restrict to one registry row (`ProjectOut.id`, not the key). */
   projectId?: number;
+  /**
+   * The Unassigned bucket (#217): rows that belong to no project at all.
+   *
+   * **Mutually exclusive with `projectId`** — the hub answers 400 if both are
+   * sent, because omitting `projectId` already means "workspace-wide" and a
+   * bucket inferred from a missing parameter is one nobody renders
+   * (`api/app/routers/tickets.py`). This layer refuses the pair before it
+   * reaches the wire rather than letting a screen discover it as a 400.
+   */
+  unassigned?: boolean;
 }
 
 const toQueryParams = ({
@@ -295,10 +305,19 @@ const toQueryParams = ({
   page = 1,
   pageSize = MAX_PAGE_SIZE,
   projectId,
-}: TicketQuery): Record<string, string | number | undefined> => {
-  const params: Record<string, string | number | undefined> = {
+  unassigned,
+}: TicketQuery): Record<string, string | number | boolean | undefined> => {
+  if (unassigned && projectId !== undefined) {
+    throw new Error(
+      "A ticket read is either scoped to a project or to the Unassigned bucket, never both.",
+    );
+  }
+  const params: Record<string, string | number | boolean | undefined> = {
     providerKind: provider ? PROVIDER_WIRE_KIND[provider] : undefined,
     projectId,
+    // Sent only when true: `unassigned=false` is the default and adding it to
+    // every ticket read would put a meaningless parameter on the contract route.
+    unassigned: unassigned ? true : undefined,
     q: query.trim() || undefined,
     page,
     pageSize,
@@ -311,21 +330,18 @@ const toQueryParams = ({
   return params;
 };
 
-/**
- * `GET /tickets` for a **count only** — `total`, nothing decoded.
- *
- * `getTicketPage` also fetches `/projects` to label the PROJECT column; a
- * caller that only wants the number (the sidebar badge) should not pay for
- * that second request.
- */
-export const countTickets = async (
-  options: TicketQuery = {},
-): Promise<number> => {
-  const wire = await api.get<TicketPageWire>("/tickets", {
-    query: toQueryParams({ ...options, pageSize: 1 }),
-  });
-  return wire.total ?? 0;
-};
+// `countTickets(options)` used to live here — `GET /tickets` with `pageSize=1`,
+// for callers that wanted `total` and no rows. It is **gone** (#221), and
+// deliberately not replaced:
+//
+//   • counting is `getTicketCounts()` in `data/projects.ts` — the one counting
+//     path (#217/#218), which every screen that shows a ticket figure now reads;
+//   • its default `{}` made it the last function in the app that could issue an
+//     **unscoped** ticket list read, and Overview's `WORK ITEMS` tile was doing
+//     exactly that. A helper whose default argument breaks containment is a trap
+//     to leave lying around, however carefully the current callers use it.
+//
+// A scoped total is available without it: `getTicketPage` returns `total`.
 
 /** GET /tickets — one page, filtered and paged by the hub. */
 export const getTicketPage = async (
@@ -602,6 +618,18 @@ export const searchTickets = async (options: {
   query: ClauseQuery;
   q?: string;
   provider?: ProviderKey;
+  /**
+   * Restrict to one project (#221). The route already takes it
+   * (`TicketSearchRequest.project_id`), and inside a project it is not optional:
+   * a clause query that widens past the container is exactly the boundary
+   * crossing containment exists to make impossible (ADR 0011 §3).
+   *
+   * There is deliberately **no `unassigned`** here. `POST /tickets/search` has
+   * no such parameter, and adding one is a contract change this slice does not
+   * make — so the Unassigned bucket offers search text and the table, not the
+   * clause builder.
+   */
+  projectId?: number;
   page?: number;
   pageSize?: number;
 }): Promise<TicketPage> => {
@@ -610,6 +638,7 @@ export const searchTickets = async (options: {
       query: options.query,
       q: options.q?.trim() || undefined,
       providerKind: options.provider ? PROVIDER_WIRE_KIND[options.provider] : undefined,
+      projectId: options.projectId,
       page: options.page ?? 1,
       pageSize: options.pageSize ?? MAX_PAGE_SIZE,
     }),

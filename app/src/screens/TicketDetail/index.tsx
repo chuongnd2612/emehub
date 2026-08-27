@@ -1,4 +1,11 @@
-// The ticket detail view — `/app/tickets/:externalId`.
+// The ticket detail view, at all three of its addresses (#219, #221):
+//
+//   /app/projects/:projectId/tickets/:externalId    inside its project
+//   /app/unassigned/tickets/:externalId             the Unassigned bucket
+//   /app/tickets/:externalId                        legacy, via LegacyTicketRedirect
+//
+// One screen for all three: the ticket is the same row, and only the way back
+// differs — which is why `backTo` is derived from the URL rather than fixed.
 //
 // Mirrors QAgent's `app/src/screens/TicketDetail.tsx` (#157) in EmeHub's token
 // layer. The handoff draws no detail state for Tickets, so QAgent's is the
@@ -8,10 +15,12 @@
 //
 // Ticket identity in the hub is `(providerKind, externalId)`, so an Azure DevOps
 // `1234` and a GitHub `1234` are two different rows and the path alone cannot
-// say which one is meant. The provider therefore rides in `?source=` — the same
-// param the list uses, so a link round-trips and Back lands on the provider the
-// row came from. Omitting it is still valid: the hub then picks, which is the
-// right behaviour for a caller that genuinely does not know.
+// say which one is meant. The provider therefore rides in `?source=`, and this
+// is the ONE place in the ticket flow that still carries it: #221 removed it from
+// the list route, where it was a provider *switch* on a set of rows, but here it
+// disambiguates a single row's identity and nothing derives it. Omitting it is
+// still valid: the hub then picks, which is the right behaviour for a caller that
+// genuinely does not know.
 //
 // ## What QAgent has that this does not
 //
@@ -25,7 +34,7 @@
 // cases). No endpoint is invented and nothing is stubbed.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 
 import {
   EmptyState,
@@ -43,7 +52,12 @@ import {
   type ProviderKey,
   type TicketDetail,
 } from "@/data";
-import { PROVIDER_GLYPH, UNKNOWN_GLYPH } from "@/screens/ProjectDetail/shared";
+import {
+  PROVIDER_GLYPH,
+  UNASSIGNED_TICKETS_PATH,
+  UNKNOWN_GLYPH,
+  projectPath,
+} from "@/screens/ProjectDetail/shared";
 import { ApiError } from "@/lib/api";
 
 import { AcceptanceCriteria } from "./AcceptanceCriteria";
@@ -79,8 +93,9 @@ function useResetScrollOnMount() {
 }
 
 export default function TicketDetailScreen() {
-  const { externalId = "" } = useParams();
+  const { externalId = "", projectId } = useParams();
   const [params] = useSearchParams();
+  const { pathname } = useLocation();
   const rootRef = useResetScrollOnMount();
 
   const source = params.get("source");
@@ -124,9 +139,24 @@ export default function TicketDetailScreen() {
 
   useEffect(load, [load]);
 
-  // `?source=` is preserved on the way back, so the list reopens on the provider
-  // this work item came from rather than resetting to Azure DevOps.
-  const backTo = provider ? `/app/tickets?source=${provider}` : "/app/tickets";
+  /**
+   * Back to the list this work item was reached from (#221).
+   *
+   * Derived from the URL, because since containment the detail page has three
+   * addresses and each has its own list: inside a project, in the Unassigned
+   * bucket, or the legacy flat link that redirects. `/app/tickets` is no longer
+   * a list at all — it redirects to `/app/projects` (#219) — so the old
+   * unconditional `backTo` sent every Back to All projects, which is not where
+   * the user came from.
+   *
+   * No `?source=` on the way back: the list derives its provider from the
+   * project, so a provider parameter on it would be a control that does nothing.
+   */
+  const backTo = projectId
+    ? projectPath(projectId, "tickets")
+    : pathname.startsWith("/app/unassigned/")
+      ? UNASSIGNED_TICKETS_PATH
+      : "/app/projects";
 
   const back = (
     <Link

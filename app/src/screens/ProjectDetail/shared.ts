@@ -7,7 +7,7 @@ import type { KnowledgeMeta, ProviderKey } from "@/data";
 import type { AgentKey } from "@/data";
 
 /**
- * Handoff › 3. Projects — the five detail tabs, in order.
+ * Handoff › 3. Projects — the detail tabs, in order.
  *
  * This table is the SINGLE SOURCE for the tab vocabulary: since #219 the tab is
  * a path segment (`/app/projects/:projectId/<key>`), so the first element of
@@ -19,12 +19,21 @@ import type { AgentKey } from "@/data";
  * rather than the handoff's word "repository": the handoff's copy is final for
  * the *label* (second element, unchanged), and keeping key === segment avoids a
  * second slug↔key map that can drift. ADR 0011's own route table writes `repos`.
+ *
+ * **Six entries since #221**, not the handoff's five. `tickets` is a real view of
+ * the project now — `getTicketPage({ projectId })` against the parameter the API
+ * has always had — and containment puts it here, before Settings: it is one of
+ * the things a user comes to a project to *read*, not something they come to
+ * configure. Adding the row was the whole change — the router validates `:tab`
+ * through `isProjectTab`, and the sidebar tree renders its rows straight off this
+ * table, so both picked the tab up without a line of their own.
  */
 export const PROJECT_TABS = [
   ["overview", "Overview"],
   ["knowledge", "Project knowledge"],
   ["repos", "Repository"],
   ["agents", "Agents"],
+  ["tickets", "Tickets"],
   ["settings", "Settings"],
 ] as const;
 
@@ -35,20 +44,6 @@ export const isProjectTab = (v: string | null | undefined): v is ProjectTab =>
 
 /** The tab a project opens on when the URL names none. */
 export const DEFAULT_PROJECT_TAB: ProjectTab = "overview";
-
-/**
- * Segments the project route accepts that are NOT yet tabs.
- *
- * `tickets` is **reserved** (#221): `/app/projects/:projectId/tickets` is where
- * the project-scoped ticket list will live, and
- * `/app/projects/:projectId/tickets/:externalId` already resolves to the ticket
- * detail. #221 adds `["tickets", "Tickets"]` to `PROJECT_TABS` and drops it from
- * here — no router change needed.
- */
-export const RESERVED_PROJECT_SEGMENTS = ["tickets"] as const;
-
-export const isReservedProjectSegment = (v: string | null | undefined): boolean =>
-  RESERVED_PROJECT_SEGMENTS.some((s) => s === v);
 
 /**
  * The canonical URL of a project, or of one of its tabs.
@@ -71,6 +66,34 @@ export const projectPath = (
  * ticket's detail and resolves today.
  */
 export const UNASSIGNED_TICKETS_PATH = "/app/unassigned/tickets";
+
+/**
+ * One work item's detail page, addressed inside the project that owns it (#221).
+ *
+ * `?source=` is deliberately still here, and this is the one place in the ticket
+ * flow that keeps it: ticket identity in the hub is `(providerKind, externalId)`,
+ * so an Azure DevOps `1234` and a GitHub `1234` are two different rows and the
+ * path alone cannot say which (`router.tsx`, #219). It is a **disambiguator on
+ * one row**, not a provider switch on a list — the thing ADR 0011 §3 removed —
+ * and the list route itself carries no `?source=` at all.
+ */
+export const projectTicketPath = (
+  projectId: string,
+  externalId: string,
+  provider: ProviderKey | null,
+): string => {
+  const path = `${projectPath(projectId, "tickets")}/${encodeURIComponent(externalId)}`;
+  return provider ? `${path}?source=${provider}` : path;
+};
+
+/** The same, for a work item in the Unassigned bucket. */
+export const unassignedTicketPath = (
+  externalId: string,
+  provider: ProviderKey | null,
+): string => {
+  const path = `${UNASSIGNED_TICKETS_PATH}/${encodeURIComponent(externalId)}`;
+  return provider ? `${path}?source=${provider}` : path;
+};
 
 /** Handoff › "Agent tag pills (Q-Agent, D-Agent)". */
 export const AGENT_LABEL: Record<AgentKey, string> = {

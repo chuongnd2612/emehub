@@ -43,12 +43,20 @@ export const caseStateTone = (state: string): PillTone => {
 };
 
 /**
- * A link to one ticket's detail page.
+ * A link to one ticket's detail page **when the caller does not know its
+ * project** — today only the command palette, which searches rows and holds a
+ * project *name*, not the GUID the nested routes are keyed by.
+ *
+ * This is the legacy flat address on purpose: `LegacyTicketRedirect` resolves it
+ * to `/app/projects/:projectId/tickets/:externalId`, or to the Unassigned bucket
+ * for a row with no project (#219). A caller that already knows the container
+ * uses `projectTicketPath` / `unassignedTicketPath` (`ProjectDetail/shared.ts`)
+ * and skips the round trip.
  *
  * `?source=` carries the provider because ticket identity is
- * `(providerKind, externalId)` — an ADO `1234` and a GitHub `1234` are two
- * rows, and the path alone cannot say which. It is the same param the list uses,
- * so a back-navigation lands on the provider the row came from.
+ * `(providerKind, externalId)` — an ADO `1234` and a GitHub `1234` are two rows,
+ * and the path alone cannot say which. It is a disambiguator on one row, not the
+ * provider switch #221 removed from the lists.
  */
 export const ticketPath = (
   externalId: string,

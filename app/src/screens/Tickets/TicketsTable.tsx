@@ -44,7 +44,13 @@ const HEADINGS = [
 
 export interface TicketsTableProps {
   tickets: Ticket[];
-  /** Display name of the active provider — used by the empty state. */
+  /**
+   * Display name of the list's ticket source — used by the empty state.
+   *
+   * `""` where there is no single source to name: the Unassigned bucket holds
+   * rows from any connection, so "import a wider scope from Azure DevOps" would
+   * be advice about a provider that may have nothing to do with what is missing.
+   */
   providerName: string;
   onRowClick: (ticket: Ticket) => void;
 }
@@ -101,7 +107,9 @@ export function TicketsTable({
           message="No work items match these filters"
           action={
             <p className="m-0 text-[12.5px] text-muted">
-              Clear a filter, or import a wider scope from {providerName}.
+              {providerName
+                ? `Clear a filter, or import a wider scope from ${providerName}.`
+                : "Clear a filter to see the rest of these work items."}
             </p>
           }
         />

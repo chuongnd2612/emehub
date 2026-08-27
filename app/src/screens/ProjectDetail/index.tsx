@@ -5,6 +5,11 @@
 //    pill … Tab row: Overview · Project knowledge · Repository · Agents ·
 //    Settings."
 //
+// Six tabs now, not five: **Tickets** joined them in #221, because under
+// containment the project's work items are a view *of the project* rather than a
+// workspace-wide list to link out to (ADR 0011 §1). `PROJECT_TABS` in `shared.ts`
+// is still the single source for the vocabulary; this file renders it.
+//
 // The active tab is a PATH SEGMENT — `/app/projects/:projectId/:tab` — never in
 // Zustand and, since #219, no longer in `?tab=` either: a tab is a distinct view
 // of a distinct resource, and the URL is the source of truth (CLAUDE.md ›
@@ -38,7 +43,14 @@ import {
   LoadingState,
   Pill,
 } from "@/components/ui";
-import { getProject, type Project } from "@/data";
+import {
+  getProject,
+  getTicketCounts,
+  ticketCountFor,
+  type Project,
+  type ProjectTicketCount,
+  type TicketCounts,
+} from "@/data";
 import { ApiError } from "@/lib/api";
 
 import { AgentsTab } from "./AgentsTab";
@@ -46,6 +58,7 @@ import { KnowledgeTab } from "./KnowledgeTab";
 import { OverviewTab } from "./OverviewTab";
 import { RepositoryTab } from "./RepositoryTab";
 import { SettingsTab } from "./SettingsTab";
+import { TicketsTab } from "./TicketsTab";
 import {
   AGENT_LABEL,
   DEFAULT_PROJECT_TAB,
@@ -91,6 +104,16 @@ export default function ProjectDetailScreen() {
   const [project, setProject] = useState<Project | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState("");
+  /**
+   * Per-project ticket counts, for the Tickets tab's badge (#221).
+   *
+   * `getTicketCounts()` — the SAME function the sidebar tree (#220) and
+   * Overview's comparison table (#218) read, which is the point: no screen
+   * counts its own way, so the tab badge can never disagree with the sidebar row
+   * that links to it (handoff §3, ADR 0011 §8). `null` is "unavailable" and
+   * renders no badge, never a fabricated `0`.
+   */
+  const [counts, setCounts] = useState<TicketCounts | null>(null);
 
   /**
    * Re-read the project.
@@ -134,6 +157,22 @@ export default function ProjectDetailScreen() {
 
   useEffect(() => load(), [load]);
 
+  // A failed count read leaves `null` — no badge at all rather than a `0` this
+  // screen cannot support.
+  useEffect(() => {
+    let live = true;
+    void getTicketCounts()
+      .then((loaded) => {
+        if (live) setCounts(loaded);
+      })
+      .catch(() => {
+        if (live) setCounts(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [projectId]);
+
   /** The header button: shows that it is working. */
   const reload = useCallback(() => load(), [load]);
   /** After a save, or when a build settles: refreshes without blanking. */
@@ -144,9 +183,10 @@ export default function ProjectDetailScreen() {
     : DEFAULT_PROJECT_TAB;
 
   /**
-   * A tab switch is a navigation, and it PUSHES on purpose: the tabs are five
-   * views of the project, and Back must return to the previous one rather than
-   * leaving the project. (`replace` here is the trap the issue calls out.)
+   * A tab switch is a navigation, and it PUSHES on purpose: the tabs are six
+   * views of the project (Tickets joined them in #221), and Back must return to
+   * the previous one rather than leaving the project. (`replace` here is the trap
+   * the issue calls out.)
    */
   const setTab = (next: ProjectTab) => {
     navigate(projectPath(projectId, next));
@@ -159,9 +199,9 @@ export default function ProjectDetailScreen() {
     }
   }, [status, project, navigate]);
 
-  // A segment that is not a tab — a typo, or `tickets` before #221 renders it —
-  // resolves to the default tab rather than 404ing or silently showing Overview
-  // under a URL that claims otherwise.
+  // A segment that is not a tab — a typo — resolves to the default tab rather
+  // than 404ing or silently showing Overview under a URL that claims otherwise.
+  // `tickets` is a tab now (#221), so it no longer lands here.
   if (!isProjectTab(tabParam)) {
     return (
       <Navigate to={projectPath(projectId, DEFAULT_PROJECT_TAB)} replace />
@@ -252,20 +292,36 @@ export default function ProjectDetailScreen() {
       <div className="flex flex-wrap items-center gap-2">
         {PROJECT_TABS.map(([key, tabLabel]) => {
           const active = tab === key;
+          const count: ProjectTicketCount =
+            key === "tickets" ? ticketCountFor(counts, project.rowId) : null;
           return (
             <button
               key={key}
               type="button"
               data-surface
+              data-testid={`project-tab-${key}`}
               aria-current={active ? "page" : undefined}
               onClick={() => setTab(key)}
-              className={`cursor-pointer rounded-control-lg border px-4 py-[9px] text-[12.5px] font-bold ${
+              className={`flex cursor-pointer items-center gap-2 rounded-control-lg border px-4 py-[9px] text-[12.5px] font-bold ${
                 active
                   ? "border-pb bg-pt text-p-on"
                   : "border-transparent bg-transparent text-muted hover:bg-card3"
               }`}
             >
               {tabLabel}
+              {/* The tri-state, rendered: `null` shows nothing at all, and the
+                  `?? 0` below applies only to `undefined` — a successful read of
+                  a project that holds no tickets, which is an honest zero. */}
+              {key === "tickets" && count !== null && (
+                <span
+                  data-testid="project-tab-ticket-count"
+                  className={`rounded-pill px-[7px] py-0.5 font-mono text-[10px] font-bold ${
+                    active ? "bg-accent-grad text-white" : "bg-bd text-muted"
+                  }`}
+                >
+                  {count ?? 0}
+                </span>
+              )}
             </button>
           );
         })}
@@ -283,6 +339,12 @@ export default function ProjectDetailScreen() {
         />
       )}
       {tab === "agents" && <AgentsTab project={project} />}
+      {tab === "tickets" && (
+        <TicketsTab
+          project={project}
+          onOpenSettings={() => setTab("settings")}
+        />
+      )}
       {tab === "settings" && (
         <SettingsTab
           project={project}
