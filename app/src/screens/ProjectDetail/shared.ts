@@ -47,11 +47,27 @@ export type KnowledgeStatusLabel =
 
 export const knowledgeStatus = (
   knowledge: KnowledgeMeta | null,
+): KnowledgeStatusLabel =>
+  knowledge
+    ? knowledgeStatusLabelFor(knowledge.status, knowledge.needsRefresh)
+    : "Not indexed";
+
+/**
+ * The same vocabulary, from the raw status string a **list** row carries.
+ *
+ * `GET /projects` returns `summary.knowledgeStatus` and no `KnowledgeMeta` at
+ * all (the list read costs one request, not 3N+1), so the Overview comparison
+ * table has only the string. It reads it through here rather than mapping the
+ * statuses a second time — a project that says "Build failed" on its own screen
+ * must not say "Needs refresh" on Overview.
+ */
+export const knowledgeStatusLabelFor = (
+  status: string | undefined,
+  needsRefresh = false,
 ): KnowledgeStatusLabel => {
-  if (!knowledge) return "Not indexed";
-  switch (knowledge.status) {
+  switch (status) {
     case "indexed":
-      return knowledge.needsRefresh ? "Needs refresh" : "Indexed";
+      return needsRefresh ? "Needs refresh" : "Indexed";
     case "stale":
       return "Needs refresh";
     case "indexing":

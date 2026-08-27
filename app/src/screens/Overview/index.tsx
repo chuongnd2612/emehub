@@ -16,11 +16,13 @@ import {
   getKpis,
   getProducts,
   getProjects,
+  getTicketCounts,
   type ActivityEvent,
   type Integration,
   type Kpi,
   type Product,
   type Project,
+  type TicketCounts,
 } from "@/data";
 
 import { ImportDialog, useImportRun } from "@/components/import";
@@ -38,6 +40,7 @@ import { ActivityFeed } from "./ActivityFeed";
 import { GreetingRow } from "./GreetingRow";
 import { KpiTiles } from "./KpiTiles";
 import { ProductCard } from "./ProductCard";
+import { ProjectComparison } from "./ProjectComparison";
 import { IntegrationStrip, TopProjects } from "./SummaryPanels";
 
 export default function OverviewScreen() {
@@ -46,6 +49,12 @@ export default function OverviewScreen() {
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  /**
+   * The one counting path (#217). `null` means "not loaded, or the read
+   * failed" — the comparison table renders no number rather than a fabricated
+   * zero, which is the property `useSidebarStats()` established.
+   */
+  const [counts, setCounts] = useState<TicketCounts | null>(null);
 
   // Handoff § 5: the Import dialog also opens from the Overview quick action.
   // The spinner belongs to the chip that opened it, so the run state lives
@@ -68,13 +77,17 @@ export default function OverviewScreen() {
       getActivity(),
       getIntegrations(),
       getProjects(),
-    ]).then(([pr, kp, ac, ig, pj]) => {
+      // Caught here and nowhere else: a failed count must not blank the whole
+      // page, and it must not become a `0` either. `null` says "unavailable".
+      getTicketCounts().catch(() => null),
+    ]).then(([pr, kp, ac, ig, pj, tc]) => {
       if (!live) return;
       setProducts(pr);
       setKpis(kp);
       setActivity(ac);
       setIntegrations(ig);
       setProjects(pj);
+      setCounts(tc);
       setLoaded(true);
     });
     return () => {
@@ -105,6 +118,15 @@ export default function OverviewScreen() {
       )}
 
       {loaded ? <KpiTiles kpis={kpis} /> : <KpiTilesSkeleton />}
+
+      {/* The cross-project view (#218) — the workspace-wide question that used
+          to be asked on the standalone Tickets screen. It has to exist here
+          before that entry is removed (ADR 0011). */}
+      <ProjectComparison
+        projects={projects}
+        counts={counts}
+        loading={!loaded}
+      />
 
       <div className="grid grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] gap-[14px]">
         {loaded ? (

@@ -293,6 +293,15 @@ export interface Project {
   knowledgeConfidence?: number;
   /** How many repositories are configured — list summary only. */
   repoCount?: number;
+  /**
+   * When this project's mirror last moved — `relativeTime` of the newest
+   * `synced_at` among its tickets (`ProjectSummaryOut.lastSyncedAt`, #218).
+   *
+   * `null` means the project has **never** synced. That is a different fact
+   * from a figure that could not be read, and the Overview comparison table
+   * renders the two differently: "Never" against an em-dash.
+   */
+  lastSynced: string | null;
 }
 
 /** Derived from the knowledge row for the status pill. */

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple, TypeVar
 
@@ -157,6 +158,37 @@ def ticket_counts(
     return TicketCounts(by_project=by_project, unassigned=unassigned)
 
 
+def last_ticket_sync(
+    db: Session, user: User | None, project_ids: list[int]
+) -> dict[int, datetime]:
+    """The most recent ``Ticket.synced_at`` per project (#218).
+
+    The Overview comparison table needs a *last sync* per project, and the only
+    honest source for it is the mirror itself: a project's last sync is the
+    newest ``synced_at`` among the tickets it holds. One ``MAX ... GROUP BY``
+    over the rows ``user`` can see — no second timestamp is stored anywhere, so
+    there is nothing here that can drift out of agreement with the ticket list.
+
+    A project with no tickets is **absent** from the mapping, exactly as it is
+    absent from :func:`ticket_counts`. It has never synced; that is not the
+    same fact as a sync whose time we failed to read, and the caller renders
+    the two differently.
+    """
+    from app.models.ticket import Ticket
+    from app.services.ownership import owned
+
+    if not project_ids:
+        return {}
+    query = owned(
+        db.query(Ticket.project_id, func.max(Ticket.synced_at)), Ticket, user
+    ).filter(Ticket.project_id.in_(project_ids))
+    return {
+        project_id: synced
+        for project_id, synced in query.group_by(Ticket.project_id).all()
+        if project_id is not None and synced is not None
+    }
+
+
 def summaries_for(
     db: Session, rows: list[Project], user: User | None
 ) -> dict[str, dict]:
@@ -173,6 +205,7 @@ def summaries_for(
     """
     from app.models.knowledge import ProjectKnowledge
     from app.models.project_config import ProjectConfig
+    from app.models.provider_connection import ProviderConnection
     from app.services.ownership import owned
 
     if not rows:
@@ -207,8 +240,29 @@ def summaries_for(
         lambda k: k.project_key,
     )
 
+    # The ticket source, read from the binding that actually decides it: the
+    # project's work-item connection (#218). It used to come from the knowledge
+    # row's ``provider``, which an agent writes and which is empty on every
+    # project the hub configured itself — so a project with a perfectly good
+    # Azure DevOps connection reported no source at all. The knowledge row stays
+    # as the fallback for a project an agent indexed but nobody bound.
+    connection_ids = [
+        c.work_item_connection_id
+        for c in configs.values()
+        if getattr(c, "work_item_connection_id", None)
+    ]
+    connection_kinds: dict[int, str] = {}
+    if connection_ids:
+        connection_kinds = {
+            row.id: row.kind
+            for row in owned(db.query(ProviderConnection), ProviderConnection, user)
+            .filter(ProviderConnection.id.in_(connection_ids))
+            .all()
+        }
+
     # The one counting path (#217) — never a second GROUP BY of its own.
     counts = ticket_counts(db, user, ids).by_project
+    synced = last_ticket_sync(db, user, ids)
 
     summaries: dict[str, dict] = {}
     for row in rows:
@@ -224,10 +278,16 @@ def summaries_for(
             "repo_url": (default_repo or {}).get("repo_url", "") or "",
             "branch": (default_repo or {}).get("default_branch", "") or "",
             "repo_count": len(repos),
-            "provider": getattr(know, "provider", "") or "",
+            "provider": connection_kinds.get(
+                getattr(config, "work_item_connection_id", None) or 0, ""
+            )
+            or (getattr(know, "provider", "") or ""),
             "knowledge_status": getattr(know, "status", "") or "not_indexed",
             "knowledge_confidence": getattr(know, "confidence", 0) or 0,
             "ticket_count": counts.get(row.id, 0),
+            # None means "never synced", not "unknown" — the client renders it
+            # as such rather than inventing a timestamp (#218).
+            "last_synced_at": synced.get(row.id),
         }
     return summaries
 

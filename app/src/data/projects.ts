@@ -2,6 +2,7 @@
 //
 //   GET    /projects                 getProjects
 //   POST   /projects                 createProject
+//   GET    /projects/ticket-counts   getTicketCounts
 //   GET    /projects/{key}           getProject
 //   PATCH  /projects/{key}           renameProject
 //   GET    /projects/{key}/config    getProjectConfig  (folded into getProject)
@@ -66,6 +67,8 @@ interface ProjectSummaryWire {
   knowledgeStatus?: string;
   knowledgeConfidence?: number;
   ticketCount?: number;
+  /** Newest `synced_at` among the project's tickets. Null = never synced. */
+  lastSyncedAt?: string | null;
 }
 
 interface ProjectWire {
@@ -283,6 +286,9 @@ const assemble = async (wire: ProjectWire): Promise<Project> => {
     tickets,
     knowledge,
     config,
+    lastSynced: wire.summary?.lastSyncedAt
+      ? relativeTime(wire.summary.lastSyncedAt)
+      : null,
   };
 };
 
@@ -324,6 +330,7 @@ const fromSummary = (wire: ProjectWire): Project => {
     knowledgeStatus: s.knowledgeStatus || "not_indexed",
     knowledgeConfidence: s.knowledgeConfidence ?? 0,
     repoCount: s.repoCount ?? 0,
+    lastSynced: s.lastSyncedAt ? relativeTime(s.lastSyncedAt) : null,
   };
 };
 
@@ -344,6 +351,63 @@ export const getProject = async (key: string): Promise<Project | null> => {
     api.get<ProjectWire>(`/projects/${encodeURIComponent(key)}`),
   );
   return wire ? assemble(wire) : null;
+};
+
+/* ── Ticket counts — the one counting path ───────────────────────────────── */
+
+/**
+ * `GET /projects/ticket-counts` (#217) — **the** ticket count for the whole app.
+ *
+ * The Overview comparison table (#218), the sidebar project tree (#220) and the
+ * Project › Tickets tab (#221) all read this one function. No screen counts its
+ * own way: that is how a sidebar starts disagreeing with the page it links to,
+ * which is precisely what `useSidebarStats()` was written to prevent
+ * (`docs/PROJECT-CONTAINMENT-HANDOFF.md` §3).
+ */
+export interface TicketCounts {
+  /**
+   * Keyed by `Project.rowId`. A project with **no tickets is absent**, not
+   * `0` — the backend does that on purpose so a caller can still tell "no
+   * tickets" from "count unavailable". Never collapse the two with `?? 0`.
+   */
+  byProject: Record<number, number | undefined>;
+  /** Tickets that belong to no project. Read-only — nothing reassigns them. */
+  unassigned: number;
+  /** `byProject` + `unassigned`. */
+  total: number;
+}
+
+/**
+ * One project's count, tri-state on purpose:
+ *
+ *   `number`    — the real count
+ *   `undefined` — the read succeeded and this project holds no tickets at all
+ *   `null`      — the count is **unavailable** (not loaded yet, or the fetch
+ *                 failed). Renders as nothing, never as a fabricated zero.
+ */
+export type ProjectTicketCount = number | undefined | null;
+
+export const ticketCountFor = (
+  counts: TicketCounts | null,
+  rowId: number,
+): ProjectTicketCount => (counts ? counts.byProject[rowId] : null);
+
+/** GET /projects/ticket-counts. Throws on failure — the caller renders no number. */
+export const getTicketCounts = async (): Promise<TicketCounts> => {
+  const wire = await api.get<{
+    byProject?: Record<string, number>;
+    unassigned?: number;
+    total?: number;
+  }>("/projects/ticket-counts");
+  const byProject: Record<number, number | undefined> = {};
+  for (const [id, n] of Object.entries(wire.byProject ?? {})) {
+    byProject[Number(id)] = n;
+  }
+  return {
+    byProject,
+    unassigned: wire.unassigned ?? 0,
+    total: wire.total ?? 0,
+  };
 };
 
 /* ── Writes ──────────────────────────────────────────────────────────────── */

@@ -467,3 +467,60 @@ def test_the_bucket_is_read_only(client, two_projects):
         headers=headers,
     )
     assert response.status_code in (404, 405)
+
+
+def test_the_summary_carries_a_last_sync_only_where_something_synced(
+    client, db_session, two_projects
+):
+    """*Last sync* on the Overview comparison table (#218).
+
+    It is derived from the mirror — ``MAX(tickets.synced_at)`` per project — so
+    there is no second timestamp that can disagree with the ticket list. A
+    project that has never synced reports ``None``; the client renders that as
+    "never" rather than as an unreadable figure or a fabricated date.
+    """
+    from app.models.ticket import Ticket
+
+    empty = _project(db_session, "never-synced", two_projects["user"].id)
+    assert empty.id
+
+    body = client.get("/projects", headers=two_projects["headers"]).json()
+    summaries = {p["key"]: p["summary"] for p in body}
+
+    for key, project in (
+        ("surency-platform", two_projects["platform"]),
+        ("claims-portal", two_projects["claims"]),
+    ):
+        newest = max(
+            t.synced_at
+            for t in db_session.query(Ticket)
+            .filter(Ticket.project_id == project.id)
+            .all()
+        )
+        assert summaries[key]["lastSyncedAt"] is not None
+        # Same instant, however the wire chose to spell the offset.
+        from datetime import datetime
+
+        wire = datetime.fromisoformat(summaries[key]["lastSyncedAt"])
+        assert abs((wire.replace(tzinfo=None) - newest.replace(tzinfo=None)).total_seconds()) < 1
+
+    assert summaries["never-synced"]["lastSyncedAt"] is None
+
+
+def test_the_ticket_source_comes_from_the_configured_connection(
+    client, two_projects
+):
+    """*Ticket source* on the Overview comparison table (#218).
+
+    The two seeded projects are on **different providers** on purpose: with one
+    provider, a summary that simply echoed the same value everywhere would pass.
+    The source is read from ``project_config.work_item_connection_id`` — the
+    binding that actually decides where a ticket comes from — and not from the
+    knowledge row, which an agent writes and which is empty on every project the
+    hub configured itself.
+    """
+    body = client.get("/projects", headers=two_projects["headers"]).json()
+    summaries = {p["key"]: p["summary"] for p in body}
+
+    assert summaries["surency-platform"]["provider"] == "azure_devops"
+    assert summaries["claims-portal"]["provider"] == "jira"
