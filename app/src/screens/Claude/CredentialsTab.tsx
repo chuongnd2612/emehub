@@ -62,6 +62,10 @@ const CLAUDE_BANNER_GRADIENT =
   "linear-gradient(135deg, rgba(217,119,87,.1), rgba(225,23,43,.05))";
 
 export function CredentialsTab({ s }: { s: ClaudeSettings }) {
+  // Only the FIRST read blanks the tab. A refetch — including the one this
+  // screen triggers by hearing its own write — keeps the panel and updates in
+  // place (#238), so the source cards, the usage panel and the toast confirming
+  // the switch do not vanish at the moment the switch succeeds.
   if (s.load === "loading") {
     return <LoadingState label="Loading your Claude credentials…" />;
   }
@@ -77,6 +81,14 @@ export function CredentialsTab({ s }: { s: ClaudeSettings }) {
 
   return (
     <div className="flex flex-col gap-[14px]">
+      {/* A background refresh that failed while this panel was already good.
+          Shown beside the live state, never instead of it. */}
+      {s.refreshError && (
+        <Notice tone="warn">
+          Showing the last known state — could not refresh: {s.refreshError}
+        </Notice>
+      )}
+
       {/* ── Explainer banner ─────────────────────────────────────────── */}
       <div
         className="flex gap-[14px] rounded-card border border-claude/22 px-[18px] py-4"

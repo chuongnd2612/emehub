@@ -30,6 +30,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -204,8 +205,21 @@ export type LoadStatus = "loading" | "ready" | "error";
 
 export interface ClaudeSettings {
   /* credential state */
+  /**
+   * `"loading"` only while there is nothing to show yet — the FIRST read. A
+   * later refetch keeps the last-known state and stays `"ready"`, so the panel
+   * is never thrown away and rebuilt under the user (#238). Same reasoning as
+   * `ProjectDetail`'s `reloadSilently`.
+   */
   load: LoadStatus;
   loadError: string | null;
+  /**
+   * A background refresh that failed while a good panel was on screen. The
+   * panel keeps rendering the last-known state and shows this beside it —
+   * replacing a working panel with a full-screen error would destroy more than
+   * the failure costs.
+   */
+  refreshError: string | null;
   reload: () => void;
   hasOwn: boolean;
   hasShared: boolean;
@@ -258,6 +272,7 @@ export function useClaudeSettings(): ClaudeSettings {
   const [state, setState] = useState<ClaudeCredentialState | null>(null);
   const [load, setLoad] = useState<LoadStatus>("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
   /**
@@ -306,20 +321,43 @@ export function useClaudeSettings(): ClaudeSettings {
   );
   useEffect(reload, [reload, revision]);
 
+  // A refetch must not blank the screen. Every mutation in `data/credentials`
+  // announces itself so the header chip stays honest, and this screen listens
+  // to that same signal — which means it hears its OWN writes and used to answer
+  // by unmounting the panel it had just updated from the write's response
+  // (#238). The read still happens; only the blanking is gone.
+  //
+  // `hadState` is read through a ref, not a dependency: the effect must fire on
+  // `reloadKey` alone, and depending on `state` would refetch on every applied
+  // response.
+  const hadState = useRef(false);
   useEffect(() => {
     let live = true;
-    setLoad("loading");
-    setLoadError(null);
+    const first = !hadState.current;
+    if (first) {
+      setLoad("loading");
+      setLoadError(null);
+    }
+    setRefreshError(null);
     getCredentialState()
       .then((next) => {
         if (!live) return;
         setState(next);
+        hadState.current = true;
         setLoad("ready");
+        setLoadError(null);
       })
       .catch((err: unknown) => {
         if (!live) return;
-        setLoadError(errorMessage(err, "Could not reach the hub"));
-        setLoad("error");
+        const message = errorMessage(err, "Could not reach the hub");
+        if (first) {
+          // Nothing on screen to protect: the error state IS the screen.
+          setLoadError(message);
+          setLoad("error");
+        } else {
+          // A good panel is rendered. Keep it and say the refresh failed.
+          setRefreshError(message);
+        }
       });
     return () => {
       live = false;
@@ -625,6 +663,7 @@ export function useClaudeSettings(): ClaudeSettings {
   return {
     load,
     loadError,
+    refreshError,
     reload,
     hasOwn,
     hasShared,
