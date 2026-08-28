@@ -11,7 +11,19 @@ export interface NavItem {
   to: string;
   label: string;
   icon: IconName;
-  /** Exact match only — used by the index route. */
+  /**
+   * Exact match only. `NavLink` matches on **prefix** by default, so any row
+   * whose `to` is a prefix of a deeper real route needs this or it stays lit
+   * on every page beneath it (#236).
+   *
+   * `/app` needs it because every route is beneath it. `/app/projects` needs it
+   * because project detail is `/app/projects/:projectId/:tab` since #219 — and
+   * the project's own row in the tree is the honest answer there, so two rows
+   * lit at once was the visible symptom.
+   *
+   * `Unassigned` deliberately does NOT set it: a ticket at
+   * `/app/unassigned/tickets/:externalId` really is inside the bucket.
+   */
   end?: boolean;
 }
 
@@ -83,7 +95,7 @@ export const NAV_GROUPS: NavGroup[] = [
     treeAfterIndex: 0,
     items: [
       { to: "/app", label: "Overview", icon: "grid", end: true },
-      { to: "/app/projects", label: "All projects", icon: "folder" },
+      { to: "/app/projects", label: "All projects", icon: "folder", end: true },
       { to: "/app/unassigned/tickets", label: "Unassigned", icon: "ticket" },
     ],
   },
