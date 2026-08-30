@@ -3,22 +3,21 @@
 Đường đi từ lần đăng nhập đầu tiên tới lúc kết quả execution quay về ticket.
 
 Tài liệu phủ hai ứng dụng: **EmeHub** — identity, credential, project — và **Q-Agent** — pipeline
-QA. D-Agent chạy trong cùng suite nhưng chưa consume cấu hình từ hub, nên không nằm trong luồng
-này.
+QA. Đó là suite hôm nay; agent khác (D-Agent cho dev, B-Agent cho BA) plug vào sau qua cùng
+contract, và khi đó luồng thiết lập ở Phần A không đổi.
 
 ---
 
 ## 0. Trước khi bắt đầu
 
-Ba ứng dụng nằm sau một origin, agent mount theo path.
+Cả suite nằm sau một origin, agent mount theo path.
 
 | Ứng dụng | Đường dẫn |
 |---|---|
 | EmeHub | `https://hub.chuongnd.click` |
 | Q-Agent | `https://hub.chuongnd.click/qagent/` |
-| D-Agent | `https://hub.chuongnd.click/dagent` |
 
-Tài khoản demo: [ACCOUNT.md](ACCOUNT.md). Đăng nhập một lần ở EmeHub dùng được cả ba.
+Tài khoản demo: [ACCOUNT.md](ACCOUNT.md). Đăng nhập một lần ở EmeHub dùng được cả hai.
 
 **Cần chuẩn bị:**
 

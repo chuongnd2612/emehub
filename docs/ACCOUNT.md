@@ -7,15 +7,16 @@
 
 ## 1. Link truy cập hệ thống
 
-Ba ứng dụng nằm sau một địa chỉ duy nhất. Bắt đầu từ EmeHub.
+Cả suite nằm sau một địa chỉ duy nhất. Bắt đầu từ EmeHub.
 
 | Ứng dụng | Đường dẫn |
 |---|---|
-| **EmeHub** — hub chứa landing page, navigate tới các QAgent và DAgent | `https://hub.chuongnd.click` |
-| **QAgent** — agent cho QC/QA | `https://hub.chuongnd.click/qagent/` |
-| **DAgent** — agent cho DEV | `https://hub.chuongnd.click/dagent` |
+| **EmeHub** — hub chứa landing page, navigate tới agent | `https://hub.chuongnd.click` |
+| **Q-Agent** — agent cho QC/QA | `https://hub.chuongnd.click/qagent/` |
 
-Đăng nhập một lần ở EmeHub là dùng được cả ba, không phải đăng nhập lại khi chuyển sang agent.
+Đăng nhập một lần ở EmeHub là dùng được cả hai, không phải đăng nhập lại khi chuyển sang agent.
+Agent thêm vào sau — D-Agent cho DEV, B-Agent cho BA — sẽ chiếm một path segment mới trên cùng
+địa chỉ này.
 
 ---
 

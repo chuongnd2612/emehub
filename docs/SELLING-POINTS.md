@@ -1,8 +1,8 @@
 # Điểm nổi bật
 
-EMESOFT Agent Suite gồm ba ứng dụng dùng chung một identity provider và một kho cấu hình:
-**EmeHub** giữ user, credential và project; **Q-Agent** chạy pipeline QA; **D-Agent** chạy việc
-của dev.
+EMESOFT Agent Suite dùng chung một identity provider và một kho cấu hình: **EmeHub** giữ user,
+credential và project; **Q-Agent** chạy pipeline QA. Agent khác — D-Agent cho dev, B-Agent cho BA —
+plug vào qua cùng contract mà không phải sửa hub ([§7](#7-hub-là-source-of-truth-với-một-boundary-được-ghi-rõ)).
 
 Mỗi khẳng định dưới đây đều dẫn tới file hoặc ADR trong repo.
 
@@ -192,8 +192,9 @@ Mỗi access token mang `sid` — session id — nên **revoke một session là
 agent**, không phải ba lần revoke ở ba nơi.
 
 Cả suite nằm sau một origin, agent mount theo path
-([ADR 0010](adr/0010-one-origin-for-the-suite.md)): `hub.chuongnd.click`,
-`hub.chuongnd.click/qagent/`, `hub.chuongnd.click/dagent`.
+([ADR 0010](adr/0010-one-origin-for-the-suite.md)): `hub.chuongnd.click` và
+`hub.chuongnd.click/qagent/`. Agent thêm vào chiếm một path segment mới, không phải một origin
+mới.
 
 ---
 
