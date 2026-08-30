@@ -53,6 +53,11 @@ fails the build loudly rather than skipping.
 
 3. Rebuild.
 
+Removing an entry is the mirror image, with one manual step: the script never deletes anything it
+did not just write, so the artefacts of a dropped entry stay in `docs/submission/` until you remove
+them yourself. Deleting whatever is no longer in the manifest would mean deleting files in
+`-OutDir` on the strength of a config file — not a thing a build script should do unasked.
+
 ## Two things the script does that are not obvious
 
 **It defines heading styles before adding the Markdown.** A blank officecli document has none, so

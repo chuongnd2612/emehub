@@ -8,12 +8,11 @@
 
 ## Dùng thử ngay
 
-Ba ứng dụng nằm sau **một địa chỉ duy nhất**. Bắt đầu từ EmeHub — đăng nhập một lần là dùng được
-cả ba, không phải đăng nhập lại khi chuyển sang agent.
+Ba ứng dụng nằm sau một origin. Bắt đầu từ EmeHub — đăng nhập một lần dùng được cả ba.
 
 | Ứng dụng | Đường dẫn |
 |---|---|
-| **EmeHub** — hub: danh tính, credential, project | <https://hub.chuongnd.click> |
+| **EmeHub** — hub: identity, credential, project | <https://hub.chuongnd.click> |
 | **Q-Agent** — agent cho QC/QA | <https://hub.chuongnd.click/qagent/> |
 | **D-Agent** — agent cho DEV | <https://hub.chuongnd.click/dagent> |
 
@@ -25,33 +24,30 @@ cả ba, không phải đăng nhập lại khi chuyển sang agent.
 
 **Đội `CLGT-EAM`** — Nguyễn Đình Chương · Đào Văn Linh · Đồng Huỳnh Giao
 
-> Vào thẳng [Hướng dẫn sử dụng](docs/USER-GUIDE.md) nếu muốn có người dẫn đường từ màn đăng nhập
-> tới lúc kết quả test quay về ticket.
+> [Hướng dẫn sử dụng](docs/USER-GUIDE.md) đi từ màn đăng nhập tới lúc kết quả execution quay về
+> ticket.
 
 ---
 
 ## Đây là gì
 
-EmeHub là **nguồn sự thật** cho mọi thứ mà bộ agent EMESOFT dùng chung: bạn là ai, bạn chạy bằng
-tài khoản Claude nào, đang kết nối tới tổ chức Azure DevOps / GitHub / Jira nào, có những project
-và repository nào, và hệ thống biết gì về chúng.
+EmeHub là **source of truth** cho mọi thứ suite dùng chung: identity, Claude credential, provider
+connection, project, repository và knowledge base.
 
-Các agent chuyên biệt — **Q-Agent** cho QA, **D-Agent** cho phát triển — thôi tự giữ những thứ đó
-và đọc chúng từ hub qua HTTP, xác thực bằng token do hub cấp.
-
-Hub cũng là cửa trước: đăng nhập một lần, thấy cả suite, mở agent.
+**Q-Agent** (QA) và **D-Agent** (dev) thôi tự giữ những thứ đó và đọc chúng từ hub qua HTTP, xác
+thực bằng token do hub mint. Hub cũng là cửa trước: đăng nhập một lần, thấy cả suite, launch agent.
 
 ```
                     ┌─────────────────────────────┐
                     │           EmeHub            │
-                    │  danh tính · người dùng     │
-                    │  credential Claude          │
-                    │  kết nối provider           │
+                    │  identity · user · role     │
+                    │  Claude credential          │
+                    │  provider connection        │
                     │  project · knowledge        │
                     │  ticket · audit             │
                     └──────┬───────────────┬──────┘
                   JWT +    │               │    JWT +
-                  cấu hình │               │    cấu hình
+                  config   │               │    config
                     ┌──────┴──────┐ ┌──────┴──────┐
                     │   Q-Agent   │ │   D-Agent   │
                     │ run · spec  │ │ execution   │
@@ -60,32 +56,27 @@ Hub cũng là cửa trước: đăng nhập một lần, thấy cả suite, mở
                     └─────────────┘ └─────────────┘
 ```
 
-**Ranh giới của hub được giữ chặt:** hub chỉ dựng những artefact mà nó đã sở hữu toàn bộ đầu vào —
-hôm nay là knowledge base, và không gì khác. Hub **không** sinh test, không sinh code, không lái
-trình duyệt, không tạo PR. Việc đó là việc của agent.
+**Boundary của hub được giữ chặt:** hub chỉ build những artefact mà nó đã sở hữu toàn bộ input —
+hôm nay là knowledge base, và không gì khác. Hub **không** sinh test, không sinh code, không drive
+browser, không tạo PR. Đó là việc của agent.
 
 ---
 
-## Vì sao đáng xem
+## Ba điểm khác biệt
 
-Bốn điều làm suite này khác. Đầy đủ ở [SELLING-POINTS.md](docs/SELLING-POINTS.md).
+Đầy đủ ở [SELLING-POINTS.md](docs/SELLING-POINTS.md).
 
-**Một tài khoản Claude không còn là nút thắt cổ chai.** Mỗi người có credential riêng, admin
-publish thêm một credential dùng chung ở cấp workspace, và công tắc đổi qua lại tức thì theo quy
-tắc `own → shared → none`. Người mới chạy được từ phút đầu; ai có tài khoản riêng thì tự thấy chi
-tiêu của mình.
+**Claude credential có hai lớp.** Mỗi user một credential riêng, cộng một credential shared ở
+scope workspace do admin publish; resolve theo `own → shared → none` và đổi mode tức thì. Usage và
+rate limit hiển thị per-user.
 
-**Spec test được viết từ DOM thật.** Q-Agent lái trình duyệt thật trước, viết spec sau: thực hiện
-từng bước trên app đang chạy, đọc selector thật trên DOM thật, tự tạo dữ liệu test nếu thiếu — rồi
-mới sinh file Playwright từ đúng những gì đã chạy được. Không có selector đoán mò.
+**Spec sinh từ DOM thật.** Q-Agent drive browser thật trước, emit spec sau: thực thi từng step
+trên app đang chạy, resolve selector qua accessibility tree, verify chính selector sắp emit — rồi
+mới sinh file Playwright. Không có selector suy đoán.
 
-**Bí mật nằm đúng chỗ.** PAT của provider không rời khỏi hub — hub tự proxy lời gọi. Cookie đăng
-nhập của tester không rời khỏi máy tester — Local Agent chạy spec ngay tại đó. Credential Claude
-đi ra ngoài đúng một lần, có văn bản quy định, và bị thu hẹp bằng grant chỉ với tới được ba route.
-
-**Chúng tôi tự khai những gì chưa làm.** [KNOWN-GAPS.md](docs/KNOWN-GAPS.md) ghi thẳng tính năng
-nào đã bị gỡ khỏi giao diện vì chưa thật, chỗ nào còn nợ, và cả những dòng tài liệu cũ mà chúng
-tôi kiểm chứng lại rồi phát hiện là sai.
+**Ba loại secret, ba boundary.** Provider PAT không rời khỏi hub — hub proxy mọi provider call.
+`storageState` của tester không rời khỏi device — Local Agent execute tại chỗ. Claude credential
+là exception duy nhất, và bị thu hẹp bằng run-scoped grant chỉ reach được ba route.
 
 ---
 
@@ -95,9 +86,8 @@ tôi kiểm chứng lại rồi phát hiện là sai.
 |---|---|
 | [docs/ACCOUNT.md](docs/ACCOUNT.md) | Link truy cập và tài khoản demo |
 | [docs/USER-GUIDE.md](docs/USER-GUIDE.md) | **Bắt đầu ở đây** — dùng sản phẩm, đầu tới cuối |
-| [docs/SELLING-POINTS.md](docs/SELLING-POINTS.md) | Vì sao suite này làm khác |
-| [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) | Những gì đã gỡ và những gì chưa làm |
-| [docs/CONTEXT.md](docs/CONTEXT.md) | Từ vựng dùng chung |
+| [docs/SELLING-POINTS.md](docs/SELLING-POINTS.md) | Kiến trúc và điểm khác biệt |
+| [docs/CONTEXT.md](docs/CONTEXT.md) | Vocabulary dùng chung |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | Hợp đồng giữa hub và agent |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Đang ở phase nào, còn gì phía trước |
 | [docs/adr/](docs/adr/) | Các quyết định kiến trúc và lý do |
@@ -112,10 +102,10 @@ Chỉ riêng hub, không kèm agent:
 cp .env.example .env
 ```
 
-Sinh **hai** bí mật — chúng phải là **hai giá trị khác nhau**
-([ADR 0005](docs/adr/0005-secret-and-key-management.md)). API **từ chối khởi động** nếu thiếu một
-trong hai; không có giá trị dự phòng tự sinh, vì một khoá mã hoá tự sinh lúc boot sẽ lặng lẽ tạo
-ra dữ liệu không giải mã được sau lần restart kế tiếp.
+Sinh **hai secret** — chúng phải là **hai giá trị khác nhau**
+([ADR 0005](docs/adr/0005-secret-and-key-management.md)). API **refuse to start** nếu thiếu một trong
+hai; không có fallback tự sinh, vì một encryption key sinh lúc boot sẽ tạo ra dữ liệu không
+decrypt được sau restart kế tiếp.
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(48))"   # -> EMEHUB_JWT_SECRET
@@ -131,8 +121,8 @@ Cổng (web 5180, api 8790, db 5457) chọn để không đụng với Q-Agent, 
 trên một máy được.
 
 **Lần `--build` đầu tiên mất vài phút.** Từ [ADR 0007](docs/adr/0007-knowledge-builds-run-on-the-hub.md),
-hub tự dựng knowledge base, nên image API cài thêm `git`, Node 20 và `@anthropic-ai/claude-code`
-lên trên nền Python. (Không có chromium — hub không chạy trình duyệt nào.)
+hub tự build knowledge base, nên image API cài thêm `git`, Node 20 và `@anthropic-ai/claude-code`
+lên trên nền Python. (Không có chromium — hub không chạy browser.)
 
 ```bash
 docker compose exec api sh -c 'git --version && node --version && claude --version'
@@ -140,27 +130,24 @@ docker compose exec api sh -c 'git --version && node --version && claude --versi
 
 ### Hai thứ phải tự cung cấp
 
-Stack không thể tự có, và thiếu chúng thì lượt dựng knowledge base sẽ dừng ở trạng thái `error`
-kèm thông báo thiếu cái gì — nó **không** làm hỏng request:
+Thiếu chúng thì knowledge build dừng ở status `error` kèm thông báo thiếu cái gì — nó **không**
+fail request:
 
-- **Một credential Claude** — upload trong *Claude Settings*, hoặc nhờ admin cấu hình tài khoản
-  dùng chung.
-- **Một kết nối repository kèm PAT** — trong *Integrations*, gắn vào project có repo cần clone.
+- **Một Claude credential** — upload ở *Claude Settings*, hoặc dùng shared credential do admin
+  publish.
+- **Một repository connection kèm PAT** — ở *Integrations*, bind vào project có repo cần clone.
 
-> Volume `emehub-workspace` chứa bản clone của repository và — trong lúc dựng — một credential
-> Claude đã giải mã. Hãy coi nó là dữ liệu nhạy cảm: không mount cho mọi người đọc, không sao chép
-> tuỳ tiện.
+> Volume `emehub-workspace` chứa repository clone và — trong thời gian build — một Claude
+> credential đã decrypt. Không mount world-readable, không copy tuỳ tiện.
 
 ### Chạy cả suite
 
-`suite.sh` / `suite.ps1` là lớp mỏng bọc `docker compose -f docker-compose.suite.yml`, truyền vào
-file `.env` của cả ba repo. Đọc phần đầu của hai script đó trước khi dùng.
-
-Không bao giờ chạy đồng thời hai cách — cùng cổng, khác volume.
+`suite.sh` / `suite.ps1` bọc `docker compose -f docker-compose.suite.yml`, truyền vào `.env` của
+cả ba repo. Không bao giờ chạy đồng thời hai cách — cùng port, khác volume.
 
 ---
 
 ## Đóng góp
 
-Quy ước, ranh giới kiến trúc và quy trình giao việc nằm ở [CLAUDE.md](CLAUDE.md). Nhánh mặc định
-là `master`.
+Convention, architectural boundary và workflow nằm ở [CLAUDE.md](CLAUDE.md). Branch mặc định là
+`master`.

@@ -1,256 +1,238 @@
 # Điểm nổi bật
 
-EMESOFT Agent Suite là ba ứng dụng dùng chung một danh tính và một kho cấu hình: **EmeHub** giữ
-người dùng, credential và project; **Q-Agent** làm việc của QA; **D-Agent** làm việc của dev.
+EMESOFT Agent Suite gồm ba ứng dụng dùng chung một identity provider và một kho cấu hình:
+**EmeHub** giữ user, credential và project; **Q-Agent** chạy pipeline QA; **D-Agent** chạy việc
+của dev.
 
-Tài liệu này nói về những chỗ chúng tôi làm khác. Mỗi khẳng định dưới đây đều chỉ được tới file
-trong repo. Những gì chưa làm nằm ở [KNOWN-GAPS.md](KNOWN-GAPS.md) và không được nhắc ở đây như
-thể đã xong.
+Mỗi khẳng định dưới đây đều dẫn tới file hoặc ADR trong repo.
 
 ---
 
-## 1. Một tài khoản Claude không còn là nút thắt cổ chai
+## 1. Claude credential: hai lớp, một switch
 
-Đây là vấn đề thật của một đội đông người dùng chung một sản phẩm AI: ai trả tiền, ai được chạy,
-và chuyện gì xảy ra khi tài khoản đó chạm hạn mức vào 3 giờ chiều.
+Vấn đề: một team dùng chung một Claude account thì ai cũng phải xếp hàng sau rate limit của tài
+khoản đó, và không ai biết mình đã tiêu bao nhiêu.
 
-Hub trả lời bằng **hai lớp credential và một công tắc**.
+Hub giải quyết bằng hai lớp credential và một quy tắc resolve.
 
-- **Credential cá nhân.** Mỗi người tự upload `.credentials.json` của Claude CLI mình đang đăng
-  nhập. Nó thuộc về người đó, không ai khác đọc được.
-- **Credential dùng chung.** Admin publish một tài khoản Claude ở cấp workspace. Người mới vào
-  đội chạy được ngay từ phút đầu, không cần có tài khoản Claude riêng.
-- **Công tắc.** `PUT /credentials/claude/mode` đổi giữa `own` và `shared`. Quy tắc phân giải là
-  **own → shared → none**: hub luôn ưu tiên credential của chính người đó, rơi về credential
-  chung nếu không có, và nói thẳng "không có" thay vì im lặng thất bại.
+| Lớp | Ai sở hữu |
+|---|---|
+| **Personal** | Từng user upload `.credentials.json` của Claude CLI mình đang đăng nhập |
+| **Shared** | Admin publish một credential ở scope workspace |
 
-Cái làm nó thành công cụ làm việc thật, chứ không phải một ô upload:
+Quy tắc resolve là **`own` → `shared` → `none`**: ưu tiên credential của chính user, fallback về
+shared, và trả về `none` một cách tường minh thay vì fail ngầm. `PUT /credentials/claude/mode`
+đổi mode; chip credential trên header phản ánh ngay.
 
-**Token tự gia hạn được ghi ngược về hub.** Access token của Claude OAuth sống vài giờ, nên một
-file `.credentials.json` thật gần như hết hạn ngay khi upload. CLI tự làm mới nó từ refresh token
-trong lúc chạy, và agent `PUT /credentials/claude/refreshed` để hub luôn là bản mới nhất. Hub theo
-dõi *có hay không có* refresh token — một boolean `has_refresh_token`, không bao giờ là chính token
-đó — nên một credential quá hạn nhưng gia hạn được hiện trạng thái `refreshable` chứ không bị bôi
-đỏ oan. Tín hiệu "cái này thật sự hỏng" chỉ đến từ một chỗ: CLI thật sự bị từ chối.
+**Refresh token được ghi ngược về hub.** Access token của Claude OAuth sống vài giờ, nên một
+`.credentials.json` thật gần như luôn quá `expiresAt`. Claude CLI tự renew từ refresh token trong
+lúc chạy, và agent `PUT /credentials/claude/refreshed` để hub giữ bản mới nhất. Hub track *sự tồn
+tại* của refresh token — cột boolean `has_refresh_token`, không phải chính token — nên một
+credential quá hạn nhưng renew được resolve thành status `refreshable` thay vì `expired`. Tín hiệu
+`expired` chỉ đến từ một nguồn: Claude CLI thật sự bị reject.
 
-**Chi tiêu hiện ra theo từng người.** Mỗi lượt gọi Claude được `POST /credentials/claude/usage` ghi
-lại token và cost, cộng dồn thành phần trăm hạn mức phiên và hạn mức tuần ngay trên chip credential
-ở header. Người dùng thấy còn bao nhiêu, chứ không đợi đến lúc bị chặn.
+**Usage tracking per-user.** Mỗi call ghi token count và cost qua
+`POST /credentials/claude/usage`, roll up thành phần trăm của session limit và weekly limit, hiển
+thị trên chip credential.
 
-**Bí mật được cất đúng cách.** Credential mã hoá at-rest bằng `EMEHUB_ENCRYPTION_KEY`, tách hẳn
-khỏi `EMEHUB_JWT_SECRET` ký token — hai bí mật, không bao giờ suy ra từ nhau
-([ADR 0005](adr/0005-secret-and-key-management.md)). Thiếu bí mật thì hub **từ chối khởi động**,
-vì một khoá mã hoá tự sinh lúc boot sẽ lặng lẽ tạo ra những dòng dữ liệu không giải mã được sau lần
-restart kế tiếp.
-
-**Đúng một hàm trả về credential.** `resolve_material` trong
+**Một hàm duy nhất trả ra credential material.** `resolve_material` trong
 [`api/app/services/claude_credentials.py`](../api/app/services/claude_credentials.py) là hàm duy
-nhất trong toàn bộ hub trả ra chất liệu credential. Mọi endpoint khác được khai báo với
-`response_model` không có trường nào chứa được nó, nên kể cả một lỗi lập trình trong handler cũng
-không serialise nổi token ra ngoài.
+nhất trong hub trả credential material. Mọi endpoint khác khai báo `response_model` không có
+trường nào chứa được nó, nên một lỗi trong handler cũng không serialise nổi token ra response.
 
 ---
 
-## 2. Spec được viết từ DOM thật, không phải từ trí tưởng tượng
+## 2. Spec sinh từ DOM thật
 
-Đây là điểm khác biệt lớn nhất về mặt kỹ thuật.
+Cách thông thường để LLM sinh test automation: đọc source, suy ra selector, sinh file, chạy, fail,
+heal. Selector suy đoán là nguyên nhân chính của spec chết yểu — nó hợp lý trong code review và
+không tồn tại trên DOM thật.
 
-Cách thông thường để một LLM sinh test automation là: đọc mã nguồn, đoán selector, sinh file, chạy,
-hỏng, sửa. Selector đoán ra là nguồn gốc của gần như mọi spec chết yểu — nó trông hợp lý trong code
-review và không tồn tại trên trang thật.
+Q-Agent có authoring mode **`live-harness`**: agent drive browser thật trước, emit spec sau. Qua
+CLI `browser-harness` gắn vào một Chrome đã authenticated:
 
-Q-Agent có chế độ **live authoring**: một Claude tác tử **lái trình duyệt thật trước, viết spec
-sau**.
+1. **Thực thi từng step của test case trên app đang chạy.** Không mô phỏng.
+2. **Resolve element qua accessibility tree**, ghi lại selector theo thứ tự ưu tiên cố định:
+   `data-testid` → ARIA role + accessible name → label → CSS ổn định. Không `:nth-child`, không
+   class trần, không structural combinator.
+3. **Verify selector chứ không verify toạ độ.** `click_at_xy` trúng bất kỳ element nào nằm ở điểm
+   đó — thường là một `<a>` bên trong — trong khi spec sẽ click **selector đã ghi**, mà tâm của nó
+   có thể là container không handle click. Nên mỗi interaction được dispatch trực tiếp trên chính
+   selector sắp emit, rồi verify hiệu ứng thật (URL có đổi không). Playwright `click()` pass bất
+   cứ khi nào nó click trúng *một cái gì đó*, nên một navigation chưa được quan sát qua selector
+   đó không tính là verified.
+4. **Tạo test data nếu thiếu**, qua UI, và bake luôn setup đó vào spec để lần chạy sau tự đứng
+   được.
+5. **Emit spec** từ đúng những gì đã chạy.
 
-Cụ thể, qua CLI `browser-harness` gắn vào một Chrome đã đăng nhập sẵn:
+Kết quả: một spec Playwright + TypeScript chạy green ngay, không cần heal pass.
 
-1. **Thực hiện từng bước của test case trên app thật.** Không mô phỏng, không dry-run.
-2. **Tìm phần tử qua accessibility tree, rồi xác minh.** Thứ tự ưu tiên selector là cố định và
-   được ghi lại theo strategy: `data-testid` → ARIA role + tên → label → CSS ổn định. Không bao giờ
-   `:nth-child`, không bao giờ class trần, không bao giờ selector dựa vào cấu trúc DOM.
-3. **Xác minh *selector*, không phải *toạ độ*.** Đây là chỗ tinh tế nhất và cũng là chỗ dễ sai
-   nhất. Click theo toạ độ trúng vào bất kỳ phần tử nào nằm ở điểm đó — thường là một thẻ `<a>` bên
-   trong — trong khi spec sẽ click **selector đã ghi**, mà tâm của nó có thể là một container mà
-   app không phản ứng. Nên mỗi thao tác được dispatch trực tiếp trên chính selector sắp đưa vào
-   spec, rồi kiểm tra hiệu ứng thật (URL có đổi không). Một bước điều hướng chưa được nhìn thấy xảy
-   ra qua selector đó thì không được tính là đã xác minh.
-4. **Tự tạo dữ liệu test nếu chưa có.** Nếu case cần "một claim đang ở trạng thái nháp" mà hệ thống
-   không có, agent tạo nó qua UI rồi ghi luôn bước tạo đó vào spec — để lần chạy sau spec vẫn tự
-   đứng được, không phụ thuộc vào dữ liệu tình cờ tồn tại hôm nay.
-5. **Chỉ khi đó mới emit spec**, dựng từ đúng những gì đã chạy được.
+**Mode `blind` vẫn giữ lại.** Sinh từ Knowledge Base + Project Config, rồi self-heal: feed failure
+kèm live DOM ngược lại, fix có mục tiêu, re-run — tối đa `heal_max_attempts` = 3, Playwright
+timeout rút ngắn, chạy trên model rẻ. Một heal pass có grounding DOM ghi entry
+**verified-at-runtime** ngược vào Knowledge Base.
 
-Kết quả là một file Playwright + TypeScript chạy xanh ngay, không cần một lượt heal nào.
+**Placeholder gate chặn trước execution.** Spec sinh ra bị pre-flight check: selector bịa, `TODO`
+stub và URL placeholder đều bị chặn. Verdict `passed` / `blocked` / `rejected`. Spec `blocked`
+surface lên UI là *cần grounding* — thường là rebuild KB hoặc chạy một exploration pass — thay vì
+fail lặng lẽ lúc execution và bị đọc nhầm thành product defect.
 
-**Chế độ `blind` vẫn còn, và vẫn có ích.** Với ứng dụng chưa chạy được hoặc case đơn giản, Q-Agent
-sinh spec từ Knowledge Base rồi self-heal: đưa lỗi kèm DOM sống ngược lại cho Claude, sửa có mục
-tiêu, chạy lại — tối đa 3 lượt, timeout rút ngắn, chạy trên model rẻ. Một lượt heal thành công có
-bám DOM sẽ ghi ngược selector **verified-at-runtime** vào Knowledge Base, nên lần sinh spec sau đã
-khôn hơn.
-
-**Và có một cửa chặn trước khi chạy.** Spec sinh ra đi qua một *placeholder gate* — cửa kiểm tra
-trước khi thực thi — từ chối selector bịa, stub `TODO` và URL giữ chỗ **trước khi** spec được phép
-chạy; chất lượng spec còn có skill `automation-reviewer` soi riêng. Verdict của gate là
-`passed` / `blocked` / `rejected`. Một spec `blocked` hiện lên UI như "cần grounding thêm" — thường
-là dựng lại KB hoặc chạy một lượt exploration — thay vì lặng lẽ fail lúc execution và bị đọc nhầm
-thành lỗi sản phẩm.
-
-Cả ba chế độ đều bị chặn bằng trần chi phí, trần số lượt và timeout theo đồng hồ.
+Cả ba mode đều bounded bằng cost ceiling, turn cap và wall-clock timeout.
 
 ---
 
-## 3. Knowledge Base dựng từ mã nguồn thật
+## 3. Knowledge Base build từ source
 
-Trước khi sinh bất cứ thứ gì, `project-bootstrap` **đọc source thật của repo** — clone về nếu cần —
-để rút ra stack, kiến trúc, domain, route, selector thật, luồng đăng nhập, môi trường, và các Page
-Object / fixture có thể tái dùng. Kết quả lưu thành `knowledge.md` + `knowledge.json`, **theo từng
-repository**, dựng một lần rồi mọi hành động AI phía sau đọc lại thay vì đọc lại code từ đầu.
+`project-bootstrap` traverse source thật của repository — clone nếu cần — để rút ra stack, kiến
+trúc, domain, route, selector, auth flow, environment, và các Page Object / fixture tái dùng được.
+Output là `knowledge.md` + `knowledge.json`, **per repository**.
 
-Điều này đổi bản chất của prompt. `requirement-analyst`, `test-case-generator` và
-`automation-generator` không nhận một mô tả chung chung về "ứng dụng web"; chúng nhận base URL
-thật, route thật, selector thật và test account thật của chính project đó. Đó là lý do output dùng
-được gần như ngay, thay vì đầy chỗ trống cần điền tay.
+Điều này đổi bản chất của prompt phía sau. `requirement-analyst`, `test-case-generator` và
+`automation-generator` không nhận mô tả chung chung; chúng nhận base URL, route, selector và test
+account thật của chính project đó.
 
-Knowledge Base còn **giàu lên theo thời gian**: mỗi selector được xác minh trên app đang chạy được
-đóng dấu thời gian kèm strategy đã hoạt động, và mục verified-at-runtime luôn thắng mục suy ra từ
-source, không bị lần merge sau ghi đè.
+KB **giàu lên theo thời gian**: mỗi selector verify được trên app đang chạy được stamp timestamp
+kèm strategy đã hoạt động, và entry verified-at-runtime thắng entry suy ra từ source, không bị merge
+sau ghi đè.
 
-Một KB dựng đầy đủ tốn khoảng 20 phút, nên hub cho **clone** nó: admin dựng project mẫu trong
-namespace dùng chung, thành viên clone cả `ProjectConfig`, test account đã mã hoá và toàn bộ
-artefact trên đĩa về scope của mình — thay vì mỗi người chạy lại 20 phút đó.
-
----
-
-## 4. Con người vẫn là người ký
-
-Suite này cố tình không tự động hoá đến cùng. Có ba cửa mà một con người phải mở:
-
-- **Review Center.** Test case do AI sinh ra vào trạng thái `pending`. Chỉ case được
-  **approved** mới đi tiếp sang bước tạo trên provider và sang automation. Reviewer sửa được
-  cả automation type của từng case (`Playwright` / `Selenium` / `Cypress` / `Manual`) — case
-  `Manual` không bao giờ bị đem đi sinh spec.
-- **Create & Link có chế độ dry-run.** Bước đẩy test case lên Azure DevOps có **local mode**:
-  ghi lại phía mình, không viết gì lên provider. Không ai phải chọn giữa "thử sản phẩm" và "làm
-  bẩn project thật của khách hàng".
-- **Comment trước khi publish.** Kết quả trả về ticket là một comment được chuẩn bị và xem trước,
-  cùng với mapping trạng thái cấu hình được, chứ không phải một lần ghi thẳng.
-
-Mỗi lần fail còn được `execution-analyzer` phân loại: `test_defect` (spec sai) / `product_defect`
-(app sai) / `flaky` / `environment` / `timeout`. Việc này giữ cho một spec hỏng không bị đọc thành
-một bug sản phẩm — thứ làm hỏng niềm tin vào báo cáo tự động nhanh hơn bất cứ điều gì khác.
+Một lượt build đầy đủ tốn khoảng 20 phút, nên hub hỗ trợ **clone**: admin build project mẫu trong
+shared namespace, member clone `Project` + `ProjectConfig` (kèm test account đã encrypt) + các
+`ProjectKnowledge` row **và** artefact trên đĩa (`knowledge/`, `repos/`, `auth/`) về scope của
+mình, re-stamp `owner_id`.
 
 ---
 
-## 5. Bí mật nằm đúng chỗ nó phải nằm
+## 4. Ba approval gate do người giữ
 
-Ba loại bí mật, ba nơi ở khác nhau, và không cái nào đi lang thang.
+- **Review Center.** Test case sinh ra ở trạng thái `pending`; chỉ case `approved` đi tiếp sang
+  create-and-link và automation. Reviewer sửa được automation type của từng case
+  (`Playwright` / `Selenium` / `Cypress` / `Manual`) — case `Manual` không bao giờ được đem sinh
+  spec.
+- **Create & Link có local mode.** Bước push test case lên provider chạy được ở chế độ dry-run:
+  ghi local, không write lên provider.
+- **Comment preview.** Kết quả trả về ticket là comment được chuẩn bị và preview trước, kèm status
+  mapping cấu hình được, không phải một lần write thẳng.
 
-**PAT của provider không rời khỏi hub.** Hub giữ token Azure DevOps / Jira / GitHub đã mã hoá và
-**tự proxy** lời gọi provider. Agent không bao giờ cầm PAT. Endpoint trả về `hasPat: true`, không
-bao giờ trả về chính PAT.
-
-**Cookie đăng nhập của tester không rời khỏi máy tester.** Ứng dụng nằm sau SSO/MFA cần một con
-người đăng nhập thật trong một trình duyệt có giao diện. **Local Agent** — một app Node chạy trên
-máy tester — thực thi spec ngay tại đó; cookie và `storageState` ở lại trên thiết bị, chỉ có spec,
-kết quả và evidence đi ngược về server. Máy đó tự chứng minh danh tính bằng **device pairing**: app
-phát một mã ghép đôi ngắn hạn, CLI đổi lấy token lâu dài của riêng thiết bị, server chỉ giữ bản
-hash, và admin thu hồi được bất cứ lúc nào.
-
-**Credential Claude đi ra ngoài đúng một lần, và được ghi nhận.** Đây là ngoại lệ duy nhất và nó
-được viết thành văn bản, vì Claude CLI cần credential trên đĩa mới chạy được. Hub thu hẹp nó lại
-hết mức: agent trỏ `CLAUDE_SECURESTORAGE_CONFIG_DIR` — biến hẹp, chỉ di dời đúng file credential —
-chứ không phải `CLAUDE_CONFIG_DIR`, vốn sẽ kéo theo cả `skills/`, `settings.json` và `projects/`.
-
-**Và một run dài hơn tuổi thọ của token.** Access token của agent sống 15 phút; riêng bootstrap
-Claude của Q-Agent đã có timeout 1200 giây, một run đầy đủ còn dài hơn. Nên
-[ADR 0009](adr/0009-run-scoped-credential-grants.md) đưa ra **run-scoped credential grant**: một
-giấy phép gắn với đúng một run, và nó chỉ với tới được **ba** route trong toàn bộ hub — lấy
-credential, ghi lại token đã gia hạn, ghi usage. Điều này không được kiểm tra bằng một câu `if`
-trong hàm xử lý grant, mà bằng chính cách wiring: không chỗ nào khác trong hub phụ thuộc vào
-`require_credential_grant`, và audience của grant không bao giờ đăng ký được, nên
-`require_principal` và `require_user` đều từ chối nó.
-
-**Không bao giờ fail-open.** Không có cấu hình nào trong hub mà "xác thực không dùng được" dẫn tới
-"cho vào". Trang landing cũng theo quy tắc đó: đọc lỗi trạng thái sản phẩm nghĩa là **đóng**, chứ
-không phải mở.
-
-Mọi việc đáng ghi đều vào **audit log** append-only: category, người thực hiện, hành động, đối
-tượng, IP, trạng thái, mã run.
+Mỗi failure được `execution-analyzer` gán **failure class**: `test_defect` / `product_defect` /
+`flaky` / `environment` / `timeout`. Việc này giữ cho một spec sai không bị đọc thành product bug.
 
 ---
 
-## 6. Một lần đăng nhập, một địa chỉ, ba ứng dụng
+## 5. Kiến trúc bảo mật
 
-Người dùng đăng nhập ở EmeHub rồi bấm Launch — không có màn đăng nhập thứ hai.
+Ba loại secret, ba boundary khác nhau, mỗi loại có một cơ chế cưỡng chế riêng.
 
-Cơ chế là hub mint một access token có audience gắn đúng một agent, ký bằng khoá của hub; agent tự
-xác thực token cục bộ, **không gọi ngược về hub theo từng request**
-([ADR 0008](adr/0008-cross-app-session-handoff.md)). Mỗi access token mang theo `sid` — id của
-phiên — nên **thu hồi một phiên là đăng xuất thiết bị đó khỏi *mọi* agent**, không phải ba lần thu
-hồi ở ba nơi.
+### 5.1. Provider PAT — không rời khỏi hub
 
-Và cả suite nằm sau **một origin duy nhất**, agent gắn theo path
+Hub lưu PAT của Azure DevOps / Jira / GitHub encrypted at rest và **proxy mọi provider call**.
+Agent không bao giờ nhận PAT. Endpoint trả `hasPat: true`, không bao giờ trả PAT.
+
+### 5.2. Claude credential — exception duy nhất, và nó được thu hẹp
+
+Claude CLI cần credential trên disk mới chạy được, nên đây là secret duy nhất hub cố ý phát ra.
+Hai cơ chế giới hạn thiệt hại:
+
+**Biến môi trường hẹp.** Agent trỏ `CLAUDE_SECURESTORAGE_CONFIG_DIR` — biến chỉ relocate đúng file
+credential — chứ không phải `CLAUDE_CONFIG_DIR`, vốn kéo theo cả `skills/`, `settings.json` và
+`projects/`.
+
+**Run-scoped credential grant.** Agent access token có TTL 15 phút, trong khi riêng Claude
+bootstrap của Q-Agent đã có timeout 1200 s và một run đầy đủ còn dài hơn — nên token không phải là
+cơ chế đúng cho background work. [ADR 0009](adr/0009-run-scoped-credential-grants.md) đưa ra grant
+gắn với đúng một run, và grant đó **chỉ reach được ba route** trong toàn hub:
+
+| Route | Mục đích |
+|---|---|
+| `GET /credentials/claude/resolve` | Lấy credential để chạy |
+| `PUT /credentials/claude/refreshed` | Ghi lại token CLI đã renew |
+| `POST /credentials/claude/usage` | Ghi usage của một call đã xong |
+
+Giới hạn này **không** được cưỡng chế bằng một `if` trong hàm xử lý grant, mà bằng chính wiring:
+không route nào khác trong hub depend vào `require_credential_grant`, và audience của grant không
+bao giờ registerable, nên `require_principal` và `require_user` đều reject nó. Thêm một route mới
+không vô tình mở rộng phạm vi của grant.
+
+### 5.3. Browser session của tester — không rời khỏi máy tester
+
+App sau SSO/MFA cần một người đăng nhập thật trong headed browser. **Local Agent** — app Node chạy
+trên máy tester — execute spec tại chỗ; cookie và `storageState` ở lại trên device, chỉ spec, kết
+quả và evidence đi ngược về server.
+
+Device tự chứng minh identity qua **device pairing**: app mint một pairing code ngắn hạn, CLI đổi
+lấy token lâu dài per-device lưu tại `~/.qagent-agent/config.json`, server chỉ giữ hash trên một
+row `AgentDevice` thuộc về user đó. Mọi agent job scope theo device owner; token revoke được từ
+app.
+
+### 5.4. Hai key, không bao giờ dẫn xuất từ nhau
+
+`EMEHUB_JWT_SECRET` ký JWT; `EMEHUB_ENCRYPTION_KEY` encrypt data at rest
+([ADR 0005](adr/0005-secret-and-key-management.md)). Thiếu một trong hai thì API **refuse to
+start** — không có fallback tự sinh, vì một encryption key sinh lúc boot sẽ tạo ra các row không
+decrypt được sau restart kế tiếp. Q-Agent gộp hai giá trị này làm một; ADR 0005 tồn tại để không
+lặp lại.
+
+### 5.5. Không fail-open
+
+Không có configuration nào trong hub mà "authentication không khả dụng" dẫn tới "cho vào". Landing
+page theo cùng quy tắc: đọc lỗi product availability nghĩa là **đóng**. Riêng launch state degrade
+theo chiều ngược lại — một nút Launch chết tốt hơn một màn Overview trắng.
+
+Mọi thao tác đáng ghi đều vào **audit log** append-only: category, actor + actor type, action,
+target, IP, status, run code.
+
+---
+
+## 6. Một session, một origin, ba ứng dụng
+
+Hub mint access token audience-scoped cho đúng một agent, ký bằng key của hub; agent validate
+locally, **không call ngược về hub theo từng request**
+([ADR 0008](adr/0008-cross-app-session-handoff.md)).
+
+Mỗi access token mang `sid` — session id — nên **revoke một session là log out device đó khỏi mọi
+agent**, không phải ba lần revoke ở ba nơi.
+
+Cả suite nằm sau một origin, agent mount theo path
 ([ADR 0010](adr/0010-one-origin-for-the-suite.md)): `hub.chuongnd.click`,
-`hub.chuongnd.click/qagent/`, `hub.chuongnd.click/dagent`. Thanh địa chỉ không đổi khi chuyển
-ứng dụng. Nó đọc ra như một sản phẩm, vì nó là một sản phẩm.
+`hub.chuongnd.click/qagent/`, `hub.chuongnd.click/dagent`.
 
 ---
 
-## 7. Cấu hình một lần, ba ứng dụng cùng đọc
+## 7. Hub là source of truth, với một boundary được ghi rõ
 
-Hub là **nguồn sự thật** cho danh tính và cấu hình dùng chung
-([ADR 0001](adr/0001-emehub-is-the-source-of-truth.md)). Provider connection, project, repository,
-base URL, môi trường, test account, credential — khai báo một lần ở hub, agent đọc xuống.
+Provider connection, project, repository, base URL, environment, test account, credential — khai
+báo một lần ở hub, agent đọc xuống ([ADR 0001](adr/0001-emehub-is-the-source-of-truth.md)).
 
-Ranh giới được giữ chặt và có văn bản: **hub chỉ dựng những artefact mà nó đã sở hữu toàn bộ đầu
-vào** — hôm nay là knowledge base, và không gì khác
-([ADR 0007](adr/0007-knowledge-builds-run-on-the-hub.md)). Hub không sinh test, không sinh code,
-không lái trình duyệt, không tạo PR. Việc đó là việc của agent. Một tính năng thêm hành vi nghiệp
-vụ ngoài carve-out đó thì nó thuộc về agent, không thuộc về hub.
+Boundary được giữ chặt: **hub chỉ build những artefact mà nó đã sở hữu toàn bộ input** — hôm nay
+là knowledge base, và không gì khác ([ADR 0007](adr/0007-knowledge-builds-run-on-the-hub.md)). Hub
+không sinh test, không sinh code, không drive browser, không tạo PR. Một thay đổi thêm domain
+behaviour ngoài carve-out đó thuộc về agent.
 
-Hợp đồng giữa hub và agent là một tài liệu thật —
-[INTEGRATION.md](INTEGRATION.md), 47 KB — và đổi hợp đồng thì phải cập nhật nó trong cùng PR.
-
----
-
-## 8. Chúng tôi tự khai những gì chưa làm
-
-[KNOWN-GAPS.md](KNOWN-GAPS.md) liệt kê thẳng: tính năng nào đã bị **gỡ khỏi UI** vì chưa thật,
-tính năng nào đang ẩn sau feature flag, chỗ nào còn nợ kỹ thuật, và cả những dòng trong tài liệu cũ
-mà chúng tôi kiểm chứng lại rồi phát hiện là **sai**.
-
-Đây không phải một mục khiêm tốn hình thức. Nó là một quyết định kỹ thuật, ghi trong kế hoạch dọn
-dẹp: **một nút bấm trông như chạy được nhưng không làm gì thì phá uy tín nhiều hơn một tính năng
-không có mặt**. Trong đợt dọn trước khi nộp, chúng tôi đã gỡ đúng những nút như vậy — trong đó có
-một modal "Add knowledge" toast báo thành công mà không hề POST, và một trang Roles dựng trên bốn
-role tự nghĩ ra.
-
-Một sản phẩm nói được điều nó chưa làm là một sản phẩm đáng tin ở những điều nó nói là đã làm.
+Contract giữa hub và agent là một document thật — [INTEGRATION.md](INTEGRATION.md) — và đổi
+contract thì phải update nó trong cùng PR.
 
 ---
 
 ## Con số
 
-Đếm được từ repo tại thời điểm viết:
+Đếm trực tiếp từ repo tại thời điểm viết:
 
 | | |
 |---|---|
-| Test backend của EmeHub | 788 hàm test |
-| Test backend của Q-Agent | 1358 hàm test |
-| Router API của hub | 14 |
-| Màn hình UI của hub, chạy trên endpoint thật | 11 |
-| Skill Claude chuyên biệt trong Q-Agent | 14 |
-| ADR đã chốt trong hub | 12 |
-| Ứng dụng trong suite | 3 (EmeHub, Q-Agent, D-Agent) |
+| Test backend EmeHub | 788 hàm test |
+| Test backend Q-Agent | 1358 hàm test |
+| API router của hub | 14 |
+| Màn hình UI của hub chạy trên endpoint thật | 11 |
+| Claude skill chuyên biệt trong Q-Agent | 14 |
+| ADR đã accept trong hub | 12 |
 
-Mỗi skill là một file `SKILL.md` riêng — phương pháp, luật chất lượng, template output — được
-backend nạp làm **system prompt** cho đúng hành động đó, trong khi prompt của lời gọi vẫn ghim chính
-xác hình dạng JSON mà backend sẽ parse. Không có prompt nào nằm rải rác trong code.
+Mỗi skill là một `SKILL.md` — methodology, quality rule, output template — được backend inject làm
+**system prompt** cho đúng action đó, trong khi prompt của caller vẫn pin chính xác shape JSON mà
+backend parse.
 
 ---
 
 ## Đọc tiếp
 
-- [USER-GUIDE.md](USER-GUIDE.md) — dùng sản phẩm từ đăng nhập tới khi trả kết quả về ticket
-- [KNOWN-GAPS.md](KNOWN-GAPS.md) — những gì đã gỡ và những gì chưa làm
-- [INTEGRATION.md](INTEGRATION.md) — hợp đồng giữa hub và agent
-- [ROADMAP.md](ROADMAP.md) — đang ở phase nào
+- [USER-GUIDE.md](USER-GUIDE.md) — dùng sản phẩm, đầu tới cuối
+- [INTEGRATION.md](INTEGRATION.md) — contract giữa hub và agent
+- [CONTEXT.md](CONTEXT.md) — vocabulary dùng chung
