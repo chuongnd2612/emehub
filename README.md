@@ -2,6 +2,8 @@
 
 > One workspace for every EMESOFT agent.
 
+*[Bản tiếng Việt](README.vi.md) — with the live demo link and test account.*
+
 EmeHub is the **source of truth** for everything the EMESOFT agent suite shares: who you are,
 which Claude account you use, which Azure DevOps / GitHub / Jira org you're connected to,
 which projects and repositories exist, and what we know about them. The specialised agents —
