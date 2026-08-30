@@ -8,13 +8,12 @@
 
 ## Dùng thử ngay
 
-Ba ứng dụng nằm sau một origin. Bắt đầu từ EmeHub — đăng nhập một lần dùng được cả ba.
+Hai ứng dụng nằm sau một origin. Bắt đầu từ EmeHub — đăng nhập một lần dùng được cả hai.
 
 | Ứng dụng | Đường dẫn |
 |---|---|
 | **EmeHub** — hub: identity, credential, project | <https://hub.chuongnd.click> |
 | **Q-Agent** — agent cho QC/QA | <https://hub.chuongnd.click/qagent/> |
-| **D-Agent** — agent cho DEV | <https://hub.chuongnd.click/dagent> |
 
 **Tài khoản demo**
 
@@ -34,8 +33,14 @@ Ba ứng dụng nằm sau một origin. Bắt đầu từ EmeHub — đăng nh�
 EmeHub là **source of truth** cho mọi thứ suite dùng chung: identity, Claude credential, provider
 connection, project, repository và knowledge base.
 
-**Q-Agent** (QA) và **D-Agent** (dev) thôi tự giữ những thứ đó và đọc chúng từ hub qua HTTP, xác
-thực bằng token do hub mint. Hub cũng là cửa trước: đăng nhập một lần, thấy cả suite, launch agent.
+Agent thôi tự giữ những thứ đó và đọc chúng từ hub qua HTTP, xác thực bằng token do hub mint. Hôm
+nay agent đó là **Q-Agent** (QA). Hub cũng là cửa trước: đăng nhập một lần, thấy cả suite, launch
+agent.
+
+**Hub được thiết kế cho nhiều agent, không chỉ một.** Contract — token claim, config endpoint,
+degradation behaviour — là một document riêng ([INTEGRATION.md](docs/INTEGRATION.md)), nên một agent
+mới plug vào bằng cách implement contract đó chứ không phải bằng cách sửa hub. **D-Agent** (dev) và
+**B-Agent** (BA) là hai ví dụ đang trên đường đi theo lối này.
 
 ```
                     ┌─────────────────────────────┐
@@ -48,12 +53,13 @@ thực bằng token do hub mint. Hub cũng là cửa trước: đăng nhập m�
                     └──────┬───────────────┬──────┘
                   JWT +    │               │    JWT +
                   config   │               │    config
-                    ┌──────┴──────┐ ┌──────┴──────┐
-                    │   Q-Agent   │ │   D-Agent   │
-                    │ run · spec  │ │ execution   │
-                    │ evidence    │ │ worktree    │
-                    │ execution   │ │ skill       │
-                    └─────────────┘ └─────────────┘
+                    ┌──────┴──────┐ ┌──────┴───────┐
+                    │   Q-Agent   │ │  agent kế    │
+                    │ run · spec  │ │  tiếp        │
+                    │ evidence    │ │  (D-Agent,   │
+                    │ execution   │ │   B-Agent…)  │
+                    └─────────────┘ └──────────────┘
+                         hôm nay        cùng contract
 ```
 
 **Boundary của hub được giữ chặt:** hub chỉ build những artefact mà nó đã sở hữu toàn bộ input —
