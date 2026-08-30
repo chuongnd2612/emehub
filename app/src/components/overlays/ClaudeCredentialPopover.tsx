@@ -10,6 +10,16 @@
 // The chip used to answer neither. It named a hardcoded model and reported only
 // which of the two credentials was selected.
 //
+// ## What the chip itself says
+//
+// `Shared` / `Personal` / `Not set` — the account a run would authenticate
+// with, matching QAgent's chip word for word (#240). The model it used to name
+// is one click away in the panel header, with its context window. Of the two,
+// the account is the one a member can have set wrongly and the one that differs
+// from the person beside them; the model is a setting they chose. The label is
+// keyed on the hub-resolved `mode`, never on the `source` control input, which
+// collapses "none" into "shared" — see the note beside `accountMode`.
+//
 // ## What the hub shows, and what it still does not
 //
 // This block used to say the plan-usage percentage was unobservable here,
@@ -90,6 +100,7 @@ import {
   type ClaudeCredentialMeta,
   type ClaudeCredentialState,
   type ClaudeUsage,
+  type CredentialMode,
   type CredentialSource,
   type CredentialStatus,
   type ModelPreferences,
@@ -158,6 +169,30 @@ const STATUS_TITLE = {
 } as const satisfies Record<ChipState, string>;
 
 /**
+ * The chip's label — which Claude ACCOUNT a run would authenticate with, which
+ * is the thing a member can pick wrongly and the thing that differs from the
+ * person next to them. The model it used to name answers a different question
+ * and is still one click away, in the panel header.
+ *
+ * The three words are QAgent's verbatim (`ClaudeStatsButton.tsx`), because both
+ * products read the same hub-resolved mode and must not drift in how they say
+ * it. Keyed on {@link CredentialMode} — never on `source`, which collapses
+ * "none" into "shared" and would label an account with no credential "Shared".
+ */
+const ACCOUNT_LABEL = {
+  own: "Personal",
+  shared: "Shared",
+  none: "Not set",
+} as const satisfies Record<CredentialMode, string>;
+
+/** The account half of the chip's `title` / accessible name. */
+const ACCOUNT_TITLE = {
+  own: "Runs use your personal Claude account",
+  shared: "Runs use the shared Claude account",
+  none: "No Claude credential attached — open to add one",
+} as const satisfies Record<CredentialMode, string>;
+
+/**
  * Typed one wider than the two options it lists, so the control can be given a
  * value that matches neither and render with nothing selected. `source` falls
  * back to "shared" for any mode that is not "own" — including "none" — so
@@ -179,10 +214,10 @@ const TEST_SCOPE_NOTE =
   "The hub checks the stored credential decrypts, parses, and either has not " +
   "expired or carries a refresh token. It never calls Claude on your behalf.";
 
-/** Chip label — "Claude Opus 5" does not fit, "Opus 5" does. */
-function shortModel(label: string): string {
-  return label.replace(/^Claude\s+/i, "").trim() || label;
-}
+// `shortModel()` lived here to trim "Claude Opus 5" down to "Opus 5" for the
+// chip, and the chip was its only caller. The chip now names the account, and
+// the panel header renders the full `modelName` — it has the width for it and
+// always has — so the helper had nothing left to shorten.
 
 export function ClaudeCredentialChip() {
   const navigate = useNavigate();
@@ -342,6 +377,20 @@ export function ClaudeCredentialChip() {
 
   const chipState: ChipState = meta ? statusOfCredential(meta) : "none";
 
+  // The account the chip names. Read off the hub-resolved `mode`, NOT off
+  // `source` above — `source` is a two-valued control input that answers
+  // "shared" for every mode that is not "own", "none" included, so a member
+  // with no credential at all would be told, confidently and wrongly, that
+  // their runs use the shared account. A resolved mode with no metadata behind
+  // it is likewise no credential, so it falls to "none" as well.
+  const accountMode: CredentialMode = meta ? (state?.mode ?? "none") : "none";
+  // Not ready means no answer yet; the label is a skeleton, not a claim.
+  const chipTitle = ready
+    ? accountMode === "none"
+      ? ACCOUNT_TITLE.none
+      : `${ACCOUNT_TITLE[accountMode]} · ${STATUS_TITLE[chipState]}`
+    : "Loading Claude status…";
+
   const model = prefs ? modelOption(prefs.mainModel) : null;
   // An id the hub knows and this build does not still renders as itself, which
   // is more use than an empty control.
@@ -403,7 +452,11 @@ export function ClaudeCredentialChip() {
         // Before the first answer there is nothing to open — and no honest
         // status to show either, which is why the dot is a placeholder too.
         disabled={!ready}
-        title={ready ? STATUS_TITLE[chipState] : "Loading Claude status…"}
+        // The visible label is one word, so on its own it is not an accessible
+        // name — the name has to say it is the Claude account, and what the dot
+        // beside it means.
+        aria-label={chipTitle}
+        title={chipTitle}
         onClick={() => setClaudeOpen(!open)}
         className={cn(
           "flex h-[38px] shrink-0 cursor-pointer items-center gap-[9px] rounded-[12px]",
@@ -423,8 +476,8 @@ export function ClaudeCredentialChip() {
         )}
         <ClaudeMark size={14} className="shrink-0 text-claude" />
         {ready ? (
-          <span className="max-w-[110px] truncate text-[12.5px] font-semibold text-txt3">
-            {shortModel(modelName)}
+          <span className="shrink-0 whitespace-nowrap text-[12.5px] font-semibold text-txt3">
+            {ACCOUNT_LABEL[accountMode]}
           </span>
         ) : (
           <Skeleton className="h-[11px] w-[62px]" />
