@@ -3,6 +3,8 @@
 **Đội:** CLGT-EAM · **Thành viên:** Nguyễn Đình Chương · Đào Văn Linh · Đồng Huỳnh Giao
 **Sản phẩm:** EmeHub — identity provider và configuration store cho bộ agent AI nội bộ EMESOFT
 **Truy cập:** `https://hub.chuongnd.click` · Q-Agent: `https://hub.chuongnd.click/qagent/`
+**Source code:** [`chuongnd2612/emehub`](https://github.com/chuongnd2612/emehub) ·
+[`chuongnd2612/q-agent`](https://github.com/chuongnd2612/q-agent) — cả hai public, branch `master`
 
 Bộ tài liệu này **standalone** — đọc từ đầu tới cuối là đủ, không cần đọc tài liệu kỹ thuật nào
 khác trong repo.

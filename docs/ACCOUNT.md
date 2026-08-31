@@ -27,12 +27,32 @@ Agent thêm vào sau — D-Agent cho DEV, B-Agent cho BA — sẽ chiếm một 
 | Admin | `hub.admin@emesoft.net` | `010203x@X` |
 | Member | `demo.user1@emesoft.net` | `Demo@123` |
 
-Dùng tài khoản nào cho việc gì:
-
-| Xem thứ gì | Đăng nhập bằng |
-|---|---|
-| Integrations, Claude credential dùng chung, User Management, audit log | **Admin** — những màn này yêu cầu role `admin` |
-| Project riêng của một thành viên, clone project từ shared namespace, credential Claude cá nhân | **Member** — đúng góc nhìn của một QC/QA |
-
 Cả hai tài khoản dùng chung một đường đăng nhập ở EmeHub và đều mở được Q-Agent mà không phải
 đăng nhập lại.
+
+---
+
+## 3. Source code
+
+| Repository | Ứng dụng | Trạng thái |
+|---|---|---|
+| [`chuongnd2612/emehub`](https://github.com/chuongnd2612/emehub) | **EmeHub** — hub: identity, credential, project, knowledge base | Public · branch `master` |
+| [`chuongnd2612/q-agent`](https://github.com/chuongnd2612/q-agent) | **Q-Agent** — agent cho QC/QA | Public · branch `master` |
+
+Hai repository tách nhau và tích hợp qua HTTP, không phải monorepo — contract giữa chúng là một
+tài liệu thật, `docs/INTEGRATION.md` trong repo hub.
+
+Điểm vào khi đọc code:
+
+| Muốn xem | Ở đâu |
+|---|---|
+| Bộ tài liệu dự thi | `emehub/docs/product/` |
+| Quyết định kiến trúc kèm lý do | `emehub/docs/adr/` |
+| Contract giữa hub và agent | `emehub/docs/INTEGRATION.md` |
+| Backend hub (FastAPI) | `emehub/api/app/` |
+| Frontend hub (React) | `emehub/app/src/` |
+| Skill của Q-Agent | `q-agent/skills/` |
+
+> Repo của **D-Agent** (`DaoLinh98/ticket-executor`) đang private và **không nằm trong scope bản
+> dự thi** — D-Agent là ví dụ về agent tương lai gắn vào cùng contract, không phải ứng dụng thứ ba
+> đang chạy.
