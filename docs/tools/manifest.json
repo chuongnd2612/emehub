@@ -1,22 +1,72 @@
 [
   {
-    "source": "docs/ACCOUNT.md",
-    "output": "EmeHub - Thong tin du an",
-    "title": "EmeHub — Thông tin dự án"
+    "source": "docs/product/README.md",
+    "output": "00 - Muc luc",
+    "title": "EmeHub — Bộ tài liệu dự thi AI Hackathon"
   },
   {
-    "source": "README.vi.md",
-    "output": "EmeHub - Tong quan san pham",
-    "title": "EmeHub — Tổng quan sản phẩm"
+    "source": "docs/product/01-PRODUCT-BRIEF.md",
+    "output": "01 - Product Brief",
+    "title": "EmeHub — Product Brief"
   },
   {
-    "source": "docs/USER-GUIDE.md",
-    "output": "EmeHub - Huong dan su dung",
-    "title": "EmeHub — Hướng dẫn sử dụng"
+    "source": "docs/product/02-USER-PROBLEM.md",
+    "output": "02 - User and Problem Analysis",
+    "title": "EmeHub — User & Problem Analysis"
+  },
+  {
+    "source": "docs/product/03-PRD.md",
+    "output": "03 - PRD",
+    "title": "EmeHub — Product Requirements Document"
+  },
+  {
+    "source": "docs/product/04-USER-FLOW.md",
+    "output": "04 - User Flow",
+    "title": "EmeHub — User Flow"
+  },
+  {
+    "source": "docs/product/05-AI-SOLUTION.md",
+    "output": "05 - AI Solution Specification",
+    "title": "EmeHub — AI Solution Specification"
+  },
+  {
+    "source": "docs/product/06-ARCHITECTURE.md",
+    "output": "06 - AI and System Architecture",
+    "title": "EmeHub — AI / System Architecture"
+  },
+  {
+    "source": "docs/product/07-AI-EVALUATION.md",
+    "output": "07 - AI Evaluation",
+    "title": "EmeHub — AI Evaluation"
+  },
+  {
+    "source": "docs/product/08-ROADMAP.md",
+    "output": "08 - Product Roadmap",
+    "title": "EmeHub — Product Roadmap"
+  },
+  {
+    "source": "docs/product/09-SUCCESS-METRICS.md",
+    "output": "09 - Success Metrics and Business Impact",
+    "title": "EmeHub — Success Metrics & Business Impact"
+  },
+  {
+    "source": "docs/product/10-DEMO-SCRIPT.md",
+    "output": "10 - Demo Script",
+    "title": "EmeHub — Demo Script"
+  },
+  {
+    "source": "docs/product/11-PITCH-DECK.md",
+    "output": "11 - Pitch Deck",
+    "title": "EmeHub — Pitch Deck"
   },
   {
     "source": "docs/SELLING-POINTS.md",
-    "output": "EmeHub - Diem noi bat",
+    "output": "12 - Diem noi bat",
     "title": "EmeHub — Điểm nổi bật"
+  },
+  {
+    "source": "docs/ACCOUNT.md",
+    "output": "13 - Thong tin du an",
+    "title": "EmeHub — Thông tin dự án"
   }
 ]
