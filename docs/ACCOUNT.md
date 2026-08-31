@@ -52,7 +52,3 @@ tài liệu thật, `docs/INTEGRATION.md` trong repo hub.
 | Backend hub (FastAPI) | `emehub/api/app/` |
 | Frontend hub (React) | `emehub/app/src/` |
 | Skill của Q-Agent | `q-agent/skills/` |
-
-> Repo của **D-Agent** (`DaoLinh98/ticket-executor`) đang private và **không nằm trong scope bản
-> dự thi** — D-Agent là ví dụ về agent tương lai gắn vào cùng contract, không phải ứng dụng thứ ba
-> đang chạy.
