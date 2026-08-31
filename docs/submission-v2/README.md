@@ -4,6 +4,11 @@ Bốn tài liệu ở đây là **bộ dự thi bản trước [PR #257](https:/
 giữ lại nguyên vẹn. Byte-identical với `docs/submission/` tại commit `234d150` — không rebuild,
 không sửa.
 
+> **Một ngoại lệ:** `EmeHub - Thong tin du an` được build lại khi `docs/ACCOUNT.md` thêm tài khoản
+> demo member. Thông tin đăng nhập mà **không** khớp giữa hai bộ tài liệu đưa cho Ban Giám khảo là
+> đúng cái drift mà `build-docs.ps1` tồn tại để chấm dứt, nên tài liệu này ưu tiên khớp nguồn hơn
+> là đóng băng bytes. Ba tài liệu còn lại vẫn nguyên bản `234d150`.
+
 | Tài liệu | Nguồn Markdown |
 |---|---|
 | `EmeHub - Tong quan san pham` | [`README.vi.md`](../../README.vi.md) |
