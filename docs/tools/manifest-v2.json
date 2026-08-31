@@ -1,0 +1,22 @@
+[
+  {
+    "source": "docs/ACCOUNT.md",
+    "output": "EmeHub - Thong tin du an",
+    "title": "EmeHub — Thông tin dự án"
+  },
+  {
+    "source": "README.vi.md",
+    "output": "EmeHub - Tong quan san pham",
+    "title": "EmeHub — Tổng quan sản phẩm"
+  },
+  {
+    "source": "docs/USER-GUIDE.md",
+    "output": "EmeHub - Huong dan su dung",
+    "title": "EmeHub — Hướng dẫn sử dụng"
+  },
+  {
+    "source": "docs/SELLING-POINTS.md",
+    "output": "EmeHub - Diem noi bat",
+    "title": "EmeHub — Điểm nổi bật"
+  }
+]
