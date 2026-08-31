@@ -16,11 +16,21 @@ pwsh docs/tools/build-docs.ps1
 
 Everything in `manifest.json`, into `docs/submission/`.
 
+**Two document sets ship from here.** `manifest.json` builds the current submission bundle
+(`docs/product/` → `docs/submission/`); `manifest-v2.json` builds the previous one
+(`docs/submission-v2/`, frozen — see its
+[README](../submission-v2/README.md)). Each set has its own `-OutDir`:
+
+```powershell
+pwsh docs/tools/build-docs.ps1 -ManifestFile manifest-v2.json -OutDir docs/submission-v2
+```
+
 | Flag | Effect |
 |---|---|
 | `-Only <substring>` | Build just the matching entries — matches source path or output name |
 | `-NoPdf` | `.docx` only. Skips Word entirely; use on a host without it |
 | `-OutDir <path>` | Somewhere other than `docs/submission/` |
+| `-ManifestFile <name>` | Build a different document set. A bare name resolves inside `docs/tools/`; a path is taken as given. Default `manifest.json` |
 | `-KeepIntermediate` | Keep the preprocessed `.md` files. This is what officecli actually saw — start here when a document comes out wrong |
 
 ## What it needs

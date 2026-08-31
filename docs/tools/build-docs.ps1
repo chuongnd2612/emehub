@@ -32,6 +32,12 @@
 .PARAMETER OutDir
     Where artefacts land. Default: docs/submission/ under the repo root.
 
+.PARAMETER ManifestFile
+    Which manifest to build. A bare file name resolves inside docs/tools/; an
+    absolute or relative path is taken as given. Default: manifest.json. This
+    exists because the repository ships more than one document set — see
+    manifest-v2.json — and each set has its own OutDir.
+
 .PARAMETER NoPdf
     Build .docx only. Skips Word entirely.
 
@@ -45,12 +51,16 @@
 
 .EXAMPLE
     pwsh docs/tools/build-docs.ps1 -Only USER-GUIDE -NoPdf
+
+.EXAMPLE
+    pwsh docs/tools/build-docs.ps1 -ManifestFile manifest-v2.json -OutDir docs/submission-v2
 #>
 
 [CmdletBinding()]
 param(
     [string] $Only,
     [string] $OutDir,
+    [string] $ManifestFile,
     [switch] $NoPdf,
     [switch] $KeepIntermediate
 )
@@ -62,7 +72,17 @@ Set-StrictMode -Version Latest
 
 $toolsDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $toolsDir '..\..')
-$manifestPath = Join-Path $toolsDir 'manifest.json'
+if (-not $ManifestFile) { $ManifestFile = 'manifest.json' }
+# A bare file name lives in docs/tools/; anything with a separator is a path.
+$manifestPath = if ($ManifestFile -eq (Split-Path -Leaf $ManifestFile)) {
+    Join-Path $toolsDir $ManifestFile
+} else {
+    $ManifestFile
+}
+if (-not (Test-Path $manifestPath)) {
+    throw "Manifest not found: $manifestPath"
+}
+$manifestPath = (Resolve-Path $manifestPath).Path
 
 if (-not $OutDir) { $OutDir = Join-Path $repoRoot 'docs\submission' }
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir | Out-Null }
