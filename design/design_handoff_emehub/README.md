@@ -54,10 +54,15 @@ Two prototype-only details to be aware of and to replace with real implementatio
 
 ### 1. Landing (`view === 'landing'`)
 
-Single column, `max-width:1400px`, `padding:22px 44px` header / `70px 44px 44px` hero.
+> **Amended by [ADR 0012](../../docs/adr/0012-redesigning-the-landing-hero.md).** The header and hero below describe the *current* design — a floating pill navbar and a two-column hero with a WebGL orb. `EmeHub.dc.html` still shows the original full-width header and centred hero; for this one screen the prototype is a historical reference. Everything from *Product cards* down is unchanged and the prototype remains authoritative for it.
 
-- **Header**: 88 px-tall 3D logo with tilt + metal sheen, 1 px × 56 px divider, `Eme` + silver `Hub` at 40 px/900/-.04em; right side text links `Products`, `Platform` and a primary `Enter EmeHub →` button.
-- **Hero** (centred): status pill (`EMESOFT · AI Operating Center` with pulsing dot), `h1` 80 px/900/-.05em/`line-height:1` — “One command center for every **AI agent** you run” with *AI agent* in the silver gradient; 17 px sub-paragraph, `max-width:600px`; primary `Open the hub →` + ghost `Meet the agents`.
+`max-width:1400px`. Header is a floating pill; the hero is two columns, then a single column below ~1024 px.
+
+- **Header** — a **floating glass pill**: `position:sticky; top:30px`, centred, `width:fit-content`, `border-radius:16px`, built from the `.glass-surface` recipe (semi-opaque background + 1 px stroke + inner top highlight — **no `backdrop-filter`**, see ADR 0012 § 1). Contents: ~28 px EMESOFT mark with tilt, `Eme` + silver `Hub` wordmark, text links `Products`, `Platform`, and a primary `Enter EmeHub →` button.
+- **Hero** — two columns, content left / orb right.
+  - **Left**: status pill (`EMESOFT · AI Operating Center` with pulsing dot), `h1` ~72 px/900/-.05em/`line-height:1` — “One command center for every **AI agent** you run” with *AI agent* in the silver gradient; 17 px sub-paragraph; primary `Open the hub →` + ghost `Meet the agents`. The primary button lifts on hover with `scale(1.02)`. **Copy is unchanged and final.**
+  - **Right**: the **logo orb** — a WebGL glass sphere carrying the EMESOFT mark, with a fresnel rim in the current accent, an orbiting particle ring, slow rotation and pointer parallax. It bleeds slightly past the column. Parallax is gated by *Depth on hover*; `prefers-reduced-motion` stills it; no WebGL context degrades to no orb with the hero still fully legible.
+  - Below ~1024 px the grid collapses to one column.
 - **Product cards** (2-up grid, gap 14): per product — 26 px glyph tile in the product gradient, name, `Live` / `Placeholder` badge, role, description, tag pills, a big metric (`1,204` / `Q4 2026`) with label, and a 3-stat row. Cards use the pointer tilt + a radial cursor-follow wash.
 - **Capability grid** (3-up): icon + title + one-line description; each navigates to a page (User management → users, Claude credentials → claude, Authentication → auth, Integrations → integrations, Project knowledge → projects, Synced tickets → tickets).
 - **Final CTA** and a compact footer.
