@@ -63,6 +63,15 @@
   --faint: #85859b;
   --label: #85859b;
   --shadow: rgba(0, 0, 0, 0.6);
+  /* Liquid-glass surface (ADR 0012). Deliberately blur-free: the landing pill
+     floats over the animated constellation, and `backdrop-filter` there both
+     produces compositing artifacts and traps child z-index in a new stacking
+     context (CLAUDE.md). The glass read comes from a near-opaque tint, a 1 px
+     stroke and an inner top highlight instead. */
+  --glass: rgba(22, 22, 31, 0.72);
+  --glass-bd: rgba(255, 255, 255, 0.12);
+  --glass-hi: rgba(255, 255, 255, 0.1);
+  --glass-shadow: 0 18px 44px -16px rgba(0, 0, 0, 0.75);
   --bloom2: rgba(150, 160, 180, 0.2);
   --scroll: rgba(255, 255, 255, 0.09);
   --scroll2: rgba(255, 255, 255, 0.18);
@@ -108,6 +117,12 @@
   --faint: #5f6675;
   --label: #5c6371;
   --shadow: rgba(18, 22, 36, 0.16);
+  /* Light glass: white tint, a darker stroke, and a stronger top highlight —
+     on paper the inner sheen is what sells the material. */
+  --glass: rgba(255, 255, 255, 0.72);
+  --glass-bd: rgba(18, 22, 36, 0.1);
+  --glass-hi: rgba(255, 255, 255, 0.6);
+  --glass-shadow: 0 18px 44px -18px rgba(18, 22, 36, 0.28);
   --bloom2: rgba(120, 135, 165, 0.16);
   --scroll: rgba(18, 22, 36, 0.16);
   --scroll2: rgba(18, 22, 36, 0.3);
@@ -799,6 +814,21 @@ textarea {
      the unprefixed property. */
   backdrop-filter: blur(22px);
   border: 1px solid var(--bd);
+}
+
+/* Liquid glass WITHOUT backdrop-filter (ADR 0012) — use this for anything that
+   floats over the constellation field. `glass` / `glass-panel` above still blur,
+   and stay correct for overlays that sit on a static surface. */
+@utility glass-surface {
+  background: var(--glass);
+  border: 1px solid var(--glass-bd);
+  box-shadow:
+    inset 0 4px 4px 0 var(--glass-hi),
+    var(--glass-shadow);
+  transition:
+    background 0.2s,
+    border-color 0.2s,
+    color 0.2s;
 }
 
 @utility glass-panel {
