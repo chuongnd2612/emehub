@@ -16,6 +16,8 @@ export interface OrbPalette {
   dust: number;
   /** Fresnel rim opacity. */
   rimOpacity: number;
+  /** The back-face rim's opacity as a fraction of `rimOpacity`. */
+  haloScale: number;
   /** Inner core glow opacity. */
   coreOpacity: number;
   /** Orbiting particle opacity. */
@@ -29,6 +31,7 @@ export const DARK_ORB: OrbPalette = {
   halo: 0xdfe4ec,
   dust: 0xc8cedb,
   rimOpacity: 0.85,
+  haloScale: 0.45,
   coreOpacity: 0.5,
   dustOpacity: 0.65,
   logoOpacity: 1,
@@ -43,7 +46,10 @@ export const LIGHT_ORB: OrbPalette = {
   halo: 0x8b93a4,
   dust: 0x6b7280,
   rimOpacity: 0.55,
-  coreOpacity: 0.22,
+  // Additive turns into paint under normal blending: at the dark scale the back
+  // rim washes the whole disc milky white and the brandmark stops reading.
+  haloScale: 0.16,
+  coreOpacity: 0.14,
   dustOpacity: 0.42,
   logoOpacity: 1,
 };
