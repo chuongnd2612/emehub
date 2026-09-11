@@ -134,7 +134,11 @@ export function createLogoOrb(
 
   const renderer = new WebGLRenderer({ alpha: true, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(w, h);
+  // `updateStyle: false` — the canvas is sized by CSS (100% of the host) and
+  // the drawing buffer follows it. Letting three.js write a pixel width onto
+  // the style instead feeds back into the host's `auto` grid track, which grows
+  // the column, which resizes the canvas: a runaway that reached ~5000 px.
+  renderer.setSize(w, h, false);
   const canvas = renderer.domElement;
   canvas.style.display = "block";
   canvas.style.width = "100%";
@@ -172,7 +176,7 @@ export function createLogoOrb(
     uniforms: {
       uColor: { value: new Color(palette.halo) },
       uPower: { value: ORB.rimPowerInner },
-      uOpacity: { value: palette.rimOpacity * 0.45 },
+      uOpacity: { value: palette.rimOpacity * palette.haloScale },
     },
     vertexShader: RIM_VERT,
     fragmentShader: RIM_FRAG,
@@ -216,7 +220,13 @@ export function createLogoOrb(
   });
   const logo = new Mesh(logoGeom, logoMat);
   logo.position.z = ORB.logoZ;
-  group.add(logo);
+  // Its own group, NOT the spinning one: parented to `group` the plane orbits
+  // the Y axis and drifts off the sphere's centre, and counter-rotating the
+  // mesh fixes its facing but not its position. The shell spins around a mark
+  // that stays put.
+  const markGroup = new Group();
+  markGroup.add(logo);
+  scene.add(markGroup);
 
   let logoTex: Texture | null = null;
   const loader = new TextureLoader();
@@ -281,7 +291,7 @@ export function createLogoOrb(
     coreMat.blending = b;
     dustMat.blending = b;
     outerMat.uniforms.uOpacity.value = palette.rimOpacity;
-    innerMat.uniforms.uOpacity.value = palette.rimOpacity * 0.45;
+    innerMat.uniforms.uOpacity.value = palette.rimOpacity * palette.haloScale;
     (innerMat.uniforms.uColor.value as Color).setHex(palette.halo);
     coreMat.uniforms.uOpacity.value = palette.coreOpacity;
     dustMat.color.setHex(palette.dust);
@@ -318,7 +328,7 @@ export function createLogoOrb(
     const { w: cw, h: ch } = size();
     camera.aspect = cw / ch;
     camera.updateProjectionMatrix();
-    renderer.setSize(cw, ch);
+    renderer.setSize(cw, ch, false);
   };
   // The hero column resizes with the layout, not only with the window (the
   // 2-up grid collapses to one column), so observe the container itself.
@@ -352,10 +362,10 @@ export function createLogoOrb(
     shellFront.scale.setScalar(breathe);
     shellBack.scale.setScalar(breathe);
 
-    // The brandmark counter-rotates so it stays legible while the shell turns —
-    // it drifts with the pointer for depth, but never spins away from the reader.
-    logo.rotation.y = -group.rotation.y + ry * 0.5;
-    logo.rotation.x = -group.rotation.x + rx * 0.5;
+    // The brandmark only takes the parallax, never the spin — it tilts with the
+    // pointer for depth and otherwise faces the reader square on.
+    markGroup.rotation.y = ry * 0.5;
+    markGroup.rotation.x = rx * 0.5;
 
     renderer.render(scene, camera);
   };
@@ -368,9 +378,10 @@ export function createLogoOrb(
     window.removeEventListener("mousemove", onMove);
     window.removeEventListener("resize", onResize);
     observer?.disconnect();
-    scene.remove(group, dustGroup);
+    scene.remove(group, dustGroup, markGroup);
     group.clear();
     dustGroup.clear();
+    markGroup.clear();
     shellGeom.dispose();
     coreGeom.dispose();
     logoGeom.dispose();
