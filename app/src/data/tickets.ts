@@ -545,6 +545,7 @@ export const runImport = async (
   const result = await api.post<{ synced?: number }>("/tickets/sync", {
     providerKind: PROVIDER_WIRE_KIND[request.provider],
     query: request.query,
+    projectId: request.projectId,
   });
 
   return {
