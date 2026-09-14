@@ -474,6 +474,12 @@ export interface ImportRequest {
    * nothing was applied, and the dialog will not let it be submitted.
    */
   query?: import("./ticketQuery").TicketQuery;
+  /**
+   * The hub project registry row to attribute the synced tickets to
+   * (`SyncRequest.project_id` on the hub). Absent means workspace-wide —
+   * only set when Import was launched from inside a project's Tickets tab.
+   */
+  projectId?: number;
 }
 
 export interface ImportResult {

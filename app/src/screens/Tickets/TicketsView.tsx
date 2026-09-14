@@ -534,7 +534,7 @@ export function TicketsView({
           open={modal === "import"}
           provider={scope.provider}
           onClose={() => setModal(null)}
-          onImport={run}
+          onImport={(request) => run({ ...request, projectId: scope.projectId })}
         />
       )}
     </div>
