@@ -62,7 +62,7 @@ from app.services import connection_service
 from app.services.adapters.base import ProviderError, scrub
 from app.services.workspace_scope import scoped_repos_dir, slug
 
-__all__ = ["CloneError", "ProviderError", "ensure_clone", "redact"]
+__all__ = ["CloneError", "ProviderError", "ensure_clone", "head_commit", "redact"]
 
 #: Any ``scheme://userinfo@host`` span, whatever the userinfo holds.
 _USERINFO = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^@\s/]+@")
@@ -190,6 +190,11 @@ def _run_git(args: list[str], *, pat: str) -> tuple[bool, str]:
 
     ``args`` may contain the authenticated URL; nothing derived from it reaches
     the return value or the log without passing through :func:`redact`.
+
+    On success ``detail`` is git's (stripped) stdout rather than an empty
+    string — callers that only check ``ok`` are unaffected, and callers that
+    need the output (:func:`_current_branch`, :func:`head_commit`) get it
+    without a second code path.
     """
     try:
         proc = subprocess.run(  # fixed argv, no shell
@@ -213,11 +218,24 @@ def _run_git(args: list[str], *, pat: str) -> tuple[bool, str]:
             (proc.stderr or proc.stdout or "").strip(), *_secrets(pat)
         )[:_DETAIL_LIMIT]
         return False, detail or f"git exited {proc.returncode}"
-    return True, ""
+    return True, (proc.stdout or "").strip()
+
+
+def _clear_readonly(func, path, _exc_info) -> None:  # noqa: ANN001 - shutil callback signature
+    """``shutil.rmtree`` error handler: retry once after clearing read-only.
+
+    git marks some of its own object/pack files read-only, which is silently
+    fatal to a plain ``rmtree`` on Windows (POSIX ignores the bit for unlink).
+    Left unhandled, ``ignore_errors=True`` swallows the failure and leaves a
+    non-empty directory behind for the next clone to trip over.
+    """
+    os.chmod(path, 0o666)
+    func(path)
 
 
 def _rmtree(path: Path) -> None:
-    shutil.rmtree(path, ignore_errors=True)
+    if path.exists():
+        shutil.rmtree(path, onerror=_clear_readonly)
 
 
 def _pat_for(db: Session, *, owner_id: int | None, bound_connection_id: int | None) -> str:
@@ -234,6 +252,26 @@ def _pat_for(db: Session, *, owner_id: int | None, bound_connection_id: int | No
     return connection_service.repository_pat(connection)
 
 
+def _current_branch(dest: Path) -> str:
+    """The checkout's current branch, or ``""`` if that cannot be determined.
+
+    Never raises — an unreadable answer is treated as "unknown branch", which
+    the caller reconciles the same way as an actual mismatch (re-clone).
+    """
+    ok, detail = _run_git(["-C", str(dest), "rev-parse", "--abbrev-ref", "HEAD"], pat="")
+    return detail if ok else ""
+
+
+def head_commit(dest: Path) -> str:
+    """The checkout's current commit SHA, or ``""`` if that cannot be determined.
+
+    Never raises. Used by the ``/pull`` endpoint (issue #279) to report what a
+    sync actually landed on.
+    """
+    ok, detail = _run_git(["-C", str(dest), "rev-parse", "HEAD"], pat="")
+    return detail if ok else ""
+
+
 def ensure_clone(
     db: Session,
     *,
@@ -242,6 +280,7 @@ def ensure_clone(
     repo_url: str,
     owner_id: int | None,
     bound_connection_id: int | None,
+    branch: str | None = None,
 ) -> Path:
     """Clone or refresh ``repo_url`` under ``owner_id``'s workspace; return the path.
 
@@ -249,10 +288,18 @@ def ensure_clone(
     by owner so two members' same-named projects never share a checkout, and
     slugged so a project key cannot escape its scope directory.
 
-    An existing checkout is refreshed (``fetch --depth 1`` + ``reset --hard``)
-    and re-cloned from scratch if that cannot reconcile; a fresh one is a
-    ``git clone --depth 1``. Shallow throughout: a build reads the working tree,
-    never the history.
+    ``branch``, when given, targets a specific branch throughout:
+
+    * a fresh clone is ``git clone --depth 1 --branch <branch> --single-branch``;
+    * an existing checkout already on that branch is refreshed with
+      ``fetch --depth 1 origin <branch>`` + ``reset --hard FETCH_HEAD``;
+    * an existing checkout on a **different** branch is wiped and re-cloned —
+      a shallow single-branch clone has no other ref to switch to.
+
+    With no ``branch`` the behaviour is unchanged: clone/fetch follow the
+    remote's default HEAD.
+
+    Shallow throughout: a build reads the working tree, never the history.
 
     Raises:
         CloneError: no URL, or git failed. The message is scrubbed.
@@ -264,6 +311,7 @@ def ensure_clone(
             "This repository has no clone URL. Add one under Project settings › "
             "Repositories, then build again."
         )
+    branch = (branch or "").strip() or None
 
     pat = _pat_for(db, owner_id=owner_id, bound_connection_id=bound_connection_id)
     authed = _authenticated_url(url, pat)
@@ -273,18 +321,35 @@ def ensure_clone(
         dest = dest / slug(repo_name)
 
     if (dest / ".git").is_dir():
-        logger.info("Refreshing %s in %s", redact(url, *_secrets(pat)), dest)
-        ok, _detail = _run_git(["-C", str(dest), "fetch", "--depth", "1", "origin"], pat=pat)
-        if ok:
-            ok, _detail = _run_git(["-C", str(dest), "reset", "--hard", "FETCH_HEAD"], pat=pat)
-        if ok:
-            return dest
-        logger.info("Refresh failed for %s — re-cloning", redact(url, *_secrets(pat)))
-        _rmtree(dest)
+        if branch and _current_branch(dest) != branch:
+            logger.info(
+                "Branch switch requested for %s (%s) — re-cloning",
+                redact(url, *_secrets(pat)),
+                branch,
+            )
+            _rmtree(dest)
+        else:
+            logger.info("Refreshing %s in %s", redact(url, *_secrets(pat)), dest)
+            fetch_args = ["-C", str(dest), "fetch", "--depth", "1", "origin"]
+            if branch:
+                fetch_args.append(branch)
+            ok, _detail = _run_git(fetch_args, pat=pat)
+            if ok:
+                ok, _detail = _run_git(
+                    ["-C", str(dest), "reset", "--hard", "FETCH_HEAD"], pat=pat
+                )
+            if ok:
+                return dest
+            logger.info("Refresh failed for %s — re-cloning", redact(url, *_secrets(pat)))
+            _rmtree(dest)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Cloning %s into %s", redact(url, *_secrets(pat)), dest)
-    ok, detail = _run_git(["clone", "--depth", "1", authed, str(dest)], pat=pat)
+    clone_args = ["clone", "--depth", "1"]
+    if branch:
+        clone_args += ["--branch", branch, "--single-branch"]
+    clone_args += [authed, str(dest)]
+    ok, detail = _run_git(clone_args, pat=pat)
     if not ok:
         _rmtree(dest)
         raise CloneError(f"Could not clone {redact(url, *_secrets(pat))}: {detail}")
