@@ -336,3 +336,47 @@ export const buildKnowledge = (
       {},
     )
     .then(toMeta);
+
+/* ── Syncing (issue #279/#280) ───────────────────────────────────────────── */
+
+interface RepoSyncWire {
+  branch?: string | null;
+  commitSha?: string;
+  syncedAt?: string | null;
+}
+
+/** The result of a repository sync — a `git fetch`, not a knowledge build. */
+export interface RepoSync {
+  branch: string;
+  commitSha: string;
+  syncedAt: string | null;
+}
+
+const toSync = (wire: RepoSyncWire): RepoSync => ({
+  branch: wire.branch ?? "",
+  commitSha: wire.commitSha ?? "",
+  syncedAt: wire.syncedAt ?? null,
+});
+
+/**
+ * POST /projects/{key}/repos/{repo}/pull — fetch/reset the checkout to its
+ * configured `defaultBranch`, without a Claude build.
+ *
+ * Unlike {@link buildKnowledge} this is synchronous: a git fetch is seconds of
+ * work, so the promise resolves with the outcome directly — there is no row to
+ * poll. The hub may 400 (nothing configured to sync against) or 502 (the clone
+ * or the provider call failed); both carry a human-readable `message` on the
+ * thrown `ApiError`.
+ */
+export const pullRepo = (
+  projectKey: string,
+  repo: string,
+): Promise<RepoSync> =>
+  api
+    .post<RepoSyncWire>(
+      `/projects/${encodeURIComponent(projectKey)}/repos/${encodeURIComponent(
+        repo,
+      )}/pull`,
+      {},
+    )
+    .then(toSync);
