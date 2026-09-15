@@ -147,6 +147,15 @@ class ProjectKnowledge(Base):
     #: Last build error (when status == "error"); cleared on success.
     last_error: Mapped[str] = mapped_column(String(1000), default="")
 
+    # ── Sync (issue #279) ───────────────────────────────────────────────────
+    # A lightweight ``fetch``/``reset`` against the configured branch, with no
+    # Claude build attached — distinct from `last_indexed`/`version`, which
+    # only a build advances.
+    #: When ``POST .../pull`` last refreshed this repo's checkout.
+    last_synced_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    #: The commit SHA the checkout was left on by that sync.
+    synced_commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # ── Build progress (issue #68) ─────────────────────────────────────────
     # DB-backed rather than in-memory on purpose: progress has to survive a
     # page reload, and it has to be readable by whichever worker answers the

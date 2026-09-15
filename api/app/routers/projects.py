@@ -64,6 +64,8 @@ from app.services import (
     project_config_service,
     project_service,
 )
+from app.services.adapters.base import ProviderError
+from app.services.repo_service import CloneError
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -287,6 +289,14 @@ class KnowledgeDiscoveryIn(ApiModel):
 class KnowledgeMergeOut(ApiModel):
     merged: int = 0
     knowledge: KnowledgeOut
+
+
+class RepoSyncOut(ApiModel):
+    """``POST .../pull`` result — a sync, not a build."""
+
+    branch: str | None = None
+    commit_sha: str = ""
+    synced_at: datetime | None = None
 
 
 # ---------------------------------------------------------------- helpers
@@ -737,6 +747,55 @@ def build_repo_knowledge(
             db=db,
         )
     return _knowledge_out(row)
+
+
+@router.post("/{key}/repos/{repo}/pull", response_model=RepoSyncOut)
+def pull_repo(
+    key: str,
+    repo: str,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RepoSyncOut:
+    """**Sync** a repository's checkout (issue #279) — no Claude build.
+
+    A build clones once and only ever refreshes as a side effect of running
+    ``project-bootstrap``, which costs Claude tokens. This is the cheap half:
+    resolve the repository's configured ``default_branch`` and fetch/reset the
+    clone to it (or clone it fresh), synchronously — a git fetch is seconds, so
+    this does not need the build endpoint's background/poll dance.
+
+    Auth mirrors ``knowledge/build``: hub audience only (``require_user``), since
+    it clones a repository and touches the repository PAT the same way a build
+    does.
+
+    The result lands on the ``ProjectKnowledge`` row for this ``project::repo``,
+    creating a stub ``not_indexed`` row (via ``knowledge_service.write_target``)
+    when none exists yet — a sync must work before the first build has ever run.
+    Only ``lastSyncedAt``/``syncedCommitSha`` change; ``status``/``version``/
+    ``lastIndexed`` describe a build and this is not one.
+    """
+    key = _key_for(db, key, user)
+    _project_or_404(db, key, user)
+    try:
+        row, branch = knowledge_service.sync_repo(db, key, repo, user)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (CloneError, ProviderError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    audit_service.record(
+        category="knowledge",
+        action="Synced a repository checkout",
+        target=row.key,
+        actor=user.email,
+        actor_id=user.id,
+        owner_id=row.owner_id,
+        db=db,
+    )
+    return RepoSyncOut(
+        branch=branch,
+        commit_sha=row.synced_commit_sha or "",
+        synced_at=row.last_synced_at,
+    )
 
 
 @router.patch("/{key}/repos/{repo}/knowledge", response_model=KnowledgeMergeOut)

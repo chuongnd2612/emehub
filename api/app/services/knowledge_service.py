@@ -723,6 +723,7 @@ def _build(db: Session, row_id: int) -> None:
     # build must read the shared config, not a member's same-keyed copy.
     config = project_config_service.get_config_for_owner(db, project_key, row.owner_id)
     clone_url = _clone_url(config, row)
+    branch = _clone_branch(config, row)
 
     progress.stage(
         BUILD_STAGE_CLONING,
@@ -735,6 +736,7 @@ def _build(db: Session, row_id: int) -> None:
         repo_url=clone_url,
         owner_id=row.owner_id,
         bound_connection_id=getattr(config, "repository_connection_id", None),
+        branch=branch,
     )
 
     progress.stage(BUILD_STAGE_ANALYZING)
@@ -765,13 +767,12 @@ def _build(db: Session, row_id: int) -> None:
     )
 
 
-def _clone_url(config: "ProjectConfig | None", row: ProjectKnowledge) -> str:
-    """The ``repo_url`` for the row's repository, from the project's config.
+def _repo_entry(config: "ProjectConfig | None", row: ProjectKnowledge) -> dict:
+    """The ``ProjectConfig.repos[]`` entry for the row's repository.
 
-    ``local_repo_path`` is deliberately ignored — it names a directory on an
-    *agent* host (``project_config_service.REPO_FIELDS``) and resolving it inside
-    the API container would either fail or, worse, traverse something unrelated
-    that happens to sit at that path.
+    Matches by repo name (project-level rows fall back to ``default_repo``).
+    Shared by :func:`_clone_url` and :func:`_clone_branch` so both read the same
+    entry the same way.
     """
     from app.services import project_config_service
 
@@ -790,7 +791,28 @@ def _clone_url(config: "ProjectConfig | None", row: ProjectKnowledge) -> str:
                 "This project has no repositories configured. Add one under "
                 "Project settings › Repositories, then build again."
             )
-    return (entry.get("repo_url") or "").strip()
+    return entry
+
+
+def _clone_url(config: "ProjectConfig | None", row: ProjectKnowledge) -> str:
+    """The ``repo_url`` for the row's repository, from the project's config.
+
+    ``local_repo_path`` is deliberately ignored — it names a directory on an
+    *agent* host (``project_config_service.REPO_FIELDS``) and resolving it inside
+    the API container would either fail or, worse, traverse something unrelated
+    that happens to sit at that path.
+    """
+    return (_repo_entry(config, row).get("repo_url") or "").strip()
+
+
+def _clone_branch(config: "ProjectConfig | None", row: ProjectKnowledge) -> str | None:
+    """The configured ``default_branch`` for the row's repository, or ``None``.
+
+    Unused today — captured on ``ProjectConfig.repos[]`` but never read — until
+    this (issue #279), which threads it into ``repo_service.ensure_clone`` so a
+    clone/refresh actually targets the branch a project configured.
+    """
+    return (_repo_entry(config, row).get("default_branch") or "").strip() or None
 
 
 # --------------------------------------------------------------- the prompt
@@ -1155,3 +1177,51 @@ def request_build(
     db.commit()
     db.refresh(row)
     return row, start_build(row.id)
+
+
+def sync_repo(
+    db: Session, project_key: str, repo: str, user: User
+) -> tuple[ProjectKnowledge, str | None]:
+    """A lightweight refresh (issue #279): fetch/reset the clone, no Claude build.
+
+    Unlike :func:`request_build` this runs synchronously and in the request — a
+    ``fetch --depth 1`` is seconds, not minutes — and it never touches
+    ``status``/``version``/``last_indexed``: those describe a *build*, and a sync
+    is deliberately not one. It only ever stamps ``last_synced_at`` and
+    ``synced_commit_sha``.
+
+    The row is created (``not_indexed``) if this is the first thing ever done
+    for this ``project::repo``, via the same :func:`write_target` a build or a
+    report would use, so a sync before any build still has somewhere to land.
+
+    Returns ``(row, branch)`` — the branch is not a column on the row, so the
+    caller (the endpoint) is handed it directly rather than re-resolving it.
+
+    Raises:
+        ValueError: the repository is not configured (surfaced as 400).
+        CloneError: git failed (surfaced as 502; the message is scrubbed).
+        ProviderError: no repository connection, or its PAT will not decrypt
+            (surfaced as 502).
+    """
+    from app.services import project_config_service, repo_service
+
+    row = write_target(db, project_key, repo, user)
+    config = project_config_service.get_config_for_owner(db, project_key, row.owner_id)
+    clone_url = _clone_url(config, row)
+    branch = _clone_branch(config, row)
+
+    clone = repo_service.ensure_clone(
+        db,
+        project_key=project_key,
+        repo_name=repo,
+        repo_url=clone_url,
+        owner_id=row.owner_id,
+        bound_connection_id=getattr(config, "repository_connection_id", None),
+        branch=branch,
+    )
+
+    row.last_synced_at = utcnow()
+    row.synced_commit_sha = repo_service.head_commit(clone)
+    db.commit()
+    db.refresh(row)
+    return row, branch

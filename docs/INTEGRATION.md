@@ -480,7 +480,8 @@ so an agent token is refused. Listed so the surface is not mistaken for undocume
 `POST /connections/{id}/test`, `GET /connections/{id}/{projects|repos|sprints|work-item-metadata}`
 · `POST /projects`, `PATCH /projects/{key}`, `DELETE /projects/{key}`,
 `PUT /projects/{key}/config`,
-`POST /projects/{key}/repos/{repo}/knowledge/build` · all of `/auth/*`.
+`POST /projects/{key}/repos/{repo}/knowledge/build`,
+`POST /projects/{key}/repos/{repo}/pull` · all of `/auth/*`.
 
 `POST …/knowledge/build` is hub-only for a specific reason: it clones a repository, runs a
 Claude CLI process for minutes and spends money against the owner's credential
@@ -492,6 +493,17 @@ second one. Builds beyond `EMEHUB_KNOWLEDGE_BUILD_CONCURRENCY` queue rather than
 
 An agent that builds its own knowledge is unaffected: `PUT …/knowledge` above is still how to
 report one, and the hub becoming *a* builder does not make it the only one.
+
+`POST …/pull` (issue #279) is hub-only for the same reason a build is: it clones a repository
+and injects the repository connection's PAT into the clone URL, same as `knowledge/build`. It
+is the *cheap* half of that same clone path — no Claude CLI, no token spend — so it runs
+synchronously and returns `200` with `{branch, commitSha, syncedAt}` directly, rather than the
+`202`-and-poll shape a build needs. It resolves the repo's configured `default_branch` (the
+field `knowledge/build` now also honours) and fetches/resets the checkout to it, re-cloning
+when the checkout is on a different branch than requested. It creates a `not_indexed`
+knowledge row on demand, exactly like a build does, but touches only `lastSyncedAt` /
+`syncedCommitSha` on it — `status`, `version` and `lastIndexed` describe a build, and a sync is
+deliberately not one.
 
 `DELETE /projects/{key}` (issue #64) removes the registry row, its `project_config` — the
 encrypted test-account passwords included — every `project_knowledge` row for the key, and
