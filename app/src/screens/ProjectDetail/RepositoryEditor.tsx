@@ -316,7 +316,7 @@ export function RepositoryEditor({
                 >
                   <Icon name="check" size={14} strokeWidth={2.4} />
                 </button>
-                <div className="grid min-w-0 flex-1 grid-cols-3 gap-2">
+                <div className="grid min-w-0 flex-1 grid-cols-4 gap-2">
                   <Input
                     placeholder="Name"
                     mono
@@ -337,6 +337,20 @@ export function RepositoryEditor({
                       setRepos((rows) =>
                         rows.map((r, j) =>
                           j === i ? { ...r, repoUrl: e.target.value } : r,
+                        ),
+                      )
+                    }
+                  />
+                  <Input
+                    placeholder="Default branch"
+                    mono
+                    value={repo.defaultBranch}
+                    onChange={(e) =>
+                      setRepos((rows) =>
+                        rows.map((r, j) =>
+                          j === i
+                            ? { ...r, defaultBranch: e.target.value }
+                            : r,
                         ),
                       )
                     }

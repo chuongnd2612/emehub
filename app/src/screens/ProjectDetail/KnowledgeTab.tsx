@@ -39,9 +39,12 @@ import {
   buildKnowledge,
   getRepoKnowledge,
   knowledgeSections,
+  pullRepo,
   type KnowledgeMeta,
   type Project,
+  type RepoSync,
 } from "@/data";
+import { relativeTime } from "@/data/humanize";
 import { ApiError } from "@/lib/api";
 import { BuildProgress } from "./BuildProgress";
 import { isBuilt } from "./shared";
@@ -155,6 +158,77 @@ function useBuildLifecycle(project: Project, onReload: () => void) {
 }
 
 /**
+ * `Pull latest`, the cheap sibling of `Rebuild` (issue #280): a `git fetch` to
+ * the configured `defaultBranch`, no Claude spend and no polling — the hub
+ * answers synchronously, so this is a plain request/response, not a lifecycle.
+ *
+ * Copy here is improvised — the design handoff has nothing for this action.
+ */
+function usePullLifecycle(project: Project) {
+  const [pulling, setPulling] = useState(false);
+  const [result, setResult] = useState<RepoSync | null>(null);
+  const [error, setError] = useState("");
+
+  const pull = useCallback(() => {
+    setPulling(true);
+    setError("");
+    void pullRepo(project.id, project.repo)
+      .then((sync) => {
+        setResult(sync);
+        toast("Pulled the latest commit");
+      })
+      .catch((err: unknown) => {
+        const message =
+          err instanceof ApiError
+            ? err.message
+            : "The hub did not respond.";
+        setError(message);
+        toast("Could not pull the repository", "warn", message);
+      })
+      .finally(() => setPulling(false));
+  }, [project.id, project.repo]);
+
+  return { pulling, result, error, pull };
+}
+
+/** Short SHA, the way `git log --oneline` would show it. */
+const shortSha = (sha: string) => sha.slice(0, 7);
+
+function PullLatest({ project }: { project: Project }) {
+  const { pulling, result, error, pull } = usePullLifecycle(project);
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <Button
+          variant="ghost"
+          className="h-auto rounded-button px-[16px] py-[9px] text-[12.5px]"
+          icon={<Icon name="refresh" size={14} strokeWidth={2.2} />}
+          onClick={pull}
+          disabled={pulling || !project.repo}
+          title={
+            !project.repo
+              ? "Add a repository under Settings before pulling"
+              : undefined
+          }
+        >
+          {pulling ? "Pulling…" : "Pull latest"}
+        </Button>
+        {result && (
+          <span className="text-[11.5px] text-muted">
+            Synced to <span className="font-mono">{result.branch}</span>
+            {result.commitSha
+              ? ` @ ${shortSha(result.commitSha)}`
+              : ""} · {relativeTime(result.syncedAt)}
+          </span>
+        )}
+      </div>
+      {error && <Notice tone="danger">Could not pull: {error}</Notice>}
+    </div>
+  );
+}
+
+/**
  * Not indexed — the handoff's dashed empty state, with a CTA that works.
  *
  * While a build is running the dashed panel is replaced by the live stepper:
@@ -210,6 +284,8 @@ function NotIndexed({
           </Button>
         </div>
       )}
+
+      <PullLatest project={project} />
 
       {failed && knowledge?.lastError && (
         <Notice tone="danger">
@@ -297,6 +373,10 @@ export function KnowledgeTab({
           >
             {starting ? "Starting…" : "Rebuild"}
           </Button>
+        </div>
+
+        <div className="mt-3">
+          <PullLatest project={project} />
         </div>
 
         <div className="mt-3 flex flex-col gap-2">
