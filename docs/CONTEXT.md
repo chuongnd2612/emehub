@@ -71,7 +71,14 @@ avoid repeating.
 and bindings to provider connections. Shared across agents: the same project is what QAgent
 tests and DAgent implements against.
 
-**Repository** — a git repo belonging to a project. Cloned per user into a scoped workspace.
+**Repository** — a git repo belonging to a project. Cloned per user into a scoped workspace,
+shallow and single-branch, targeting the repo's configured `default_branch`.
+
+**Sync** — a lightweight refresh of a repository's clone (fetch + reset to the configured
+branch, or a fresh clone if the branch changed) with no knowledge build attached. Distinct from
+a knowledge **build** ([ADR 0007](adr/0007-knowledge-builds-run-on-the-hub.md)), which syncs
+*and then* spends Claude tokens re-analysing the source. Sync exists so a stale checkout can be
+refreshed, or a different branch selected, without paying for a rebuild.
 
 **Knowledge / Knowledge base** — what we know about one repository: its stack, architecture,
 routes, selectors, page objects, fixtures. Built by running a Claude skill over the cloned
